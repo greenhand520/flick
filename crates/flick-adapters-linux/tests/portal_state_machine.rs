@@ -2,7 +2,9 @@
 
 use async_trait::async_trait;
 use flick_adapters_linux::portal::{IntentSink, PortalShortcutAdapter};
-use flick_adapters_linux::portal_client::{PortalClient, PortalEvent};
+use flick_adapters_linux::portal_client::{
+    PortalClient, PortalEvent, PortalSession, PortalSessionId,
+};
 use flick_adapters_linux::session::{
     ShortcutBinding, ShortcutError, show_search_shortcut_description, show_search_shortcut_id,
 };
@@ -16,27 +18,40 @@ use tokio::sync::{Mutex as AsyncMutex, mpsc, oneshot};
 type BindResult = Result<Vec<ShortcutBinding>, ShortcutError>;
 type BindGate = oneshot::Receiver<BindResult>;
 type BindRelease = oneshot::Sender<BindResult>;
+type OpenGate = oneshot::Receiver<()>;
+type OpenRelease = oneshot::Sender<()>;
 
 /// Fake intent sink that records received intents.
 struct FakeIntentSink {
     intents: Mutex<Vec<UiIntent>>,
+    next_intent_observer: Mutex<Option<oneshot::Sender<()>>>,
 }
 
 impl FakeIntentSink {
     fn new() -> Self {
         Self {
             intents: Mutex::new(Vec::new()),
+            next_intent_observer: Mutex::new(None),
         }
     }
 
     fn intents(&self) -> Vec<UiIntent> {
         self.intents.lock().unwrap().clone()
     }
+
+    fn observe_next_intent(&self) -> oneshot::Receiver<()> {
+        let (sender, receiver) = oneshot::channel();
+        *self.next_intent_observer.lock().unwrap() = Some(sender);
+        receiver
+    }
 }
 
 impl IntentSink for FakeIntentSink {
     fn send_intent(&self, intent: UiIntent) {
         self.intents.lock().unwrap().push(intent);
+        if let Some(observer) = self.next_intent_observer.lock().unwrap().take() {
+            let _ = observer.send(());
+        }
     }
 }
 
@@ -46,6 +61,11 @@ fn sink() -> Arc<FakeIntentSink> {
 
 struct FakePortalClient {
     listed: Mutex<Vec<ShortcutBinding>>,
+    next_session_id: Mutex<u64>,
+    active_session_id: Mutex<Option<PortalSessionId>>,
+    /// Models a client-owned remote session after CreateSession succeeds but
+    /// before open/list returns it to the adapter.
+    pending_session_id: Mutex<Option<PortalSessionId>>,
     bind_results: Mutex<VecDeque<BindResult>>,
     open_and_list_calls: Mutex<u32>,
     bind_calls: Mutex<u32>,
@@ -55,6 +75,10 @@ struct FakePortalClient {
     bind_release: Mutex<Option<BindRelease>>,
     bind_started_tx: mpsc::UnboundedSender<()>,
     bind_started_rx: AsyncMutex<mpsc::UnboundedReceiver<()>>,
+    open_gate: AsyncMutex<Option<OpenGate>>,
+    open_release: Mutex<Option<OpenRelease>>,
+    open_pending_tx: mpsc::UnboundedSender<()>,
+    open_pending_rx: AsyncMutex<mpsc::UnboundedReceiver<()>>,
     event_tx: mpsc::UnboundedSender<PortalEvent>,
     event_rx: Mutex<Option<mpsc::UnboundedReceiver<PortalEvent>>>,
 }
@@ -63,8 +87,12 @@ impl FakePortalClient {
     fn with_listed(listed: Vec<ShortcutBinding>) -> Self {
         let (event_tx, event_rx) = mpsc::unbounded_channel();
         let (bind_started_tx, bind_started_rx) = mpsc::unbounded_channel();
+        let (open_pending_tx, open_pending_rx) = mpsc::unbounded_channel();
         Self {
             listed: Mutex::new(listed),
+            next_session_id: Mutex::new(1),
+            active_session_id: Mutex::new(None),
+            pending_session_id: Mutex::new(None),
             bind_results: Mutex::new(VecDeque::new()),
             open_and_list_calls: Mutex::new(0),
             bind_calls: Mutex::new(0),
@@ -74,6 +102,10 @@ impl FakePortalClient {
             bind_release: Mutex::new(None),
             bind_started_tx,
             bind_started_rx: AsyncMutex::new(bind_started_rx),
+            open_gate: AsyncMutex::new(None),
+            open_release: Mutex::new(None),
+            open_pending_tx,
+            open_pending_rx: AsyncMutex::new(open_pending_rx),
             event_tx,
             event_rx: Mutex::new(Some(event_rx)),
         }
@@ -99,6 +131,10 @@ impl FakePortalClient {
 
     fn emit(&self, event: PortalEvent) {
         self.event_tx.send(event).unwrap();
+    }
+
+    fn active_session_id(&self) -> PortalSessionId {
+        (*self.active_session_id.lock().unwrap()).expect("fake session was not opened")
     }
 
     fn set_listed(&self, listed: Vec<ShortcutBinding>) {
@@ -133,13 +169,70 @@ impl FakePortalClient {
             .expect("blocked bind release sender missing");
         let _ = sender.send(result);
     }
+
+    async fn block_next_open_after_pending(&self) {
+        let (release, gate) = oneshot::channel();
+        *self.open_release.lock().unwrap() = Some(release);
+        *self.open_gate.lock().await = Some(gate);
+    }
+
+    async fn wait_for_pending_open(&self) {
+        self.open_pending_rx
+            .lock()
+            .await
+            .recv()
+            .await
+            .expect("pending open notification missing");
+    }
+
+    fn release_open(&self) {
+        if let Some(sender) = self.open_release.lock().unwrap().take() {
+            let _ = sender.send(());
+        }
+    }
+
+    fn has_no_registered_session(&self) -> bool {
+        self.pending_session_id.lock().unwrap().is_none()
+            && self.active_session_id.lock().unwrap().is_none()
+    }
 }
 
 #[async_trait]
 impl PortalClient for FakePortalClient {
-    async fn open_session_and_list(&self) -> Result<Vec<ShortcutBinding>, ShortcutError> {
+    async fn open_session_and_list(&self) -> Result<PortalSession, ShortcutError> {
         *self.open_and_list_calls.lock().unwrap() += 1;
-        Ok(self.listed.lock().unwrap().clone())
+        let session_id = {
+            let mut next = self.next_session_id.lock().unwrap();
+            let session_id = PortalSessionId::new(*next);
+            *next = next.wrapping_add(1);
+            session_id
+        };
+        *self.pending_session_id.lock().unwrap() = Some(session_id);
+
+        if let Some(gate) = self.open_gate.lock().await.take() {
+            let _ = self.open_pending_tx.send(());
+            let _ = gate.await;
+        }
+
+        let pending = self
+            .pending_session_id
+            .lock()
+            .unwrap()
+            .take()
+            .expect("pending fake session disappeared before open completed");
+        assert_eq!(pending, session_id);
+        *self.active_session_id.lock().unwrap() = Some(session_id);
+        Ok(PortalSession {
+            id: session_id,
+            bindings: self.listed.lock().unwrap().clone(),
+        })
+    }
+
+    async fn activate_session_events(
+        &self,
+        _session_id: PortalSessionId,
+    ) -> Result<Vec<PortalEvent>, ShortcutError> {
+        Ok(Vec::new())
     }
 
     async fn bind_show_search(
@@ -165,7 +258,10 @@ impl PortalClient for FakePortalClient {
     }
 
     async fn close_session(&self) {
-        *self.close_calls.lock().unwrap() += 1;
+        let pending = self.pending_session_id.lock().unwrap().take();
+        let active = self.active_session_id.lock().unwrap().take();
+        *self.close_calls.lock().unwrap() +=
+            u32::from(pending.is_some()) + u32::from(active.is_some());
     }
 
     fn take_event_receiver(&self) -> Option<mpsc::UnboundedReceiver<PortalEvent>> {
@@ -180,16 +276,6 @@ fn show_search_binding(preferred_trigger: &str) -> ShortcutBinding {
         preferred_trigger: preferred_trigger.into(),
         actual_trigger: Some(preferred_trigger.into()),
     }
-}
-
-async fn wait_until(mut predicate: impl FnMut() -> bool) {
-    tokio::time::timeout(Duration::from_secs(3), async move {
-        while !predicate() {
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-    })
-    .await
-    .expect("condition did not become true before timeout");
 }
 
 async fn wait_for_recovering(adapter: &PortalShortcutAdapter) {
@@ -325,6 +411,7 @@ async fn activation_of_another_id_is_ignored() {
     adapter.initialize().await.unwrap();
 
     fake.emit(PortalEvent::Activated {
+        session_id: fake.active_session_id(),
         shortcut_id: "other-shortcut".into(),
         activation_token: Some("unused".into()),
     });
@@ -340,17 +427,21 @@ async fn show_search_activation_creates_exactly_one_show_intent() {
     let adapter = PortalShortcutAdapter::new_with_client(intent_sink.clone(), fake.clone());
     adapter.initialize().await.unwrap();
 
+    let activation_observed = intent_sink.observe_next_intent();
     fake.emit(PortalEvent::Activated {
+        session_id: fake.active_session_id(),
         shortcut_id: show_search_shortcut_id().into(),
         activation_token: Some("activation-token".into()),
     });
-    wait_until(|| intent_sink.intents().len() == 1).await;
+    activation_observed
+        .await
+        .expect("show-search activation should be observed");
 
     let intents = intent_sink.intents();
     assert_eq!(intents.len(), 1);
     match &intents[0] {
         UiIntent::ShowSearchPanel { activation_token } => {
-            assert_eq!(activation_token.as_deref(), Some("activation-token"));
+            assert!(activation_token.is_none());
         }
         _ => panic!("expected a show-search intent"),
     }
@@ -362,7 +453,9 @@ async fn session_closed_schedules_recovery_without_binding() {
     let adapter = PortalShortcutAdapter::new_with_client(sink(), fake.clone());
     adapter.initialize().await.unwrap();
 
-    fake.emit(PortalEvent::SessionClosed);
+    fake.emit(PortalEvent::SessionClosed {
+        session_id: fake.active_session_id(),
+    });
     wait_for_recovering(&adapter).await;
     tokio::time::advance(Duration::from_secs(2)).await;
     yield_runtime().await;
@@ -378,6 +471,7 @@ async fn diagnostics_retain_last_error_category_and_message() {
     adapter.initialize().await.unwrap();
 
     fake.emit(PortalEvent::TransportError {
+        session_id: fake.active_session_id(),
         message: "D-Bus connection reset".into(),
     });
     wait_for_recovering(&adapter).await;
@@ -391,13 +485,46 @@ async fn diagnostics_retain_last_error_category_and_message() {
     assert_eq!(error.message, "D-Bus connection reset");
 }
 
+#[tokio::test]
+async fn shutdown_closes_a_pending_opened_session_exactly_once() {
+    let fake = Arc::new(FakePortalClient::with_listed(Vec::new()));
+    fake.block_next_open_after_pending().await;
+    let adapter = PortalShortcutAdapter::new_with_client(sink(), fake.clone());
+
+    let initialize = {
+        let adapter = adapter.clone();
+        tokio::spawn(async move { adapter.initialize().await })
+    };
+    fake.wait_for_pending_open().await;
+
+    tokio::time::timeout(Duration::from_secs(1), adapter.shutdown())
+        .await
+        .expect("shutdown did not clean the pending portal session");
+    let initialize = initialize
+        .await
+        .expect("initialize task panicked while shutdown cancelled open");
+    assert!(matches!(
+        initialize,
+        Err(ShortcutError::SessionError { .. })
+    ));
+
+    // Releasing the fake after the cancelled open has been dropped cannot
+    // re-register the session or produce a second client close.
+    fake.release_open();
+    assert_eq!(fake.close_calls(), 1);
+    assert!(fake.has_no_registered_session());
+    assert!(!adapter.diagnostics().await.session_active);
+}
+
 #[tokio::test(start_paused = true)]
 async fn shutdown_after_recovery_scheduling_prevents_later_open_and_is_idempotent() {
     let fake = Arc::new(FakePortalClient::with_listed(Vec::new()));
     let adapter = PortalShortcutAdapter::new_with_client(sink(), fake.clone());
     adapter.initialize().await.unwrap();
 
-    fake.emit(PortalEvent::SessionClosed);
+    fake.emit(PortalEvent::SessionClosed {
+        session_id: fake.active_session_id(),
+    });
     wait_for_recovering(&adapter).await;
     adapter.shutdown().await;
     adapter.shutdown().await;
@@ -417,7 +544,9 @@ async fn manual_reconnect_invalidates_pending_recovery_before_it_can_overwrite_s
     let adapter = PortalShortcutAdapter::new_with_client(sink(), fake.clone());
     adapter.initialize().await.unwrap();
 
-    fake.emit(PortalEvent::SessionClosed);
+    fake.emit(PortalEvent::SessionClosed {
+        session_id: fake.active_session_id(),
+    });
     wait_for_recovering(&adapter).await;
     fake.set_listed(vec![show_search_binding("Ctrl+Space")]);
 
@@ -447,7 +576,9 @@ async fn session_close_while_bind_is_in_flight_cannot_publish_bound() {
     });
     fake.wait_for_bind_start().await;
 
-    fake.emit(PortalEvent::SessionClosed);
+    fake.emit(PortalEvent::SessionClosed {
+        session_id: fake.active_session_id(),
+    });
     wait_for_recovering(&adapter).await;
     fake.release_bind(Ok(vec![show_search_binding("Super+Space")]));
 

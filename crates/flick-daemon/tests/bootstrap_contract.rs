@@ -8,7 +8,9 @@
 
 use async_trait::async_trait;
 use flick_adapters_linux::portal::{IntentSink, PortalShortcutAdapter};
-use flick_adapters_linux::portal_client::{PortalClient, PortalEvent};
+use flick_adapters_linux::portal_client::{
+    PortalClient, PortalEvent, PortalSession, PortalSessionId,
+};
 use flick_adapters_linux::session::{
     ShortcutBinding, ShortcutError, show_search_shortcut_description, show_search_shortcut_id,
 };
@@ -75,7 +77,17 @@ impl ConfigurePortalClient {
 
 #[async_trait]
 impl PortalClient for ConfigurePortalClient {
-    async fn open_session_and_list(&self) -> Result<Vec<ShortcutBinding>, ShortcutError> {
+    async fn open_session_and_list(&self) -> Result<PortalSession, ShortcutError> {
+        Ok(PortalSession {
+            id: PortalSessionId::new(1),
+            bindings: Vec::new(),
+        })
+    }
+
+    async fn activate_session_events(
+        &self,
+        _session_id: PortalSessionId,
+    ) -> Result<Vec<PortalEvent>, ShortcutError> {
         Ok(Vec::new())
     }
 
