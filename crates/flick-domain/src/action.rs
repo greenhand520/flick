@@ -58,7 +58,7 @@ pub enum ConcurrencyPolicy {
 // ─── Input ────────────────────────────────────────────────────────────────────
 
 /// Input for an Action invocation.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ActionInput {
     pub kind: InputKind,
     pub text: String,

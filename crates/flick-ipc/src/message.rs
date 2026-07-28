@@ -45,12 +45,18 @@ pub enum IpcCommand {
     Status,
     /// Run diagnostics.
     Doctor,
-    /// (Re)configure global shortcuts.
-    ShortcutsConfigure,
+    /// (Re)configure global shortcuts with a preferred key trigger.
+    ShortcutsConfigure {
+        preferred_trigger: String,
+    },
     /// Reconnect to the shortcut portal.
     ShortcutsReconnect,
     /// Gracefully shut down the daemon.
     Shutdown,
+    /// Show the search panel directly (bypass Portal).
+    Show,
+    /// Hide the search panel directly.
+    Hide,
 }
 
 // ─── Results ──────────────────────────────────────────────────────────────────

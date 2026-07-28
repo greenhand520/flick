@@ -4,7 +4,7 @@ use crate::id::ActionId;
 use serde::{Deserialize, Serialize};
 
 /// A candidate action route returned by the router for a search query.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RouteItem {
     pub action_id: ActionId,
     pub title: String,

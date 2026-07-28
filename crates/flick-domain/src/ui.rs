@@ -30,7 +30,7 @@ impl UiIntent {
 // ─── UI → Host messages ──────────────────────────────────────────────────────
 
 /// Messages from the UI to the Host (coordinator).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum UiToHost {
     /// User typed/changed the search query.
     QueryChanged {
@@ -54,7 +54,7 @@ pub enum UiToHost {
 // ─── Host → UI messages ──────────────────────────────────────────────────────
 
 /// Messages from the Host (coordinator) to the UI.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum HostToUi {
     /// Route results for a search query.
     Routes {
@@ -79,7 +79,7 @@ pub enum HostToUi {
 // ─── Runtime Status ──────────────────────────────────────────────────────────
 
 /// Diagnostic status of the Runtime.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum RuntimeStatus {
     Running,
     Degraded { reason: String },

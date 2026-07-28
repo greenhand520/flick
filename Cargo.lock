@@ -929,11 +929,13 @@ dependencies = [
 name = "flick-cli"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "clap",
  "flick-domain",
  "flick-ipc",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
 ]
 
@@ -952,6 +954,7 @@ dependencies = [
  "flick-shell-iced",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
  "tokio-util",
  "tracing",
@@ -1003,6 +1006,8 @@ dependencies = [
  "flick-application",
  "flick-domain",
  "iced",
+ "serde_json",
+ "tempfile",
  "tokio",
  "tracing",
 ]

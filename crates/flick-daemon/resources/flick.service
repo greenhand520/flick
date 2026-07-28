@@ -1,0 +1,15 @@
+[Unit]
+Description=Flick Launcher Daemon
+After=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=%h/.cargo/bin/flick-daemon --foreground
+Restart=on-failure
+RestartSec=5
+
+# Prefer integrated GPU (uncomment if you have both iGPU and dGPU)
+# Environment=WGPU_POWER_PREF=low
+
+[Install]
+WantedBy=default.target

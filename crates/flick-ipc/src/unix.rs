@@ -60,8 +60,27 @@ pub fn bind(path: &Path) -> Result<UnixSocketServer, TransportError> {
     // Step 2: remove stale socket file if present.
     let _ = std::fs::remove_file(path);
 
-    // Step 3: bind.
+    // Step 3: create parent directory with user-only permissions.
+    if let Some(parent) = path.parent() {
+        use std::os::unix::fs::DirBuilderExt;
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .recursive(true)
+            .create(parent)
+            .map_err(TransportError::Io)?;
+    }
+
+    // Step 4: bind.
     let listener = UnixListener::bind(path)?;
+
+    // Step 5: set socket permissions to 0600 (user read/write only).
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
+            .map_err(TransportError::Io)?;
+    }
+
     Ok(UnixSocketServer { listener })
 }
 

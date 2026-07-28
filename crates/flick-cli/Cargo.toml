@@ -3,6 +3,10 @@ name = "flick-cli"
 version.workspace = true
 edition.workspace = true
 
+[lib]
+name = "flick_cli"
+path = "src/lib.rs"
+
 [[bin]]
 name = "flick"
 path = "src/main.rs"
@@ -14,3 +18,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
 clap = { version = "4", features = ["derive"] }
+async-trait = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

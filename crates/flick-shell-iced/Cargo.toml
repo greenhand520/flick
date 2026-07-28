@@ -9,3 +9,7 @@ flick-application = { path = "../flick-application" }
 iced = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

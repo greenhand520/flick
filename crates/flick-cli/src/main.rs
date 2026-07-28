@@ -1,12 +1,15 @@
 use clap::{Parser, Subcommand};
+use flick_cli::*;
 use flick_ipc::message::*;
-use flick_ipc::unix::UnixSocketClient;
-use serde_json::json;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process;
 
 #[derive(Parser)]
-#[command(name = "flick", about = "Flick launcher control")]
+#[command(
+    name = "flick",
+    about = "Flick launcher control",
+    long_about = "Control the Flick daemon. The 'toggle' command is intended as an IPC fallback for desktop environment custom shortcut binding."
+)]
 struct Cli {
     /// Path to daemon socket (default: $XDG_RUNTIME_DIR/flick/flick.sock)
     #[arg(long)]
@@ -22,9 +25,9 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Toggle the search panel (IPC fallback for desktop shortcut binding)
+    /// Toggle the search panel visibility (IPC fallback for desktop shortcut binding)
     Toggle,
-    /// Trigger a specific action
+    /// Trigger a specific action by ID
     Trigger {
         /// Action ID to invoke
         action_id: String,
@@ -34,124 +37,40 @@ enum Command {
     },
     /// Show daemon status
     Status,
-    /// Show diagnostic information
+    /// Show diagnostic information about the session and Portal
     Doctor,
     /// Shortcut management
     Shortcuts {
         #[command(subcommand)]
         action: ShortcutsAction,
     },
-    /// Shut down the daemon
+    /// Gracefully shut down the daemon
     Shutdown,
+    /// Show the search panel (bypass Portal shortcut)
+    Show,
+    /// Hide the search panel
+    Hide,
 }
 
 #[derive(Subcommand)]
 enum ShortcutsAction {
-    /// Configure the search shortcut via Portal
-    Configure,
-    /// Reconnect to the Portal session
+    /// Configure the search shortcut via Portal (opens Portal binding UI).
+    /// Default preferred trigger: Super+Space.
+    Configure {
+        /// Preferred key trigger for show-search (e.g. "Super+Space", "Ctrl+Space")
+        #[arg(long = "show-search", default_value = "Super+Space")]
+        preferred_trigger: String,
+    },
+    /// Reconnect to the Portal session (recovery only, no binding UI)
     Reconnect,
-}
-
-fn socket_path(custom: Option<PathBuf>) -> PathBuf {
-    if let Some(p) = custom {
-        return p;
-    }
-    let runtime_dir =
-        std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "/tmp".to_string());
-    PathBuf::from(runtime_dir).join("flick").join("flick.sock")
-}
-
-fn next_request_id() -> String {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static COUNTER: AtomicU64 = AtomicU64::new(1);
-    format!("cli-{}", COUNTER.fetch_add(1, Ordering::Relaxed))
-}
-
-fn make_request(command: IpcCommand) -> IpcRequestEnvelope {
-    IpcRequestEnvelope {
-        protocol_version: IPC_PROTOCOL_VERSION,
-        request_id: next_request_id(),
-        command,
-    }
-}
-
-fn print_result(result: &IpcResult, json_output: bool) -> i32 {
-    match result {
-        IpcResult::Ok(value) => {
-            if json_output {
-                println!(
-                    "{}",
-                    serde_json::to_string(&json!({ "ok": value })).unwrap()
-                );
-            } else {
-                println!("{}", value);
-            }
-            0
-        }
-        IpcResult::Error { code, message } => {
-            if json_output {
-                println!(
-                    "{}",
-                    serde_json::to_string(&json!({ "error": { "code": code.as_str(), "message": message } }))
-                        .unwrap()
-                );
-            } else {
-                eprintln!("Error: {message}");
-            }
-            match code {
-                IpcErrorCode::DaemonUnavailable => 2,
-                IpcErrorCode::ProtocolVersionMismatch => 3,
-                _ => 1,
-            }
-        }
-    }
-}
-
-async fn try_connect_and_send(
-    path: &Path,
-    request: IpcRequestEnvelope,
-    json_output: bool,
-) -> i32 {
-    match UnixSocketClient::connect(path).await {
-        Ok(mut client) => match client.request(&request).await {
-            Ok(response) => print_result(&response.result, json_output),
-            Err(e) => {
-                if json_output {
-                    println!(
-                        "{}",
-                        serde_json::to_string(&json!({
-                            "error": { "code": "INTERNAL", "message": format!("{e}") }
-                        }))
-                        .unwrap()
-                    );
-                } else {
-                    eprintln!("Error communicating with daemon: {e}");
-                }
-                1
-            }
-        },
-        Err(e) => {
-            if json_output {
-                println!(
-                    "{}",
-                    serde_json::to_string(&json!({
-                        "error": { "code": "DAEMON_UNAVAILABLE", "message": format!("{e}") }
-                    }))
-                    .unwrap()
-                );
-            } else {
-                eprintln!("Cannot connect to daemon: {e}");
-            }
-            2
-        }
-    }
 }
 
 #[tokio::main]
 async fn main() {
     let cli = Cli::parse();
-    let path = socket_path(cli.socket);
+    let path = cli
+        .socket
+        .unwrap_or_else(default_socket_path);
     let json_output = cli.json;
 
     let command = match cli.command {
@@ -160,16 +79,40 @@ async fn main() {
         Command::Status => IpcCommand::Status,
         Command::Doctor => IpcCommand::Doctor,
         Command::Shortcuts { action } => match action {
-            ShortcutsAction::Configure => IpcCommand::ShortcutsConfigure,
+            ShortcutsAction::Configure { preferred_trigger } => IpcCommand::ShortcutsConfigure { preferred_trigger },
             ShortcutsAction::Reconnect => IpcCommand::ShortcutsReconnect,
         },
         Command::Shutdown => IpcCommand::Shutdown,
+        Command::Show => IpcCommand::Show,
+        Command::Hide => IpcCommand::Hide,
     };
 
-    let request = make_request(command);
+    let request = build_request(command);
 
     // First attempt
-    let exit_code = try_connect_and_send(&path, request.clone(), json_output).await;
+    let exit_code = match try_connect_and_send(&path, &request).await {
+        ConnectResult::Response(response) => {
+            let (output, is_stderr, code) = format_result(&response.result, json_output);
+            if is_stderr {
+                eprintln!("{output}");
+            } else {
+                println!("{output}");
+            }
+            code
+        }
+        ConnectResult::ConnectError(_e) => {
+            2 // will be handled below for toggle retry
+        }
+        ConnectResult::TransportError(e) => {
+            let (output, is_stderr) = format_transport_error(&e, json_output);
+            if is_stderr {
+                eprintln!("{output}");
+            } else {
+                println!("{output}");
+            }
+            1
+        }
+    };
 
     // If daemon unavailable for Toggle, try starting the service once
     if exit_code == 2 {
@@ -182,12 +125,49 @@ async fn main() {
                 .output()
                 .await;
 
-            // Give the service a moment to start
             tokio::time::sleep(std::time::Duration::from_millis(500)).await;
 
             // Retry once
-            let retry_code = try_connect_and_send(&path, request, json_output).await;
+            let retry_code = match try_connect_and_send(&path, &request).await {
+                ConnectResult::Response(response) => {
+                    let (output, is_stderr, code) =
+                        format_result(&response.result, json_output);
+                    if is_stderr {
+                        eprintln!("{output}");
+                    } else {
+                        println!("{output}");
+                    }
+                    code
+                }
+                ConnectResult::ConnectError(_e) => {
+                    let (output, is_stderr) = format_connection_error(&_e, json_output);
+                    if is_stderr {
+                        eprintln!("{output}");
+                    } else {
+                        println!("{output}");
+                    }
+                    2
+                }
+                ConnectResult::TransportError(e) => {
+                    let (output, is_stderr) = format_transport_error(&e, json_output);
+                    if is_stderr {
+                        eprintln!("{output}");
+                    } else {
+                        println!("{output}");
+                    }
+                    1
+                }
+            };
             process::exit(retry_code);
+        }
+
+        // Non-toggle: print the connect error
+        let (output, is_stderr) =
+            format_connection_error("daemon not reachable", json_output);
+        if is_stderr {
+            eprintln!("{output}");
+        } else {
+            println!("{output}");
         }
     }
 
