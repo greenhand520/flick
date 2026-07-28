@@ -1,8 +1,8 @@
 //! IPC request dispatcher and server loop.
 
 use crate::message::{
-    IpcCommand, IpcErrorCode, IpcRequestEnvelope, IpcResponseEnvelope, IpcResult,
-    IPC_PROTOCOL_VERSION,
+    IPC_PROTOCOL_VERSION, IpcCommand, IpcErrorCode, IpcRequestEnvelope, IpcResponseEnvelope,
+    IpcResult,
 };
 use crate::unix::{self, UnixSocketServer};
 use async_trait::async_trait;
@@ -50,10 +50,7 @@ impl IpcServer {
 
     /// Handle a single client connection: read request → dispatch → write
     /// response.  The connection is closed after one round-trip (Phase 0).
-    async fn handle_client(
-        mut stream: UnixStream,
-        dispatcher: Arc<dyn IpcDispatcher>,
-    ) {
+    async fn handle_client(mut stream: UnixStream, dispatcher: Arc<dyn IpcDispatcher>) {
         let request = match unix::read_request(&mut stream).await {
             Ok(r) => r,
             Err(e) => {

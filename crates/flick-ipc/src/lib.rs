@@ -24,8 +24,8 @@ pub mod unix;
 
 pub use codec::{CodecError, MAX_FRAME_SIZE};
 pub use message::{
-    IpcCommand, IpcErrorCode, IpcRequestEnvelope, IpcResponseEnvelope, IpcResult,
-    IPC_PROTOCOL_VERSION,
+    IPC_PROTOCOL_VERSION, IpcCommand, IpcErrorCode, IpcRequestEnvelope, IpcResponseEnvelope,
+    IpcResult,
 };
 pub use server::{IpcDispatcher, IpcServer};
 pub use unix::{TransportError, UnixSocketClient, UnixSocketServer};

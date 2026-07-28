@@ -48,7 +48,10 @@ impl IpcDispatcher for TestDispatcher {
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 /// Spawn a test IPC server and return the socket path + dispatcher handle.
-async fn spawn_test_server(tmpdir: &TempDir, result: IpcResult) -> (std::path::PathBuf, Arc<TestDispatcher>) {
+async fn spawn_test_server(
+    tmpdir: &TempDir,
+    result: IpcResult,
+) -> (std::path::PathBuf, Arc<TestDispatcher>) {
     let path = tmpdir.path().join("flick.sock");
     let dispatcher = Arc::new(TestDispatcher::new(result));
     let server = unix::bind(&path).expect("bind failed");
@@ -98,8 +101,16 @@ fn build_request_doctor_has_correct_command() {
 
 #[test]
 fn build_request_shortcuts_configure() {
-    let req = build_request(IpcCommand::ShortcutsConfigure { preferred_trigger: "Super+Space".into() });
-    assert!(matches!(req.command, IpcCommand::ShortcutsConfigure { preferred_trigger: "Super+Space".into() }));
+    let req = build_request(IpcCommand::ShortcutsConfigure {
+        preferred_trigger: "Super+Space".into(),
+    });
+
+    match req.command {
+        IpcCommand::ShortcutsConfigure { preferred_trigger } => {
+            assert_eq!(preferred_trigger, "Super+Space");
+        }
+        other => panic!("expected ShortcutsConfigure, got {other:?}"),
+    }
 }
 
 #[test]
@@ -255,11 +266,8 @@ async fn toggle_sends_correct_command_to_server() {
 #[tokio::test]
 async fn trigger_echo_sends_correct_command_to_server() {
     let tmpdir = TempDir::new().unwrap();
-    let (path, dispatcher) = spawn_test_server(
-        &tmpdir,
-        IpcResult::Ok(serde_json::json!({"echo": "hello"})),
-    )
-    .await;
+    let (path, dispatcher) =
+        spawn_test_server(&tmpdir, IpcResult::Ok(serde_json::json!({"echo": "hello"}))).await;
 
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
@@ -270,12 +278,10 @@ async fn trigger_echo_sends_correct_command_to_server() {
     let result = try_connect_and_send(&path, &request).await;
 
     match result {
-        ConnectResult::Response(resp) => {
-            match &resp.result {
-                IpcResult::Ok(val) => assert_eq!(val["echo"], "hello"),
-                other => panic!("expected Ok, got {other:?}"),
-            }
-        }
+        ConnectResult::Response(resp) => match &resp.result {
+            IpcResult::Ok(val) => assert_eq!(val["echo"], "hello"),
+            other => panic!("expected Ok, got {other:?}"),
+        },
         other => panic!("expected Response, got {other:?}"),
     }
 
@@ -311,15 +317,13 @@ async fn unknown_action_returns_structured_error() {
     let result = try_connect_and_send(&path, &request).await;
 
     match result {
-        ConnectResult::Response(resp) => {
-            match &resp.result {
-                IpcResult::Error { code, message } => {
-                    assert_eq!(*code, IpcErrorCode::ActionNotFound);
-                    assert!(message.contains("nonexistent"));
-                }
-                other => panic!("expected Error, got {other:?}"),
+        ConnectResult::Response(resp) => match &resp.result {
+            IpcResult::Error { code, message } => {
+                assert_eq!(*code, IpcErrorCode::ActionNotFound);
+                assert!(message.contains("nonexistent"));
             }
-        }
+            other => panic!("expected Error, got {other:?}"),
+        },
         other => panic!("expected Response, got {other:?}"),
     }
 }
@@ -339,14 +343,12 @@ async fn status_returns_daemon_info() {
     let result = try_connect_and_send(&path, &request).await;
 
     match result {
-        ConnectResult::Response(resp) => {
-            match &resp.result {
-                IpcResult::Ok(val) => {
-                    assert_eq!(val["daemon_status"], "running");
-                }
-                other => panic!("expected Ok, got {other:?}"),
+        ConnectResult::Response(resp) => match &resp.result {
+            IpcResult::Ok(val) => {
+                assert_eq!(val["daemon_status"], "running");
             }
-        }
+            other => panic!("expected Ok, got {other:?}"),
+        },
         other => panic!("expected Response, got {other:?}"),
     }
 }
@@ -370,11 +372,8 @@ async fn daemon_unreachable_returns_connect_error() {
 #[tokio::test]
 async fn request_id_preserved_through_round_trip() {
     let tmpdir = TempDir::new().unwrap();
-    let (path, _) = spawn_test_server(
-        &tmpdir,
-        IpcResult::Ok(serde_json::json!({"ok": true})),
-    )
-    .await;
+    let (path, _) =
+        spawn_test_server(&tmpdir, IpcResult::Ok(serde_json::json!({"ok": true}))).await;
 
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
@@ -401,7 +400,9 @@ async fn shortcuts_configure_sends_correct_command() {
 
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
-    let request = build_request(IpcCommand::ShortcutsConfigure { preferred_trigger: "Super+Space".into() });
+    let request = build_request(IpcCommand::ShortcutsConfigure {
+        preferred_trigger: "Super+Space".into(),
+    });
     let result = try_connect_and_send(&path, &request).await;
 
     match result {
@@ -410,7 +411,12 @@ async fn shortcuts_configure_sends_correct_command() {
     }
 
     let cmds = dispatcher.received_commands();
-    assert!(matches!(cmds[0], IpcCommand::ShortcutsConfigure { preferred_trigger: "Super+Space".into() }));
+    match &cmds[0] {
+        IpcCommand::ShortcutsConfigure { preferred_trigger } => {
+            assert_eq!(preferred_trigger, "Super+Space");
+        }
+        other => panic!("expected ShortcutsConfigure, got {other:?}"),
+    }
 }
 
 #[tokio::test]

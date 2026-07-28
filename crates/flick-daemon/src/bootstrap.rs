@@ -81,7 +81,7 @@ impl flick_ipc::server::IpcDispatcher for DaemonIpcDispatcher {
                         return IpcResult::Error {
                             code: IpcErrorCode::InvalidInput,
                             message: e.user_message(),
-                        }
+                        };
                     }
                 };
                 let request = ActionRequest {
@@ -121,13 +121,16 @@ impl flick_ipc::server::IpcDispatcher for DaemonIpcDispatcher {
                     // Spawn async Portal call
                     tokio::spawn(async move {
                         match portal.configure_search_shortcut().await {
-                            Ok(binding) => info!("Portal shortcut bound: {:?}", binding.actual_trigger),
+                            Ok(binding) => {
+                                info!("Portal shortcut bound: {:?}", binding.actual_trigger)
+                            }
                             Err(e) => warn!("Portal shortcut config failed: {e}"),
                         }
                     });
                 }
-                self.coordinator
-                    .handle_intent(UiIntent::ShowSearchPanel { activation_token: None });
+                self.coordinator.handle_intent(UiIntent::ShowSearchPanel {
+                    activation_token: None,
+                });
                 IpcResult::Ok(serde_json::json!({
                     "configure": "shortcut_bind_requested",
                     "shortcut_id": "show-search",
@@ -140,13 +143,13 @@ impl flick_ipc::server::IpcDispatcher for DaemonIpcDispatcher {
             }
             IpcCommand::Shutdown => IpcResult::Ok(serde_json::json!({ "shutdown": true })),
             IpcCommand::Show => {
-                self.coordinator
-                    .handle_intent(UiIntent::ShowSearchPanel { activation_token: None });
+                self.coordinator.handle_intent(UiIntent::ShowSearchPanel {
+                    activation_token: None,
+                });
                 IpcResult::Ok(serde_json::json!({ "show": true }))
             }
             IpcCommand::Hide => {
-                self.coordinator
-                    .handle_intent(UiIntent::HideSearchPanel);
+                self.coordinator.handle_intent(UiIntent::HideSearchPanel);
                 IpcResult::Ok(serde_json::json!({ "hide": true }))
             }
         }
@@ -228,8 +231,12 @@ pub async fn run_headless(socket_path: std::path::PathBuf) {
     let (host_event_tx, host_event_rx) = mpsc::unbounded_channel::<HostToUi>();
     let (intent_tx, _intent_rx) = mpsc::unbounded_channel::<UiIntent>();
 
-    let event_sink = Arc::new(ChannelEventSink { tx: host_event_tx.clone() });
-    let runtime_port = Arc::new(RuntimeAdapter { runtime: runtime.clone() }) as Arc<dyn RuntimePort>;
+    let event_sink = Arc::new(ChannelEventSink {
+        tx: host_event_tx.clone(),
+    });
+    let runtime_port = Arc::new(RuntimeAdapter {
+        runtime: runtime.clone(),
+    }) as Arc<dyn RuntimePort>;
     let coordinator = Arc::new(ApplicationCoordinator::new(runtime_port, event_sink));
 
     // Log host events

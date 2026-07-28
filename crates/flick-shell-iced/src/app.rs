@@ -12,8 +12,7 @@ use tokio::sync::mpsc;
 
 // ─── Global host event channel (one-time setup) ─────────────────────────────
 
-static HOST_RX: OnceLock<Arc<Mutex<Option<mpsc::UnboundedReceiver<HostToUi>>>>> =
-    OnceLock::new();
+static HOST_RX: OnceLock<Arc<Mutex<Option<mpsc::UnboundedReceiver<HostToUi>>>>> = OnceLock::new();
 
 fn take_host_rx() -> Option<mpsc::UnboundedReceiver<HostToUi>> {
     HOST_RX
@@ -76,9 +75,7 @@ pub fn update(state: &mut AppState, message: AppMessage) -> Task<AppMessage> {
         }
         AppMessage::HostEvent(host_event) => {
             let event = match host_event {
-                HostToUi::Routes { generation, items } => {
-                    PanelEvent::Routes { generation, items }
-                }
+                HostToUi::Routes { generation, items } => PanelEvent::Routes { generation, items },
                 HostToUi::InvocationCompleted {
                     invocation_id,
                     outcome,
@@ -160,10 +157,10 @@ fn apply_actions(state: &mut AppState, actions: Vec<PanelAction>) -> Task<AppMes
     }
 
     // Close window if panel hidden and window exists
-    if !state.panel.visible {
-        if let Some(id) = state.window_id.take() {
-            tasks.push(iced::window::close(id));
-        }
+    if !state.panel.visible
+        && let Some(id) = state.window_id.take()
+    {
+        tasks.push(iced::window::close(id));
     }
 
     Task::batch(tasks)
@@ -171,7 +168,7 @@ fn apply_actions(state: &mut AppState, actions: Vec<PanelAction>) -> Task<AppMes
 
 // ─── View ───────────────────────────────────────────────────────────────────
 
-pub fn view(state: &AppState, _window: iced::window::Id) -> Element<'_ , AppMessage> {
+pub fn view(state: &AppState, _window: iced::window::Id) -> Element<'_, AppMessage> {
     if !state.panel.visible {
         return container(text(""))
             .width(Length::Fill)
@@ -200,9 +197,7 @@ pub fn view(state: &AppState, _window: iced::window::Id) -> Element<'_ , AppMess
     }
     let routes_scroll = scrollable(routes_col).height(Length::Fixed(200.0));
 
-    let mut content = column![search_input, routes_scroll]
-        .spacing(8)
-        .padding(16);
+    let mut content = column![search_input, routes_scroll].spacing(8).padding(16);
 
     if let Some(outcome) = &state.panel.last_outcome {
         let outcome_text = match outcome {
@@ -230,17 +225,20 @@ pub fn view(state: &AppState, _window: iced::window::Id) -> Element<'_ , AppMess
 /// Uses `run_with` where data=() (always same hash) and the stream
 /// consumes the global receiver on first invocation.
 fn host_event_stream() -> impl iced::futures::Stream<Item = AppMessage> {
-    iced::stream::channel(100, move |mut sender: iced::futures::channel::mpsc::Sender<AppMessage>| async move {
-        use iced::futures::SinkExt;
-        if let Some(mut rx) = take_host_rx() {
-            while let Some(event) = rx.recv().await {
-                let _ = sender.send(AppMessage::HostEvent(event)).await;
+    iced::stream::channel(
+        100,
+        move |mut sender: iced::futures::channel::mpsc::Sender<AppMessage>| async move {
+            use iced::futures::SinkExt;
+            if let Some(mut rx) = take_host_rx() {
+                while let Some(event) = rx.recv().await {
+                    let _ = sender.send(AppMessage::HostEvent(event)).await;
+                }
+            } else {
+                // No receiver available — never produce items
+                std::future::pending::<()>().await;
             }
-        } else {
-            // No receiver available — never produce items
-            std::future::pending::<()>().await;
-        }
-    })
+        },
+    )
 }
 
 pub fn subscription(_state: &AppState) -> Subscription<AppMessage> {

@@ -32,11 +32,7 @@ impl ActionRegistry {
     ///
     /// If an action with the same [`ActionId`] already exists it is
     /// replaced and the old handler is returned (wrapped as `Ok`).
-    pub fn register(
-        &mut self,
-        descriptor: ActionDescriptor,
-        handler: Arc<dyn ActionHandler>,
-    ) {
+    pub fn register(&mut self, descriptor: ActionDescriptor, handler: Arc<dyn ActionHandler>) {
         let id = descriptor.id.clone();
         self.entries.insert(
             id,
@@ -52,9 +48,7 @@ impl ActionRegistry {
         &self,
         id: &ActionId,
     ) -> Option<(&ActionDescriptor, &Arc<dyn ActionHandler>)> {
-        self.entries
-            .get(id)
-            .map(|e| (&e.descriptor, &e.handler))
+        self.entries.get(id).map(|e| (&e.descriptor, &e.handler))
     }
 
     /// Search for matching actions.
@@ -124,7 +118,11 @@ impl ActionRegistry {
             }
         }
 
-        results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        results.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         results
     }
 }
@@ -188,9 +186,7 @@ mod tests {
     #[test]
     fn find_by_id_returns_none_for_unknown() {
         let reg = ActionRegistry::new();
-        assert!(reg
-            .find_by_id(&ActionId::from_static("unknown"))
-            .is_none());
+        assert!(reg.find_by_id(&ActionId::from_static("unknown")).is_none());
     }
 
     #[test]

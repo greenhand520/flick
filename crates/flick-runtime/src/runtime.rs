@@ -3,8 +3,8 @@
 use crate::handler::ActionHandler;
 use crate::registry::ActionRegistry;
 use flick_domain::{
-    ActionContext, ActionDescriptor, ActionError, ActionOutcome, ActionRequest,
-    InputKind, InvocationId, RouteItem,
+    ActionContext, ActionDescriptor, ActionError, ActionOutcome, ActionRequest, InputKind,
+    InvocationId, RouteItem,
 };
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -45,11 +45,7 @@ impl ActionRuntime {
     ///
     /// Acquires a write lock on the registry but does **not** hold it
     /// across any `.await`.
-    pub async fn register(
-        &self,
-        descriptor: ActionDescriptor,
-        handler: Arc<dyn ActionHandler>,
-    ) {
+    pub async fn register(&self, descriptor: ActionDescriptor, handler: Arc<dyn ActionHandler>) {
         let mut reg = self.registry.write().await;
         reg.register(descriptor, handler);
     }
@@ -114,7 +110,7 @@ impl ActionRuntime {
             // Branch A — handler finishes naturally
             result = join_handle => {
                 match result {
-                    Ok(inner) => inner.unwrap_or_else(|e| ActionOutcome::Error(e)),
+                    Ok(inner) => inner.unwrap_or_else(ActionOutcome::Error),
                     Err(join_err) => {
                         tracing::error!(invocation_id = %invocation_id, "handler panicked: {join_err}");
                         ActionOutcome::Error(ActionError::Internal {

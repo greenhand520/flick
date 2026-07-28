@@ -4,7 +4,7 @@
 
 pub mod echo;
 
-use echo::{EchoHandler, ECHO_ACTION_ID};
+use echo::{ECHO_ACTION_ID, EchoHandler};
 use flick_domain::{ActionDescriptor, ActionId, ConcurrencyPolicy, Matcher};
 use flick_runtime::ActionRuntime;
 use std::sync::Arc;
@@ -22,5 +22,7 @@ pub async fn register_phase0_builtins(runtime: &ActionRuntime) {
         concurrency: ConcurrencyPolicy::Parallel,
     };
 
-    runtime.register(echo_descriptor, Arc::new(EchoHandler)).await;
+    runtime
+        .register(echo_descriptor, Arc::new(EchoHandler))
+        .await;
 }

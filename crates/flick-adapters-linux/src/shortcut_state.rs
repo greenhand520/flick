@@ -77,10 +77,7 @@ mod tests {
     #[test]
     fn states_are_distinct() {
         assert_ne!(ShortcutState::UserCancelled, ShortcutState::RequestEnded);
-        assert_ne!(
-            ShortcutState::RequestEnded,
-            ShortcutState::NoShortcutBound
-        );
+        assert_ne!(ShortcutState::RequestEnded, ShortcutState::NoShortcutBound);
         assert_ne!(ShortcutState::UserCancelled, ShortcutState::NoShortcutBound);
     }
 }

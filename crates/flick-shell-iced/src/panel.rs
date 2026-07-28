@@ -37,9 +37,15 @@ pub enum PanelEvent {
     /// Window was closed by the WM.
     WindowClosed,
     /// Host sent routes for a generation.
-    Routes { generation: QueryGeneration, items: Vec<RouteItem> },
+    Routes {
+        generation: QueryGeneration,
+        items: Vec<RouteItem>,
+    },
     /// Host completed an invocation.
-    InvocationCompleted { invocation_id: InvocationId, outcome: ActionOutcome },
+    InvocationCompleted {
+        invocation_id: InvocationId,
+        outcome: ActionOutcome,
+    },
     /// Runtime status update.
     RuntimeStatus(RuntimeStatus),
 }
@@ -181,9 +187,10 @@ impl PanelState {
             }
             PanelEvent::WindowClosed => self.on_hide(),
             PanelEvent::Routes { generation, items } => self.on_routes(generation, items),
-            PanelEvent::InvocationCompleted { invocation_id, outcome } => {
-                self.on_invocation_completed(invocation_id, outcome)
-            }
+            PanelEvent::InvocationCompleted {
+                invocation_id,
+                outcome,
+            } => self.on_invocation_completed(invocation_id, outcome),
             PanelEvent::RuntimeStatus(status) => {
                 self.runtime_status = status;
                 vec![]
@@ -247,7 +254,11 @@ impl PanelState {
         ]
     }
 
-    fn on_routes(&mut self, generation: QueryGeneration, items: Vec<RouteItem>) -> Vec<PanelAction> {
+    fn on_routes(
+        &mut self,
+        generation: QueryGeneration,
+        items: Vec<RouteItem>,
+    ) -> Vec<PanelAction> {
         // Only accept routes for the current generation.
         if generation == self.generation {
             self.routes = items;

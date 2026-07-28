@@ -5,9 +5,7 @@
 //! provide concrete implementations; tests provide fakes.
 
 use async_trait::async_trait;
-use flick_domain::{
-    ActionOutcome, ActionRequest, HostToUi, InputKind, InvocationId, RouteItem,
-};
+use flick_domain::{ActionOutcome, ActionRequest, HostToUi, InputKind, InvocationId, RouteItem};
 
 /// Abstraction over the Flick Runtime's routing and invocation capabilities.
 ///

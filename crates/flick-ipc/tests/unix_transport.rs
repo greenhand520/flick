@@ -2,8 +2,7 @@
 
 use async_trait::async_trait;
 use flick_ipc::message::{
-    IpcCommand, IpcErrorCode, IpcRequestEnvelope, IpcResult,
-    IPC_PROTOCOL_VERSION,
+    IPC_PROTOCOL_VERSION, IpcCommand, IpcErrorCode, IpcRequestEnvelope, IpcResult,
 };
 use flick_ipc::server::{IpcDispatcher, IpcServer};
 use flick_ipc::unix;
@@ -21,12 +20,10 @@ struct EchoDispatcher;
 impl IpcDispatcher for EchoDispatcher {
     async fn dispatch(&self, command: IpcCommand) -> IpcResult {
         match command {
-            IpcCommand::Trigger { action_id, text } => {
-                IpcResult::ok(serde_json::json!({
-                    "action_id": action_id,
-                    "text": text,
-                }))
-            }
+            IpcCommand::Trigger { action_id, text } => IpcResult::ok(serde_json::json!({
+                "action_id": action_id,
+                "text": text,
+            })),
             _ => IpcResult::ok(serde_json::json!({"status": "ok"})),
         }
     }
@@ -114,11 +111,7 @@ async fn stale_socket_is_removed_only_after_single_instance_probe_fails() {
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
     let mut client = unix::connect(&path).await.expect("connect failed");
-    let request = make_request(
-        "req-stale",
-        IpcCommand::Status,
-        IPC_PROTOCOL_VERSION,
-    );
+    let request = make_request("req-stale", IpcCommand::Status, IPC_PROTOCOL_VERSION);
     let response = client.request(&request).await.expect("request failed");
     assert_eq!(response.request_id, "req-stale");
 }

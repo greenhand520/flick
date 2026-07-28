@@ -68,9 +68,7 @@ enum ShortcutsAction {
 #[tokio::main]
 async fn main() {
     let cli = Cli::parse();
-    let path = cli
-        .socket
-        .unwrap_or_else(default_socket_path);
+    let path = cli.socket.unwrap_or_else(default_socket_path);
     let json_output = cli.json;
 
     let command = match cli.command {
@@ -79,7 +77,9 @@ async fn main() {
         Command::Status => IpcCommand::Status,
         Command::Doctor => IpcCommand::Doctor,
         Command::Shortcuts { action } => match action {
-            ShortcutsAction::Configure { preferred_trigger } => IpcCommand::ShortcutsConfigure { preferred_trigger },
+            ShortcutsAction::Configure { preferred_trigger } => {
+                IpcCommand::ShortcutsConfigure { preferred_trigger }
+            }
             ShortcutsAction::Reconnect => IpcCommand::ShortcutsReconnect,
         },
         Command::Shutdown => IpcCommand::Shutdown,
@@ -130,8 +130,7 @@ async fn main() {
             // Retry once
             let retry_code = match try_connect_and_send(&path, &request).await {
                 ConnectResult::Response(response) => {
-                    let (output, is_stderr, code) =
-                        format_result(&response.result, json_output);
+                    let (output, is_stderr, code) = format_result(&response.result, json_output);
                     if is_stderr {
                         eprintln!("{output}");
                     } else {
@@ -162,8 +161,7 @@ async fn main() {
         }
 
         // Non-toggle: print the connect error
-        let (output, is_stderr) =
-            format_connection_error("daemon not reachable", json_output);
+        let (output, is_stderr) = format_connection_error("daemon not reachable", json_output);
         if is_stderr {
             eprintln!("{output}");
         } else {

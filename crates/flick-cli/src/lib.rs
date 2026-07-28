@@ -10,8 +10,7 @@ use std::path::{Path, PathBuf};
 
 /// Default socket path if none is specified.
 pub fn default_socket_path() -> PathBuf {
-    let runtime_dir =
-        std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "/tmp".to_string());
+    let runtime_dir = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "/tmp".to_string());
     PathBuf::from(runtime_dir).join("flick").join("flick.sock")
 }
 
@@ -70,10 +69,7 @@ pub enum ConnectResult {
 }
 
 /// Attempt to connect to the daemon and send a request.
-pub async fn try_connect_and_send(
-    path: &Path,
-    request: &IpcRequestEnvelope,
-) -> ConnectResult {
+pub async fn try_connect_and_send(path: &Path, request: &IpcRequestEnvelope) -> ConnectResult {
     match UnixSocketClient::connect(path).await {
         Ok(mut client) => match client.request(request).await {
             Ok(response) => ConnectResult::Response(response),
@@ -109,9 +105,6 @@ pub fn format_transport_error(err_msg: &str, json_output: bool) -> (String, bool
             false,
         )
     } else {
-        (
-            format!("Error communicating with daemon: {err_msg}"),
-            true,
-        )
+        (format!("Error communicating with daemon: {err_msg}"), true)
     }
 }

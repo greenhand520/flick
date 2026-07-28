@@ -37,18 +37,13 @@ pub enum IpcCommand {
     /// Toggle the Flick UI visibility.
     Toggle,
     /// Trigger a specific action by ID with optional text input.
-    Trigger {
-        action_id: String,
-        text: String,
-    },
+    Trigger { action_id: String, text: String },
     /// Query daemon status.
     Status,
     /// Run diagnostics.
     Doctor,
     /// (Re)configure global shortcuts with a preferred key trigger.
-    ShortcutsConfigure {
-        preferred_trigger: String,
-    },
+    ShortcutsConfigure { preferred_trigger: String },
     /// Reconnect to the shortcut portal.
     ShortcutsReconnect,
     /// Gracefully shut down the daemon.
@@ -66,10 +61,7 @@ pub enum IpcCommand {
 #[serde(tag = "result", rename_all = "snake_case")]
 pub enum IpcResult {
     Ok(serde_json::Value),
-    Error {
-        code: IpcErrorCode,
-        message: String,
-    },
+    Error { code: IpcErrorCode, message: String },
 }
 
 impl IpcResult {

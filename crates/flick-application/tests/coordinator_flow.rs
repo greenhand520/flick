@@ -91,7 +91,12 @@ struct FakeSink {
 impl FakeSink {
     fn new() -> (Self, Arc<Mutex<Vec<HostToUi>>>) {
         let events = Arc::new(Mutex::new(Vec::new()));
-        (Self { events: events.clone() }, events)
+        (
+            Self {
+                events: events.clone(),
+            },
+            events,
+        )
     }
 }
 
@@ -123,7 +128,10 @@ async fn newer_query_generation_wins_when_results_complete_out_of_order() {
     let mut routes = HashMap::new();
     routes.insert(
         "first".into(),
-        (vec![make_route_item("id_a", "A", 1.0)], Duration::from_millis(200)),
+        (
+            vec![make_route_item("id_a", "A", 1.0)],
+            Duration::from_millis(200),
+        ),
     );
     routes.insert(
         "second".into(),

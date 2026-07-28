@@ -16,8 +16,8 @@
 use flick_domain::*;
 use flick_shell_iced::bridge::IcedHostBridge;
 
-use flick_shell_iced::shell::IcedShell;
 use flick_shell_iced::ShellMessage;
+use flick_shell_iced::shell::IcedShell;
 use tokio::sync::mpsc;
 
 fn main() {
@@ -89,8 +89,13 @@ fn main() {
     shell.update(ShellMessage::Submitted);
     let cmd = cmd_rx.try_recv().unwrap();
     match &cmd {
-        UiToHost::Invoke { action_id, input, .. } => {
-            println!("   → Sent Invoke(action={action_id}, text={:?})", input.text);
+        UiToHost::Invoke {
+            action_id, input, ..
+        } => {
+            println!(
+                "   → Sent Invoke(action={action_id}, text={:?})",
+                input.text
+            );
         }
         other => println!("   → Sent {other:?}"),
     }

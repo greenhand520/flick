@@ -12,9 +12,8 @@ use flick_domain::*;
 use flick_ipc::message::*;
 use flick_ipc::server::{IpcDispatcher, IpcServer};
 use flick_ipc::unix;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use tempfile::TempDir;
-use tokio::sync::{mpsc, Mutex};
 
 // ─── Test daemon wiring ─────────────────────────────────────────────────────
 
@@ -36,12 +35,15 @@ impl RuntimePort for TestRuntimeAdapter {
 }
 
 struct TestEventSink {
-    tx: mpsc::UnboundedSender<HostToUi>,
+    events: Arc<Mutex<Vec<HostToUi>>>,
 }
 
 impl HostEventSink for TestEventSink {
     fn send(&self, event: HostToUi) {
-        let _ = self.tx.send(event);
+        self.events
+            .lock()
+            .expect("test event sink mutex poisoned")
+            .push(event);
     }
 }
 
@@ -59,6 +61,16 @@ impl IpcDispatcher for TestDispatcher {
                 self.coordinator.toggle_search_panel();
                 IpcResult::Ok(serde_json::json!({"toggled": true}))
             }
+            IpcCommand::Show => {
+                self.coordinator.handle_intent(UiIntent::ShowSearchPanel {
+                    activation_token: None,
+                });
+                IpcResult::Ok(serde_json::json!({"show": true}))
+            }
+            IpcCommand::Hide => {
+                self.coordinator.handle_intent(UiIntent::HideSearchPanel);
+                IpcResult::Ok(serde_json::json!({"hide": true}))
+            }
             IpcCommand::Trigger { action_id, text } => {
                 let action_id = match ActionId::new(&action_id) {
                     Ok(id) => id,
@@ -66,7 +78,7 @@ impl IpcDispatcher for TestDispatcher {
                         return IpcResult::Error {
                             code: IpcErrorCode::InvalidInput,
                             message: e.user_message(),
-                        }
+                        };
                     }
                 };
                 let request = ActionRequest {
@@ -96,15 +108,11 @@ impl IpcDispatcher for TestDispatcher {
                     }
                 }
             }
-            IpcCommand::Status => {
-                IpcResult::Ok(serde_json::json!({"daemon_status": "running"}))
-            }
-            IpcCommand::Doctor => {
-                IpcResult::Ok(serde_json::json!({"session": "headless"}))
-            }
-            IpcCommand::ShortcutsConfigure { preferred_trigger: _ } => {
-                IpcResult::Ok(serde_json::json!({"configure": "requested"}))
-            }
+            IpcCommand::Status => IpcResult::Ok(serde_json::json!({"daemon_status": "running"})),
+            IpcCommand::Doctor => IpcResult::Ok(serde_json::json!({"session": "headless"})),
+            IpcCommand::ShortcutsConfigure {
+                preferred_trigger: _,
+            } => IpcResult::Ok(serde_json::json!({"configure": "requested"})),
             IpcCommand::ShortcutsReconnect => {
                 IpcResult::Ok(serde_json::json!({"reconnect": "requested"}))
             }
@@ -121,15 +129,22 @@ async fn spawn_headless_daemon(tmpdir: &TempDir) -> (std::path::PathBuf, Arc<Tes
     flick_builtins::register_phase0_builtins(&runtime).await;
 
     // Create coordinator
-    let (event_tx, _event_rx) = mpsc::unbounded_channel();
-    let sink = Arc::new(TestEventSink { tx: event_tx });
-    let adapter = Arc::new(TestRuntimeAdapter { runtime: runtime.clone() }) as Arc<dyn RuntimePort>;
-    let coordinator = Arc::new(flick_application::ApplicationCoordinator::new(adapter.clone(), sink));
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let sink = Arc::new(TestEventSink {
+        events: Arc::clone(&events),
+    });
+    let adapter = Arc::new(TestRuntimeAdapter {
+        runtime: runtime.clone(),
+    }) as Arc<dyn RuntimePort>;
+    let coordinator = Arc::new(flick_application::ApplicationCoordinator::new(
+        adapter.clone(),
+        sink,
+    ));
 
     let dispatcher = Arc::new(TestDispatcher {
         runtime: adapter,
         coordinator,
-        events: Arc::new(Mutex::new(Vec::new())),
+        events,
     });
 
     // Bind IPC
@@ -142,10 +157,7 @@ async fn spawn_headless_daemon(tmpdir: &TempDir) -> (std::path::PathBuf, Arc<Tes
     (socket_path, dispatcher)
 }
 
-async fn send_ipc(
-    path: &std::path::Path,
-    command: IpcCommand,
-) -> IpcResponseEnvelope {
+async fn send_ipc(path: &std::path::Path, command: IpcCommand) -> IpcResponseEnvelope {
     let request = IpcRequestEnvelope {
         protocol_version: IPC_PROTOCOL_VERSION,
         request_id: "e2e-test".to_string(),
@@ -228,6 +240,43 @@ async fn e2e_toggle_returns_ok() {
         IpcResult::Ok(val) => assert_eq!(val["toggled"], true),
         other => panic!("expected Ok, got {other:?}"),
     }
+}
+
+#[tokio::test]
+async fn e2e_show_and_hide_emit_panel_events() {
+    let tmpdir = TempDir::new().unwrap();
+    let (path, dispatcher) = spawn_headless_daemon(&tmpdir).await;
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    let show = send_ipc(&path, IpcCommand::Show).await;
+    match &show.result {
+        IpcResult::Ok(value) => assert_eq!(value["show"], true),
+        other => panic!("expected Ok, got {other:?}"),
+    }
+
+    let hide = send_ipc(&path, IpcCommand::Hide).await;
+    match &hide.result {
+        IpcResult::Ok(value) => assert_eq!(value["hide"], true),
+        other => panic!("expected Ok, got {other:?}"),
+    }
+
+    let events = dispatcher
+        .events
+        .lock()
+        .expect("test event collection mutex poisoned");
+    assert!(events.iter().any(|event| {
+        matches!(
+            event,
+            HostToUi::ShowSearchPanel {
+                activation_token: None
+            }
+        )
+    }));
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, HostToUi::HideSearchPanel))
+    );
 }
 
 #[tokio::test]

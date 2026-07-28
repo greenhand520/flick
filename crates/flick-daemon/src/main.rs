@@ -22,8 +22,7 @@ fn socket_path(custom: Option<PathBuf>) -> PathBuf {
     if let Some(p) = custom {
         return p;
     }
-    let runtime_dir =
-        std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "/tmp".to_string());
+    let runtime_dir = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "/tmp".to_string());
     PathBuf::from(runtime_dir).join("flick").join("flick.sock")
 }
 
@@ -56,7 +55,7 @@ fn main() {
 fn run_graphical(socket_path: PathBuf) -> Result<(), String> {
     use flick_adapters_linux::diagnostics::is_wayland_session;
 
-#[allow(unused_imports)]
+    #[allow(unused_imports)]
     use flick_adapters_linux::portal::{IntentSink, PortalShortcutAdapter};
     use flick_application::coordinator::ApplicationCoordinator;
     use flick_application::ports::RuntimePort;
@@ -85,36 +84,53 @@ fn run_graphical(socket_path: PathBuf) -> Result<(), String> {
             let runtime = Arc::new(ActionRuntime::new());
             flick_builtins::register_phase0_builtins(&runtime).await;
 
-            let event_sink = Arc::new(bootstrap::ChannelEventSink { tx: host_event_tx.clone() });
-            let runtime_port = Arc::new(bootstrap::RuntimeAdapter { runtime: runtime.clone() })
-                as Arc<dyn RuntimePort>;
+            let event_sink = Arc::new(bootstrap::ChannelEventSink {
+                tx: host_event_tx.clone(),
+            });
+            let runtime_port = Arc::new(bootstrap::RuntimeAdapter {
+                runtime: runtime.clone(),
+            }) as Arc<dyn RuntimePort>;
             let coordinator = Arc::new(ApplicationCoordinator::new(runtime_port, event_sink));
 
             let coord = coordinator.clone();
             let mut rx = ui_cmd_rx;
             tokio::spawn(async move {
-                while let Some(cmd) = rx.recv().await { coord.handle_ui(cmd).await; }
+                while let Some(cmd) = rx.recv().await {
+                    coord.handle_ui(cmd).await;
+                }
             });
 
             let (intent_tx, mut intent_rx) = mpsc::unbounded_channel::<UiIntent>();
-            let portal = PortalShortcutAdapter::new(Arc::new(bootstrap::ChannelIntentSink { tx: intent_tx.clone() }));
+            let portal = PortalShortcutAdapter::new(Arc::new(bootstrap::ChannelIntentSink {
+                tx: intent_tx.clone(),
+            }));
             if let Err(e) = portal.initialize().await {
                 tracing::warn!("Portal init failed: {e:?}");
             }
             let portal = Arc::new(portal);
             let coord = coordinator.clone();
             tokio::spawn(async move {
-                while let Some(intent) = intent_rx.recv().await { coord.handle_intent(intent); }
+                while let Some(intent) = intent_rx.recv().await {
+                    coord.handle_intent(intent);
+                }
             });
 
             let dispatcher = bootstrap::create_ipc_dispatcher(
-                runtime, coordinator, host_event_tx, intent_tx, Some(portal),
+                runtime,
+                coordinator,
+                host_event_tx,
+                intent_tx,
+                Some(portal),
             );
             let cancel = CancellationToken::new();
-            let handle = match bootstrap::bind_and_run_ipc(&socket_path, dispatcher, cancel.clone()).await {
-                Ok(h) => h,
-                Err(e) => { tracing::error!("IPC: {e}"); return; }
-            };
+            let handle =
+                match bootstrap::bind_and_run_ipc(&socket_path, dispatcher, cancel.clone()).await {
+                    Ok(h) => h,
+                    Err(e) => {
+                        tracing::error!("IPC: {e}");
+                        return;
+                    }
+                };
             tracing::info!("Background services running");
 
             tokio::signal::ctrl_c().await.ok();

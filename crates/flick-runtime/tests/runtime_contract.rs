@@ -3,8 +3,8 @@
 //! Each `#[test]` corresponds to a named contract scenario.
 
 use flick_domain::{
-    ActionContext, ActionDescriptor, ActionError, ActionId, ActionOutcome, ActionRequest,
-    Caller, ConcurrencyPolicy, Deadline, InputKind, Matcher,
+    ActionContext, ActionDescriptor, ActionError, ActionId, ActionOutcome, ActionRequest, Caller,
+    ConcurrencyPolicy, Deadline, InputKind, Matcher,
 };
 use flick_runtime::{ActionHandler, ActionRuntime};
 use std::sync::Arc;
@@ -24,10 +24,7 @@ impl ActionHandler for EchoHandler {
     ) -> Result<ActionOutcome, ActionError> {
         // Strip "echo " prefix if present, otherwise return raw text.
         let text = request.input.text;
-        let stripped = text
-            .strip_prefix("echo ")
-            .unwrap_or(&text)
-            .to_string();
+        let stripped = text.strip_prefix("echo ").unwrap_or(&text).to_string();
         Ok(ActionOutcome::Data(serde_json::json!({ "echo": stripped })))
     }
 }
@@ -129,7 +126,11 @@ async fn exact_echo_prefix_binds_remaining_text_without_special_ui_path() {
 
     // "echo hello" → matches, remainder is "hello"
     let routes = rt.route("echo hello", InputKind::PlainText).await;
-    assert_eq!(routes.len(), 1, "expected exactly one route for 'echo hello'");
+    assert_eq!(
+        routes.len(),
+        1,
+        "expected exactly one route for 'echo hello'"
+    );
     assert_eq!(
         routes[0].action_id,
         ActionId::from_static("flick.builtin.echo.v1.echo")
@@ -192,7 +193,10 @@ async fn cancelling_an_invocation_returns_cancelled_outcome_or_stops_work() {
     // Give the handler a moment to start, then cancel.
     tokio::time::sleep(Duration::from_millis(50)).await;
     let cancelled = rt_arc.cancel(invocation_id).await;
-    assert!(cancelled, "cancel() should return true for a running invocation");
+    assert!(
+        cancelled,
+        "cancel() should return true for a running invocation"
+    );
 
     let outcome = invoke_handle.await.expect("invoke task should not panic");
     assert!(

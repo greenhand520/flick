@@ -8,8 +8,6 @@
 
 use flick_application::ports::{HostEventSink, RuntimePort};
 use flick_domain::*;
-use flick_ipc::message::*;
-use flick_ipc::server::IpcDispatcher;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
@@ -50,13 +48,19 @@ impl HostEventSink for TestEventSink {
 }
 
 /// Build a test coordinator + runtime pair.
-async fn build_test_stack() -> (Arc<ApplicationCoordinator>, Arc<ActionRuntime>, mpsc::UnboundedReceiver<HostToUi>) {
+async fn build_test_stack() -> (
+    Arc<ApplicationCoordinator>,
+    Arc<ActionRuntime>,
+    mpsc::UnboundedReceiver<HostToUi>,
+) {
     let runtime = Arc::new(ActionRuntime::new());
     flick_builtins::register_phase0_builtins(&runtime).await;
 
     let (event_tx, event_rx) = mpsc::unbounded_channel();
     let sink = Arc::new(TestEventSink { tx: event_tx });
-    let adapter = Arc::new(TestRuntimeAdapter { runtime: runtime.clone() }) as Arc<dyn RuntimePort>;
+    let adapter = Arc::new(TestRuntimeAdapter {
+        runtime: runtime.clone(),
+    }) as Arc<dyn RuntimePort>;
     let coordinator = Arc::new(ApplicationCoordinator::new(adapter, sink));
 
     (coordinator, runtime, event_rx)
@@ -126,20 +130,20 @@ async fn coordinator_portal_intent_does_not_invoke_runtime() {
 async fn coordinator_invoke_from_ui_returns_completion() {
     let (coordinator, _, mut events) = build_test_stack().await;
 
-    coordinator.handle_ui(UiToHost::Invoke {
-        invocation_id: InvocationId::new(),
-        action_id: ActionId::from_static("flick.builtin.echo.v1.echo"),
-        input: ActionInput::plain_text("hello"),
-    }).await;
+    coordinator
+        .handle_ui(UiToHost::Invoke {
+            invocation_id: InvocationId::new(),
+            action_id: ActionId::from_static("flick.builtin.echo.v1.echo"),
+            input: ActionInput::plain_text("hello"),
+        })
+        .await;
 
     let event = events.recv().await.unwrap();
     match event {
-        HostToUi::InvocationCompleted { outcome, .. } => {
-            match outcome {
-                ActionOutcome::Data(val) => assert_eq!(val["echo"], "hello"),
-                other => panic!("expected Data, got {other:?}"),
-            }
-        }
+        HostToUi::InvocationCompleted { outcome, .. } => match outcome {
+            ActionOutcome::Data(val) => assert_eq!(val["echo"], "hello"),
+            other => panic!("expected Data, got {other:?}"),
+        },
         other => panic!("expected InvocationCompleted, got {other:?}"),
     }
 }
@@ -148,10 +152,12 @@ async fn coordinator_invoke_from_ui_returns_completion() {
 async fn coordinator_query_changed_returns_routes() {
     let (coordinator, _, mut events) = build_test_stack().await;
 
-    coordinator.handle_ui(UiToHost::QueryChanged {
-        generation: QueryGeneration::INITIAL,
-        text: "echo".into(),
-    }).await;
+    coordinator
+        .handle_ui(UiToHost::QueryChanged {
+            generation: QueryGeneration::INITIAL,
+            text: "echo".into(),
+        })
+        .await;
 
     let event = events.recv().await.unwrap();
     match event {

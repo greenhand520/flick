@@ -1,8 +1,8 @@
 //! Portal state machine tests using fake adapters.
 
 use flick_adapters_linux::portal::{IntentSink, PortalShortcutAdapter};
-use flick_adapters_linux::shortcut_state::ShortcutState;
 use flick_adapters_linux::session::ShortcutActivation;
+use flick_adapters_linux::shortcut_state::ShortcutState;
 use flick_domain::UiIntent;
 use std::sync::{Arc, Mutex};
 
@@ -84,9 +84,7 @@ async fn session_error_transitions_to_recovering() {
     adapter.initialize().await.unwrap();
     adapter.configure_search_shortcut().await.unwrap();
 
-    adapter
-        .on_session_error("transport failure".into())
-        .await;
+    adapter.on_session_error("transport failure".into()).await;
     assert!(matches!(
         adapter.state().await,
         ShortcutState::Recovering { attempt: 0 }
@@ -98,9 +96,7 @@ async fn recovery_does_not_call_bind_shortcuts() {
     let sink = Arc::new(FakeIntentSink::new());
     let adapter = PortalShortcutAdapter::new(sink);
     adapter.initialize().await.unwrap();
-    adapter
-        .on_session_error("test".into())
-        .await;
+    adapter.on_session_error("test".into()).await;
     adapter.attempt_recovery().await.unwrap();
 
     // After recovery, state should be Unconfigured (not Bound)

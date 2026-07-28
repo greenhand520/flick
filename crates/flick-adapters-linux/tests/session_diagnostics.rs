@@ -1,6 +1,6 @@
 //! Session diagnostics tests.
 
-use flick_adapters_linux::diagnostics::{probe_session, SessionType};
+use flick_adapters_linux::diagnostics::{SessionType, probe_session};
 
 #[test]
 fn probe_detects_session_type() {

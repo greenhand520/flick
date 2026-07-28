@@ -34,7 +34,9 @@ fn initial_state_is_hidden_and_not_created() {
 #[test]
 fn first_show_creates_and_shows_window() {
     let mut panel = PanelState::new();
-    let actions = panel.update(PanelEvent::Show { activation_token: None });
+    let actions = panel.update(PanelEvent::Show {
+        activation_token: None,
+    });
     assert!(panel.visible);
     assert!(panel.created);
     assert!(actions.is_empty(), "show emits no outbound actions");
@@ -43,13 +45,17 @@ fn first_show_creates_and_shows_window() {
 #[test]
 fn second_show_just_shows_existing_window() {
     let mut panel = PanelState::new();
-    panel.update(PanelEvent::Show { activation_token: None });
+    panel.update(PanelEvent::Show {
+        activation_token: None,
+    });
     panel.update(PanelEvent::Hide);
     assert!(!panel.visible);
     assert!(panel.created, "window still marked as created after hide");
 
     // Second show
-    panel.update(PanelEvent::Show { activation_token: None });
+    panel.update(PanelEvent::Show {
+        activation_token: None,
+    });
     assert!(panel.visible);
     assert!(panel.created);
 }
@@ -57,31 +63,46 @@ fn second_show_just_shows_existing_window() {
 #[test]
 fn hide_emits_search_panel_closed() {
     let mut panel = PanelState::new();
-    panel.update(PanelEvent::Show { activation_token: None });
+    panel.update(PanelEvent::Show {
+        activation_token: None,
+    });
     let actions = panel.update(PanelEvent::Hide);
     assert!(!panel.visible);
     assert_eq!(actions.len(), 1);
-    assert!(matches!(&actions[0], PanelAction::SendToHost(UiToHost::SearchPanelClosed)));
+    assert!(matches!(
+        &actions[0],
+        PanelAction::SendToHost(UiToHost::SearchPanelClosed)
+    ));
 }
 
 #[test]
 fn window_closed_hides_panel() {
     let mut panel = PanelState::new();
-    panel.update(PanelEvent::Show { activation_token: None });
+    panel.update(PanelEvent::Show {
+        activation_token: None,
+    });
     let actions = panel.update(PanelEvent::WindowClosed);
     assert!(!panel.visible);
-    assert!(matches!(&actions[0], PanelAction::SendToHost(UiToHost::SearchPanelClosed)));
+    assert!(matches!(
+        &actions[0],
+        PanelAction::SendToHost(UiToHost::SearchPanelClosed)
+    ));
 }
 
 #[test]
 fn escape_hides_and_cancels_debounce() {
     let mut panel = PanelState::new();
-    panel.update(PanelEvent::Show { activation_token: None });
+    panel.update(PanelEvent::Show {
+        activation_token: None,
+    });
     let actions = panel.update(PanelEvent::EscapePressed);
     assert!(!panel.visible);
     assert_eq!(actions.len(), 2);
     assert!(matches!(&actions[0], PanelAction::CancelDebounce));
-    assert!(matches!(&actions[1], PanelAction::SendToHost(UiToHost::SearchPanelClosed)));
+    assert!(matches!(
+        &actions[1],
+        PanelAction::SendToHost(UiToHost::SearchPanelClosed)
+    ));
 }
 
 // ─── Query input and generation ──────────────────────────────────────────────
@@ -153,7 +174,10 @@ fn routes_for_current_generation_are_accepted() {
 
     let gn = panel.generation;
     let routes = vec![make_route("flick.builtin.echo.v1.echo", "Echo", 1.0)];
-    panel.update(PanelEvent::Routes { generation: gn, items: routes });
+    panel.update(PanelEvent::Routes {
+        generation: gn,
+        items: routes,
+    });
 
     assert_eq!(panel.routes.len(), 1);
     assert_eq!(panel.routes[0].title, "Echo");
@@ -175,12 +199,21 @@ fn old_generation_routes_are_discarded() {
 
     // Routes for older generation arrive
     let old_routes = vec![make_route("old", "Old", 1.0)];
-    panel.update(PanelEvent::Routes { generation: gn1, items: old_routes });
-    assert!(panel.routes.is_empty(), "old generation routes must be discarded");
+    panel.update(PanelEvent::Routes {
+        generation: gn1,
+        items: old_routes,
+    });
+    assert!(
+        panel.routes.is_empty(),
+        "old generation routes must be discarded"
+    );
 
     // Routes for current generation arrive
     let new_routes = vec![make_route("new", "New", 1.0)];
-    panel.update(PanelEvent::Routes { generation: gn2, items: new_routes });
+    panel.update(PanelEvent::Routes {
+        generation: gn2,
+        items: new_routes,
+    });
     assert_eq!(panel.routes.len(), 1);
     assert_eq!(panel.routes[0].title, "New");
 }
@@ -198,7 +231,10 @@ fn selection_starts_at_zero() {
         make_route("b", "Beta", 0.8),
         make_route("c", "Gamma", 0.6),
     ];
-    panel.update(PanelEvent::Routes { generation: gn, items: routes });
+    panel.update(PanelEvent::Routes {
+        generation: gn,
+        items: routes,
+    });
 
     assert_eq!(panel.selection.index, 0);
     assert_eq!(panel.selection.total, 3);
@@ -210,11 +246,11 @@ fn arrow_down_moves_selection() {
     panel.update(PanelEvent::InputChanged("test".into()));
     panel.update(PanelEvent::DebounceFlush);
     let gn = panel.generation;
-    let routes = vec![
-        make_route("a", "Alpha", 1.0),
-        make_route("b", "Beta", 0.8),
-    ];
-    panel.update(PanelEvent::Routes { generation: gn, items: routes });
+    let routes = vec![make_route("a", "Alpha", 1.0), make_route("b", "Beta", 0.8)];
+    panel.update(PanelEvent::Routes {
+        generation: gn,
+        items: routes,
+    });
 
     panel.update(PanelEvent::SelectionDown);
     assert_eq!(panel.selection.index, 1);
@@ -230,11 +266,11 @@ fn arrow_up_moves_selection() {
     panel.update(PanelEvent::InputChanged("test".into()));
     panel.update(PanelEvent::DebounceFlush);
     let gn = panel.generation;
-    let routes = vec![
-        make_route("a", "Alpha", 1.0),
-        make_route("b", "Beta", 0.8),
-    ];
-    panel.update(PanelEvent::Routes { generation: gn, items: routes });
+    let routes = vec![make_route("a", "Alpha", 1.0), make_route("b", "Beta", 0.8)];
+    panel.update(PanelEvent::Routes {
+        generation: gn,
+        items: routes,
+    });
 
     panel.update(PanelEvent::SelectionDown);
     assert_eq!(panel.selection.index, 1);
@@ -264,17 +300,24 @@ fn arrow_keys_safe_on_empty_routes() {
 #[test]
 fn submit_sends_invoke_for_selected_route() {
     let mut panel = PanelState::new();
-    panel.update(PanelEvent::Show { activation_token: None });
+    panel.update(PanelEvent::Show {
+        activation_token: None,
+    });
     panel.update(PanelEvent::InputChanged("echo hello".into()));
     panel.update(PanelEvent::DebounceFlush);
     let gn = panel.generation;
     let routes = vec![make_route("flick.builtin.echo.v1.echo", "Echo", 1.0)];
-    panel.update(PanelEvent::Routes { generation: gn, items: routes });
+    panel.update(PanelEvent::Routes {
+        generation: gn,
+        items: routes,
+    });
 
     let actions = panel.update(PanelEvent::Submitted);
     assert_eq!(actions.len(), 1);
     match &actions[0] {
-        PanelAction::SendToHost(UiToHost::Invoke { action_id, input, .. }) => {
+        PanelAction::SendToHost(UiToHost::Invoke {
+            action_id, input, ..
+        }) => {
             assert_eq!(action_id.as_str(), "flick.builtin.echo.v1.echo");
             assert_eq!(input.text, "echo hello");
         }
@@ -288,7 +331,9 @@ fn submit_sends_invoke_for_selected_route() {
 #[test]
 fn submit_on_empty_query_is_noop() {
     let mut panel = PanelState::new();
-    panel.update(PanelEvent::Show { activation_token: None });
+    panel.update(PanelEvent::Show {
+        activation_token: None,
+    });
     // No input — query is empty
     let actions = panel.update(PanelEvent::Submitted);
     assert!(actions.is_empty());
@@ -297,7 +342,9 @@ fn submit_on_empty_query_is_noop() {
 #[test]
 fn submit_on_empty_routes_is_noop() {
     let mut panel = PanelState::new();
-    panel.update(PanelEvent::Show { activation_token: None });
+    panel.update(PanelEvent::Show {
+        activation_token: None,
+    });
     panel.update(PanelEvent::InputChanged("echo hello".into()));
     panel.update(PanelEvent::DebounceFlush);
     // No routes loaded
@@ -315,7 +362,10 @@ fn submit_after_selection_navigates_invokes_correct_item() {
         make_route("first", "First", 1.0),
         make_route("second", "Second", 0.8),
     ];
-    panel.update(PanelEvent::Routes { generation: gn, items: routes });
+    panel.update(PanelEvent::Routes {
+        generation: gn,
+        items: routes,
+    });
 
     // Navigate to second item
     panel.update(PanelEvent::SelectionDown);

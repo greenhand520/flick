@@ -5,13 +5,10 @@
 //! `HostEventSink`. It is runtime-agnostic: it uses `async_trait` and
 //! does not depend on any particular async runtime.
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
-use flick_domain::{
-    ActionRequest, Caller, Deadline, HostToUi, InputKind,
-    UiIntent, UiToHost,
-};
+use flick_domain::{ActionRequest, Caller, Deadline, HostToUi, InputKind, UiIntent, UiToHost};
 
 use crate::ports::{HostEventSink, RuntimePort};
 use crate::query::QueryTracker;
@@ -102,7 +99,8 @@ impl ApplicationCoordinator {
         match intent {
             UiIntent::ShowSearchPanel { activation_token } => {
                 self.panel_visible.store(true, Ordering::SeqCst);
-                self.sink.send(HostToUi::ShowSearchPanel { activation_token });
+                self.sink
+                    .send(HostToUi::ShowSearchPanel { activation_token });
             }
             UiIntent::HideSearchPanel => {
                 self.panel_visible.store(false, Ordering::SeqCst);
@@ -123,8 +121,9 @@ impl ApplicationCoordinator {
         if was_visible {
             self.sink.send(HostToUi::HideSearchPanel);
         } else {
-            self.sink
-                .send(HostToUi::ShowSearchPanel { activation_token: None });
+            self.sink.send(HostToUi::ShowSearchPanel {
+                activation_token: None,
+            });
         }
     }
 }

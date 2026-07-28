@@ -52,8 +52,10 @@ impl InvocationHandle {
     /// Returns `Err(JoinError)` if the task panicked.
     pub async fn into_result(
         self,
-    ) -> Result<Result<flick_domain::ActionOutcome, flick_domain::ActionError>, tokio::task::JoinError>
-    {
+    ) -> Result<
+        Result<flick_domain::ActionOutcome, flick_domain::ActionError>,
+        tokio::task::JoinError,
+    > {
         self.handle.await
     }
 

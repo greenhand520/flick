@@ -31,10 +31,7 @@ pub struct IcedShell {
 
 impl IcedShell {
     /// Create a new shell.
-    pub fn new(
-        bridge: IcedHostBridge,
-        host_tx: mpsc::UnboundedSender<UiToHost>,
-    ) -> Self {
+    pub fn new(bridge: IcedHostBridge, host_tx: mpsc::UnboundedSender<UiToHost>) -> Self {
         Self {
             panel: PanelState::new(),
             bridge,
@@ -52,21 +49,21 @@ impl IcedShell {
             ShellMessage::SelectionUp => PanelEvent::SelectionUp,
             ShellMessage::SelectionDown => PanelEvent::SelectionDown,
             ShellMessage::WindowClosed => PanelEvent::WindowClosed,
-            ShellMessage::HostEvent(host_event) => {
-                match host_event {
-                    HostToUi::Routes { generation, items } => {
-                        PanelEvent::Routes { generation, items }
-                    }
-                    HostToUi::InvocationCompleted { invocation_id, outcome } => {
-                        PanelEvent::InvocationCompleted { invocation_id, outcome }
-                    }
-                    HostToUi::RuntimeStatus(status) => PanelEvent::RuntimeStatus(status),
-                    HostToUi::ShowSearchPanel { activation_token } => {
-                        PanelEvent::Show { activation_token }
-                    }
-                    HostToUi::HideSearchPanel => PanelEvent::Hide,
+            ShellMessage::HostEvent(host_event) => match host_event {
+                HostToUi::Routes { generation, items } => PanelEvent::Routes { generation, items },
+                HostToUi::InvocationCompleted {
+                    invocation_id,
+                    outcome,
+                } => PanelEvent::InvocationCompleted {
+                    invocation_id,
+                    outcome,
+                },
+                HostToUi::RuntimeStatus(status) => PanelEvent::RuntimeStatus(status),
+                HostToUi::ShowSearchPanel { activation_token } => {
+                    PanelEvent::Show { activation_token }
                 }
-            }
+                HostToUi::HideSearchPanel => PanelEvent::Hide,
+            },
             ShellMessage::DebounceFlush => PanelEvent::DebounceFlush,
         };
 

@@ -14,9 +14,7 @@ use serde::{Deserialize, Serialize};
 /// `HostToUi::ShowSearchPanel` message.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum UiIntent {
-    ShowSearchPanel {
-        activation_token: Option<String>,
-    },
+    ShowSearchPanel { activation_token: Option<String> },
     HideSearchPanel,
 }
 
@@ -44,9 +42,7 @@ pub enum UiToHost {
         input: ActionInput,
     },
     /// User cancelled an in-flight invocation.
-    Cancel {
-        invocation_id: InvocationId,
-    },
+    Cancel { invocation_id: InvocationId },
     /// The search panel was closed by the user.
     SearchPanelClosed,
 }
@@ -69,9 +65,7 @@ pub enum HostToUi {
     /// Runtime status update.
     RuntimeStatus(RuntimeStatus),
     /// Show the search panel (with optional activation token from Portal).
-    ShowSearchPanel {
-        activation_token: Option<String>,
-    },
+    ShowSearchPanel { activation_token: Option<String> },
     /// Hide the search panel.
     HideSearchPanel,
 }

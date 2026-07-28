@@ -4,8 +4,8 @@
 //! recovery, and activation forwarding.
 
 use crate::session::{
-    show_search_preferred_trigger, show_search_shortcut_description,
-    show_search_shortcut_id, ShortcutActivation, ShortcutBinding, ShortcutError,
+    ShortcutActivation, ShortcutBinding, ShortcutError, show_search_preferred_trigger,
+    show_search_shortcut_description, show_search_shortcut_id,
 };
 use crate::shortcut_state::{RecoveryBackoff, ShortcutState};
 use flick_domain::UiIntent;
@@ -189,10 +189,9 @@ impl PortalShortcutAdapter {
     pub async fn on_activated(&self, activation: ShortcutActivation) {
         debug!(shortcut_id = %activation.shortcut_id, "Shortcut activated");
 
-        self.intent_sink
-            .send_intent(UiIntent::ShowSearchPanel {
-                activation_token: activation.activation_token,
-            });
+        self.intent_sink.send_intent(UiIntent::ShowSearchPanel {
+            activation_token: activation.activation_token,
+        });
     }
 
     /// Attempt reconnect (user-triggered).
@@ -208,9 +207,7 @@ impl PortalShortcutAdapter {
         PortalDiagnostics {
             state: inner.state.clone(),
             shortcut_count: inner.shortcut_count,
-            session_age: inner
-                .session_created_at
-                .map(|t| t.elapsed()),
+            session_age: inner.session_created_at.map(|t| t.elapsed()),
             last_error: inner.last_error.clone(),
             reconnect_attempt: inner.reconnect_attempt,
         }

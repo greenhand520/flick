@@ -15,8 +15,8 @@ pub mod ui;
 
 // Re-export key types at crate root for convenience.
 pub use action::{
-    ActionContext, ActionDescriptor, ActionInput, ActionOutcome, ActionRequest,
-    ConcurrencyPolicy, Deadline, InputKind, Matcher,
+    ActionContext, ActionDescriptor, ActionInput, ActionOutcome, ActionRequest, ConcurrencyPolicy,
+    Deadline, InputKind, Matcher,
 };
 pub use caller::{Caller, CallerKind};
 pub use error::ActionError;

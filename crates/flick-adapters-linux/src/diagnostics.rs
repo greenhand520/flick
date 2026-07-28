@@ -88,10 +88,8 @@ pub fn probe_session() -> SessionDiagnostics {
 
 /// Check if we're in a valid Wayland session for graphical mode.
 pub fn is_wayland_session() -> bool {
-    matches!(
-        std::env::var("XDG_SESSION_TYPE").as_deref(),
-        Ok("wayland")
-    ) && std::env::var("WAYLAND_DISPLAY").is_ok()
+    matches!(std::env::var("XDG_SESSION_TYPE").as_deref(), Ok("wayland"))
+        && std::env::var("WAYLAND_DISPLAY").is_ok()
 }
 
 fn env_presence(var: &str) -> Presence {

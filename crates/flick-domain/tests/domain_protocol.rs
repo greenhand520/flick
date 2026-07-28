@@ -30,10 +30,7 @@ fn action_request_keeps_direct_caller_and_unique_invocation() {
 #[test]
 fn echo_request_has_correct_action_id() {
     let request = ActionRequest::new_echo("test", Caller::cli("flick-cli"));
-    assert_eq!(
-        request.action_id.as_str(),
-        "flick.builtin.echo.v1.echo"
-    );
+    assert_eq!(request.action_id.as_str(), "flick.builtin.echo.v1.echo");
 }
 
 #[test]

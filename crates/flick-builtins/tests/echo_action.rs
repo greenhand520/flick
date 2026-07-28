@@ -1,6 +1,6 @@
 //! Tests for the Echo built-in action.
 
-use flick_builtins::echo::{EchoHandler, ECHO_ACTION_ID};
+use flick_builtins::echo::{ECHO_ACTION_ID, EchoHandler};
 use flick_domain::{ActionContext, ActionOutcome, ActionRequest, Caller};
 use flick_runtime::ActionHandler;
 use tokio_util::sync::CancellationToken;
@@ -21,7 +21,10 @@ async fn echo_returns_data_with_text() {
     let handler = EchoHandler;
     let request = ActionRequest::new_echo("hello world", Caller::cli("test"));
     let ctx = test_ctx();
-    let outcome = handler.invoke(request, ctx).await.expect("invoke should succeed");
+    let outcome = handler
+        .invoke(request, ctx)
+        .await
+        .expect("invoke should succeed");
     match outcome {
         ActionOutcome::Data(val) => {
             assert_eq!(val["echo"], "hello world");
@@ -35,7 +38,10 @@ async fn echo_preserves_empty_string() {
     let handler = EchoHandler;
     let request = ActionRequest::new_echo("", Caller::ui("panel"));
     let ctx = test_ctx();
-    let outcome = handler.invoke(request, ctx).await.expect("invoke should succeed");
+    let outcome = handler
+        .invoke(request, ctx)
+        .await
+        .expect("invoke should succeed");
     match outcome {
         ActionOutcome::Data(val) => {
             assert_eq!(val["echo"], "");
@@ -68,7 +74,9 @@ async fn echo_registered_in_runtime_is_findable() {
     register_phase0_builtins(&runtime).await;
 
     let id = ActionId::from_static(ECHO_ACTION_ID);
-    let results = runtime.route("echo hello", flick_domain::InputKind::PlainText).await;
+    let results = runtime
+        .route("echo hello", flick_domain::InputKind::PlainText)
+        .await;
     assert!(!results.is_empty(), "echo should be routable");
     assert_eq!(results[0].action_id, id);
 }
