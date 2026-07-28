@@ -1,0 +1,14 @@
+[package]
+name = "flick-builtins"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+flick-domain = { path = "../flick-domain" }
+flick-runtime = { path = "../flick-runtime" }
+serde_json = { workspace = true }
+async-trait = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
+tokio-util = { workspace = true }

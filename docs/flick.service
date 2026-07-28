@@ -1,0 +1,17 @@
+[Unit]
+Description=Flick Launcher Daemon
+After=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=%h/.cargo/bin/flick-daemon --foreground
+Restart=on-failure
+RestartSec=5
+
+# Ensure Wayland session environment is available
+Environment=WAYLAND_DISPLAY=%E
+Environment=XDG_RUNTIME_DIR=%t
+Environment=DBUS_SESSION_BUS_ADDRESS=%DBUS_SESSION_BUS_ADDRESS
+
+[Install]
+WantedBy=default.target

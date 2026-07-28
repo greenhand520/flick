@@ -1,0 +1,16 @@
+[package]
+name = "flick-cli"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "flick"
+path = "src/main.rs"
+
+[dependencies]
+flick-domain = { path = "../flick-domain" }
+flick-ipc = { path = "../flick-ipc" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+clap = { version = "4", features = ["derive"] }

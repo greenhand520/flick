@@ -1,0 +1,48 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/flick-domain",
+    "crates/flick-application",
+    "crates/flick-runtime",
+    "crates/flick-builtins",
+    "crates/flick-ipc",
+    "crates/flick-adapters-linux",
+    "crates/flick-shell-iced",
+    "crates/flick-daemon",
+    "crates/flick-cli",
+    "crates/flick-testkit",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+
+[workspace.dependencies]
+# Core
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+uuid = { version = "1", features = ["v4", "serde"] }
+thiserror = "2.0"
+tokio = { version = "1.53", features = ["full"] }
+tokio-util = { version = "0.7", features = ["rt"] }
+async-trait = "0.1"
+
+# Linux / Portal
+ashpd = { version = "0.13", default-features = false, features = ["tokio"] }
+zbus = "5.18"
+
+# UI
+iced = { version = "0.14", features = ["tokio"] }
+
+# Testing
+tempfile = "3.27"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[profile.dev]
+opt-level = 0
+
+[profile.release]
+opt-level = 3
+lto = "thin"

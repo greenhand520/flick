@@ -1,0 +1,9 @@
+[package]
+name = "flick-application"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+flick-domain = { path = "../flick-domain" }
+tokio = { workspace = true }
+async-trait = { workspace = true }

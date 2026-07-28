@@ -1,0 +1,11 @@
+[package]
+name = "flick-testkit"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+flick-domain = { path = "../flick-domain" }
+flick-runtime = { path = "../flick-runtime" }
+flick-application = { path = "../flick-application" }
+tokio = { workspace = true }
+async-trait = { workspace = true }

@@ -1,0 +1,20 @@
+.idea
+
+/target
+
+# vibe coding
+.claude
+.mimocode
+.codex
+.opencode
+.agents
+.superpowers
+.planning
+**/superpowers/
+**/design/
+**/plans/
+AGENTS.md
+findings.md
+progress.md
+task_plan.md
+

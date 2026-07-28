@@ -1,0 +1,25 @@
+[package]
+name = "flick-daemon"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "flick-daemon"
+path = "src/main.rs"
+
+[dependencies]
+flick-domain = { path = "../flick-domain" }
+flick-application = { path = "../flick-application" }
+flick-runtime = { path = "../flick-runtime" }
+flick-builtins = { path = "../flick-builtins" }
+flick-ipc = { path = "../flick-ipc" }
+flick-adapters-linux = { path = "../flick-adapters-linux" }
+flick-shell-iced = { path = "../flick-shell-iced" }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+clap = { version = "4", features = ["derive"] }
+async-trait = { workspace = true }

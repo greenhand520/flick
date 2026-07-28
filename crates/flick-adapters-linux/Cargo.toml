@@ -1,0 +1,15 @@
+[package]
+name = "flick-adapters-linux"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+flick-domain = { path = "../flick-domain" }
+flick-application = { path = "../flick-application" }
+ashpd = { workspace = true }
+zbus = { workspace = true }
+tokio = { workspace = true }
+async-trait = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+serde = { version = "1.0.229", features = ["derive"] }
