@@ -1,30 +1,46 @@
-//! Portal GlobalShortcuts state machine.
+//! Portal GlobalShortcuts state and diagnostics models.
 
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
-/// The state of the Portal GlobalShortcuts adapter.
+/// Operator-visible state of the Portal GlobalShortcuts adapter.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ShortcutState {
-    /// Portal capability is not available.
-    Unavailable,
-    /// No shortcuts configured yet.
+    /// The desktop Portal capability cannot currently be used.
+    Unavailable { reason: String },
+    /// A Portal session is available but does not list show-search.
     Unconfigured,
-    /// Currently in the process of binding shortcuts.
-    Binding,
-    /// Shortcuts are bound and active.
+    /// An explicit user-requested binding operation is awaiting Portal.
+    Configuring,
+    /// The active Portal session lists the show-search shortcut.
     Bound,
-    /// User cancelled the binding UI.
-    UserCancelled,
-    /// The binding request ended without success.
-    RequestEnded,
-    /// Session was created but no shortcuts are bound.
-    NoShortcutBound,
-    /// Recovering from a session/transport failure.
+    /// The user cancelled or rejected the Portal binding request.
+    Denied,
+    /// A closed/failed session has one scheduled open-and-list recovery.
     Recovering { attempt: u32 },
+    /// A Portal, transport, or protocol operation failed.
+    Error { operation: String, message: String },
 }
 
-/// Backoff schedule for recovery attempts.
+/// Last Portal error retained for operator diagnostics.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PortalDiagnosticError {
+    pub operation: String,
+    pub category: String,
+    pub message: String,
+}
+
+/// Serializable snapshot of shortcut state and its active Portal session.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PortalSnapshot {
+    pub state: ShortcutState,
+    pub session_active: bool,
+    pub shortcut_count: u32,
+    pub last_error: Option<PortalDiagnosticError>,
+    pub reconnect_attempt: Option<u32>,
+}
+
+/// Backoff schedule for one automatic recovery after a Portal failure.
 pub struct RecoveryBackoff {
     schedule: Vec<Duration>,
     max_interval: Duration,
@@ -39,7 +55,7 @@ impl RecoveryBackoff {
                 Duration::from_secs(15),
                 Duration::from_secs(60),
             ],
-            max_interval: Duration::from_secs(300), // 5 minutes
+            max_interval: Duration::from_secs(300),
         }
     }
 
@@ -75,9 +91,13 @@ mod tests {
     }
 
     #[test]
-    fn states_are_distinct() {
-        assert_ne!(ShortcutState::UserCancelled, ShortcutState::RequestEnded);
-        assert_ne!(ShortcutState::RequestEnded, ShortcutState::NoShortcutBound);
-        assert_ne!(ShortcutState::UserCancelled, ShortcutState::NoShortcutBound);
+    fn denied_and_error_are_distinct_operator_states() {
+        assert_ne!(
+            ShortcutState::Denied,
+            ShortcutState::Error {
+                operation: "BindShortcuts".into(),
+                message: "Portal request ended".into(),
+            }
+        );
     }
 }

@@ -8,7 +8,8 @@ flick-domain = { path = "../flick-domain" }
 flick-application = { path = "../flick-application" }
 ashpd = { workspace = true }
 zbus = { workspace = true }
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["test-util"] }
+tokio-util = { workspace = true }
 async-trait = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }

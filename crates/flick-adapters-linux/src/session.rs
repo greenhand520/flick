@@ -1,4 +1,4 @@
-//! Portal session lifecycle management.
+//! Portal session lifecycle types.
 
 use serde::{Deserialize, Serialize};
 use std::fmt;
@@ -32,6 +32,30 @@ pub enum ShortcutError {
     SessionError { reason: String },
     /// Internal error.
     Internal { message: String },
+}
+
+impl ShortcutError {
+    /// Stable operator-facing category used in diagnostics.
+    pub fn category(&self) -> &'static str {
+        match self {
+            Self::Unavailable { .. } => "unavailable",
+            Self::UserCancelled => "user_cancelled",
+            Self::RequestEnded { .. } => "request_ended",
+            Self::SessionError { .. } => "session",
+            Self::Internal { .. } => "internal",
+        }
+    }
+
+    /// Human-readable error message without user payloads.
+    pub fn diagnostic_message(&self) -> String {
+        match self {
+            Self::Unavailable { reason }
+            | Self::RequestEnded { reason }
+            | Self::SessionError { reason }
+            | Self::Internal { message: reason } => reason.clone(),
+            Self::UserCancelled => "User cancelled shortcut configuration".into(),
+        }
+    }
 }
 
 impl fmt::Display for ShortcutError {

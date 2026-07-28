@@ -4,6 +4,7 @@
 
 use flick_adapters_linux::diagnostics::probe_session;
 use flick_adapters_linux::portal::{IntentSink, PortalShortcutAdapter};
+use flick_adapters_linux::session::ShortcutError;
 use flick_application::coordinator::ApplicationCoordinator;
 use flick_application::ports::{HostEventSink, RuntimePort};
 use flick_domain::*;
@@ -114,29 +115,24 @@ impl flick_ipc::server::IpcDispatcher for DaemonIpcDispatcher {
             IpcCommand::Status => IpcResult::Ok(serde_json::json!({ "daemon_status": "running" })),
             IpcCommand::Doctor => IpcResult::Ok(serde_json::json!(probe_session())),
             IpcCommand::ShortcutsConfigure { preferred_trigger } => {
-                info!("Shortcut config requested, preferred: {preferred_trigger}");
-                // Call Portal adapter if available
-                if let Some(portal) = &self.portal {
-                    let portal = portal.clone();
-                    // Spawn async Portal call
-                    tokio::spawn(async move {
-                        match portal.configure_search_shortcut().await {
-                            Ok(binding) => {
-                                info!("Portal shortcut bound: {:?}", binding.actual_trigger)
-                            }
-                            Err(e) => warn!("Portal shortcut config failed: {e}"),
-                        }
-                    });
+                info!("Shortcut configuration requested");
+                let Some(portal) = &self.portal else {
+                    return IpcResult::Error {
+                        code: IpcErrorCode::Internal,
+                        message: "Global shortcut configuration is unavailable.".into(),
+                    };
+                };
+
+                match portal.configure_search_shortcut(&preferred_trigger).await {
+                    Ok(binding) => {
+                        info!("Portal shortcut configured");
+                        IpcResult::Ok(serde_json::json!({
+                            "shortcut_id": binding.id,
+                            "actual_trigger": binding.actual_trigger,
+                        }))
+                    }
+                    Err(error) => shortcut_configuration_error(error),
                 }
-                self.coordinator.handle_intent(UiIntent::ShowSearchPanel {
-                    activation_token: None,
-                });
-                IpcResult::Ok(serde_json::json!({
-                    "configure": "shortcut_bind_requested",
-                    "shortcut_id": "show-search",
-                    "preferred_trigger": preferred_trigger,
-                    "portal_available": self.portal.is_some()
-                }))
             }
             IpcCommand::ShortcutsReconnect => {
                 IpcResult::Ok(serde_json::json!({ "reconnect": "requested" }))
@@ -153,6 +149,38 @@ impl flick_ipc::server::IpcDispatcher for DaemonIpcDispatcher {
                 IpcResult::Ok(serde_json::json!({ "hide": true }))
             }
         }
+    }
+}
+
+fn shortcut_configuration_error(error: ShortcutError) -> IpcResult {
+    let (code, message) = match error {
+        ShortcutError::UserCancelled => (
+            IpcErrorCode::Cancelled,
+            "Shortcut configuration was cancelled.",
+        ),
+        ShortcutError::Unavailable { .. } => (
+            IpcErrorCode::Internal,
+            "Global shortcut configuration is unavailable.",
+        ),
+        ShortcutError::RequestEnded { .. } => (
+            IpcErrorCode::Internal,
+            "Shortcut configuration did not complete.",
+        ),
+        ShortcutError::SessionError { .. } => (
+            IpcErrorCode::Internal,
+            "Global shortcut session is unavailable. Try configuring again.",
+        ),
+        ShortcutError::Internal { .. } => {
+            (IpcErrorCode::Internal, "Shortcut configuration failed.")
+        }
+    };
+    warn!(
+        category = error.category(),
+        "Portal shortcut configuration failed"
+    );
+    IpcResult::Error {
+        code,
+        message: message.into(),
     }
 }
 

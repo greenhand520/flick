@@ -6,17 +6,28 @@
 //! - Shutdown cleans up socket
 //! - Portal unavailability doesn't crash daemon
 
+use async_trait::async_trait;
+use flick_adapters_linux::portal::{IntentSink, PortalShortcutAdapter};
+use flick_adapters_linux::portal_client::{PortalClient, PortalEvent};
+use flick_adapters_linux::session::{
+    ShortcutBinding, ShortcutError, show_search_shortcut_description, show_search_shortcut_id,
+};
+use flick_application::coordinator::ApplicationCoordinator;
 use flick_application::ports::{HostEventSink, RuntimePort};
 use flick_domain::*;
-use std::sync::Arc;
+use flick_ipc::message::{IpcCommand, IpcErrorCode, IpcResult};
+use flick_ipc::server::IpcDispatcher;
+use flick_runtime::ActionRuntime;
+use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
 
-// ─── Import daemon's internal dispatcher types ──────────────────────────────
-// We test via the public IPC dispatcher interface, not by importing daemon internals.
-// Instead, we recreate the wiring pattern from bootstrap.rs.
+#[allow(dead_code)]
+#[path = "../src/headless.rs"]
+mod headless;
 
-use flick_application::coordinator::ApplicationCoordinator;
-use flick_runtime::ActionRuntime;
+#[allow(dead_code)]
+#[path = "../src/bootstrap.rs"]
+mod bootstrap;
 
 // ─── Test helpers ───────────────────────────────────────────────────────────
 
@@ -45,6 +56,76 @@ impl HostEventSink for TestEventSink {
     fn send(&self, event: HostToUi) {
         let _ = self.tx.send(event);
     }
+}
+
+struct ConfigurePortalClient {
+    bind_result: Mutex<Result<Vec<ShortcutBinding>, ShortcutError>>,
+    event_rx: Mutex<Option<mpsc::UnboundedReceiver<PortalEvent>>>,
+}
+
+impl ConfigurePortalClient {
+    fn new(bind_result: Result<Vec<ShortcutBinding>, ShortcutError>) -> Self {
+        let (_event_tx, event_rx) = mpsc::unbounded_channel();
+        Self {
+            bind_result: Mutex::new(bind_result),
+            event_rx: Mutex::new(Some(event_rx)),
+        }
+    }
+}
+
+#[async_trait]
+impl PortalClient for ConfigurePortalClient {
+    async fn open_session_and_list(&self) -> Result<Vec<ShortcutBinding>, ShortcutError> {
+        Ok(Vec::new())
+    }
+
+    async fn bind_show_search(
+        &self,
+        _preferred_trigger: &str,
+    ) -> Result<Vec<ShortcutBinding>, ShortcutError> {
+        self.bind_result.lock().unwrap().clone()
+    }
+
+    async fn close_session(&self) {}
+
+    fn take_event_receiver(&self) -> Option<mpsc::UnboundedReceiver<PortalEvent>> {
+        self.event_rx.lock().unwrap().take()
+    }
+}
+
+struct NoopIntentSink;
+
+impl IntentSink for NoopIntentSink {
+    fn send_intent(&self, _intent: UiIntent) {}
+}
+
+fn show_search_binding(actual_trigger: &str) -> ShortcutBinding {
+    ShortcutBinding {
+        id: show_search_shortcut_id().into(),
+        description: show_search_shortcut_description().into(),
+        preferred_trigger: actual_trigger.into(),
+        actual_trigger: Some(actual_trigger.into()),
+    }
+}
+
+async fn build_dispatcher(
+    portal: Option<Arc<PortalShortcutAdapter>>,
+) -> (
+    bootstrap::DaemonIpcDispatcher,
+    mpsc::UnboundedReceiver<HostToUi>,
+) {
+    let (coordinator, runtime, events) = build_test_stack().await;
+    let runtime = Arc::new(TestRuntimeAdapter { runtime }) as Arc<dyn RuntimePort>;
+    let (intent_tx, _intent_rx) = mpsc::unbounded_channel();
+    (
+        bootstrap::DaemonIpcDispatcher {
+            runtime,
+            coordinator,
+            intent_tx,
+            portal,
+        },
+        events,
+    )
 }
 
 /// Build a test coordinator + runtime pair.
@@ -167,6 +248,79 @@ async fn coordinator_query_changed_returns_routes() {
         }
         other => panic!("expected Routes, got {other:?}"),
     }
+}
+
+#[tokio::test]
+async fn shortcuts_configure_awaits_portal_and_returns_binding_without_showing_panel() {
+    let portal = Arc::new(PortalShortcutAdapter::new_with_client(
+        Arc::new(NoopIntentSink),
+        Arc::new(ConfigurePortalClient::new(Ok(vec![show_search_binding(
+            "Ctrl+Space",
+        )]))),
+    ));
+    let (dispatcher, mut events) = build_dispatcher(Some(portal)).await;
+
+    let result = dispatcher
+        .dispatch(IpcCommand::ShortcutsConfigure {
+            preferred_trigger: "Super+Space".into(),
+        })
+        .await;
+
+    match result {
+        IpcResult::Ok(value) => {
+            assert_eq!(value["shortcut_id"], "show-search");
+            assert_eq!(value["actual_trigger"], "Ctrl+Space");
+        }
+        other => panic!("expected shortcut configuration success, got {other:?}"),
+    }
+    assert!(
+        events.try_recv().is_err(),
+        "configure must not show the panel"
+    );
+}
+
+#[tokio::test]
+async fn shortcuts_configure_returns_safe_errors_without_a_portal_or_after_cancellation() {
+    let (without_portal, mut events) = build_dispatcher(None).await;
+    let request = IpcCommand::ShortcutsConfigure {
+        preferred_trigger: "Super+Space".into(),
+    };
+    let unavailable = without_portal.dispatch(request).await;
+    match unavailable {
+        IpcResult::Error { code, message } => {
+            assert_eq!(code, IpcErrorCode::Internal);
+            assert!(!message.contains("Super+Space"));
+        }
+        other => panic!("expected unavailable Portal error, got {other:?}"),
+    }
+    assert!(
+        events.try_recv().is_err(),
+        "configure must not show the panel"
+    );
+
+    let portal = Arc::new(PortalShortcutAdapter::new_with_client(
+        Arc::new(NoopIntentSink),
+        Arc::new(ConfigurePortalClient::new(Err(
+            ShortcutError::UserCancelled,
+        ))),
+    ));
+    let (cancelled_dispatcher, mut cancelled_events) = build_dispatcher(Some(portal)).await;
+    let cancelled = cancelled_dispatcher
+        .dispatch(IpcCommand::ShortcutsConfigure {
+            preferred_trigger: "Super+Space".into(),
+        })
+        .await;
+    match cancelled {
+        IpcResult::Error { code, message } => {
+            assert_eq!(code, IpcErrorCode::Cancelled);
+            assert!(!message.contains("Super+Space"));
+        }
+        other => panic!("expected cancellation error, got {other:?}"),
+    }
+    assert!(
+        cancelled_events.try_recv().is_err(),
+        "configure must not show the panel"
+    );
 }
 
 #[tokio::test]

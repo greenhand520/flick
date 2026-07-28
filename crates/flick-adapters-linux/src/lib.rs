@@ -3,5 +3,6 @@
 
 pub mod diagnostics;
 pub mod portal;
+pub mod portal_client;
 pub mod session;
 pub mod shortcut_state;
