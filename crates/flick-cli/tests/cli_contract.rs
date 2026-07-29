@@ -64,6 +64,27 @@ async fn spawn_test_server(
     (path, dispatcher)
 }
 
+// ─── Unit tests: socket resolution ──────────────────────────────────────────
+
+#[test]
+fn default_socket_policy_requires_runtime_directory() {
+    assert!(matches!(
+        resolve_default_socket_path(|_| None),
+        Err(SocketPathError::MissingRuntimeDir)
+    ));
+}
+
+#[test]
+fn default_socket_policy_uses_runtime_directory() {
+    assert_eq!(
+        resolve_default_socket_path(|key| {
+            (key == "XDG_RUNTIME_DIR").then(|| "/run/user/1000".into())
+        })
+        .unwrap(),
+        std::path::PathBuf::from("/run/user/1000/flick/flick.sock")
+    );
+}
+
 // ─── Unit tests: build_request ───────────────────────────────────────────────
 
 #[test]

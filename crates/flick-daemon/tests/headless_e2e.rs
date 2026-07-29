@@ -13,7 +13,18 @@ use flick_ipc::message::*;
 use flick_ipc::server::{IpcDispatcher, IpcServer};
 use flick_ipc::unix;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use tempfile::TempDir;
+
+#[allow(dead_code)]
+#[path = "../src/bootstrap.rs"]
+mod bootstrap;
+#[allow(dead_code)]
+#[path = "../src/headless.rs"]
+mod headless;
+#[allow(dead_code)]
+#[path = "../src/lifecycle.rs"]
+mod lifecycle;
 
 // ─── Test daemon wiring ─────────────────────────────────────────────────────
 
@@ -294,6 +305,47 @@ async fn e2e_doctor_returns_session_info() {
         }
         other => panic!("expected Ok, got {other:?}"),
     }
+}
+
+#[tokio::test]
+async fn e2e_real_headless_daemon_stops_and_removes_socket_after_shutdown() {
+    let tmpdir = TempDir::new().unwrap();
+    let socket_path = tmpdir.path().join("daemon.sock");
+    let daemon = tokio::spawn(bootstrap::run_headless(socket_path.clone()));
+
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            if let Ok(mut client) = unix::connect(&socket_path).await {
+                let request = IpcRequestEnvelope {
+                    protocol_version: IPC_PROTOCOL_VERSION,
+                    request_id: "headless-ready".into(),
+                    command: IpcCommand::Status,
+                };
+                if client.request(&request).await.is_ok() {
+                    break;
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("headless daemon must bind its IPC socket");
+
+    let response = send_ipc(&socket_path, IpcCommand::Shutdown).await;
+    match response.result {
+        IpcResult::Ok(value) => assert_eq!(value["shutdown"], true),
+        other => panic!("expected successful shutdown response, got {other:?}"),
+    }
+
+    tokio::time::timeout(Duration::from_secs(2), daemon)
+        .await
+        .expect("headless daemon must exit after IPC shutdown")
+        .expect("headless daemon task must not panic")
+        .expect("headless daemon must not report a shutdown error");
+    assert!(
+        !socket_path.exists(),
+        "shutdown must remove only Flick's socket file"
+    );
 }
 
 #[tokio::test]

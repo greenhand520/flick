@@ -68,7 +68,16 @@ enum ShortcutsAction {
 #[tokio::main]
 async fn main() {
     let cli = Cli::parse();
-    let path = cli.socket.unwrap_or_else(default_socket_path);
+    let path = match cli.socket {
+        Some(path) => path,
+        None => match default_socket_path() {
+            Ok(path) => path,
+            Err(error) => {
+                eprintln!("Error: {error}");
+                process::exit(2);
+            }
+        },
+    };
     let json_output = cli.json;
 
     let command = match cli.command {

@@ -52,6 +52,8 @@ pub enum UiToHost {
 /// Messages from the Host (coordinator) to the UI.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum HostToUi {
+    /// The daemon is stopping; the shell must leave its event loop.
+    Shutdown,
     /// Route results for a search query.
     Routes {
         generation: QueryGeneration,

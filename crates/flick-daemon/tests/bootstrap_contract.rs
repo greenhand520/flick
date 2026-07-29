@@ -21,6 +21,7 @@ use flick_ipc::message::{IpcCommand, IpcErrorCode, IpcResult};
 use flick_ipc::server::IpcDispatcher;
 use flick_runtime::ActionRuntime;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use tokio::sync::mpsc;
 
 #[allow(dead_code)]
@@ -30,6 +31,9 @@ mod headless;
 #[allow(dead_code)]
 #[path = "../src/bootstrap.rs"]
 mod bootstrap;
+#[allow(dead_code)]
+#[path = "../src/lifecycle.rs"]
+mod lifecycle;
 
 // ─── Test helpers ───────────────────────────────────────────────────────────
 
@@ -126,6 +130,16 @@ async fn build_dispatcher(
     bootstrap::DaemonIpcDispatcher,
     mpsc::UnboundedReceiver<HostToUi>,
 ) {
+    build_dispatcher_with_lifecycle(portal, lifecycle::DaemonLifecycle::new()).await
+}
+
+async fn build_dispatcher_with_lifecycle(
+    portal: Option<Arc<PortalShortcutAdapter>>,
+    lifecycle: lifecycle::DaemonLifecycle,
+) -> (
+    bootstrap::DaemonIpcDispatcher,
+    mpsc::UnboundedReceiver<HostToUi>,
+) {
     let (coordinator, runtime, events) = build_test_stack().await;
     let runtime = Arc::new(TestRuntimeAdapter { runtime }) as Arc<dyn RuntimePort>;
     let (intent_tx, _intent_rx) = mpsc::unbounded_channel();
@@ -135,6 +149,7 @@ async fn build_dispatcher(
             coordinator,
             intent_tx,
             portal,
+            lifecycle,
         },
         events,
     )
@@ -260,6 +275,29 @@ async fn coordinator_query_changed_returns_routes() {
         }
         other => panic!("expected Routes, got {other:?}"),
     }
+}
+
+#[tokio::test]
+async fn shutdown_response_is_successful_before_lifecycle_is_cancelled() {
+    let lifecycle = lifecycle::DaemonLifecycle::new();
+    let (dispatcher, _) = build_dispatcher_with_lifecycle(None, lifecycle.clone()).await;
+
+    let response = dispatcher.dispatch(IpcCommand::Shutdown).await;
+    match response {
+        IpcResult::Ok(value) => assert_eq!(value["shutdown"], true),
+        other => panic!("expected successful shutdown response, got {other:?}"),
+    }
+    assert_eq!(
+        lifecycle.reason(),
+        None,
+        "dispatch must not preempt the IPC response"
+    );
+
+    dispatcher.after_response(&IpcCommand::Shutdown).await;
+    tokio::time::timeout(Duration::from_millis(50), lifecycle.cancelled())
+        .await
+        .expect("shutdown response must request the shared lifecycle");
+    assert_eq!(lifecycle.reason(), Some(lifecycle::ShutdownReason::Ipc));
 }
 
 #[tokio::test]

@@ -8,10 +8,28 @@ use flick_ipc::unix::UnixSocketClient;
 use serde_json::json;
 use std::path::{Path, PathBuf};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum SocketPathError {
+    #[error("XDG_RUNTIME_DIR is required; pass --socket for an explicit path")]
+    MissingRuntimeDir,
+}
+/// Resolve Flick's default socket from an injected environment lookup.
+///
+/// This intentionally matches the daemon's policy: without an explicit
+/// `--socket`, `XDG_RUNTIME_DIR` must be present and nonempty.
+pub fn resolve_default_socket_path<F>(get_env: F) -> Result<PathBuf, SocketPathError>
+where
+    F: FnOnce(&str) -> Option<String>,
+{
+    let runtime_dir = get_env("XDG_RUNTIME_DIR")
+        .filter(|value| !value.is_empty())
+        .ok_or(SocketPathError::MissingRuntimeDir)?;
+    Ok(PathBuf::from(runtime_dir).join("flick").join("flick.sock"))
+}
+
 /// Default socket path if none is specified.
-pub fn default_socket_path() -> PathBuf {
-    let runtime_dir = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "/tmp".to_string());
-    PathBuf::from(runtime_dir).join("flick").join("flick.sock")
+pub fn default_socket_path() -> Result<PathBuf, SocketPathError> {
+    resolve_default_socket_path(|key| std::env::var(key).ok())
 }
 
 /// Build an IPC request envelope for a given command.

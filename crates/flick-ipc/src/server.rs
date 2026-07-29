@@ -20,6 +20,12 @@ use tracing::{debug, warn};
 pub trait IpcDispatcher: Send + Sync + 'static {
     /// Dispatch a single IPC command and return the result.
     async fn dispatch(&self, command: IpcCommand) -> IpcResult;
+
+    /// Perform an effect only after the response for `command` was written.
+    ///
+    /// IPC shutdown uses this hook so its acknowledgement reaches the client
+    /// before it stops the accept loop. Other dispatchers need no follow-up.
+    async fn after_response(&self, _command: &IpcCommand) {}
 }
 
 /// The IPC server: owns a [`UnixSocketServer`] and a dispatcher, and runs
@@ -106,7 +112,9 @@ impl IpcServer {
             }
         };
 
-        let Some(response) = Self::process_request(request, dispatcher, &cancel).await? else {
+        let Some((response, command)) =
+            Self::process_request(request, Arc::clone(&dispatcher), &cancel).await?
+        else {
             return Ok(());
         };
 
@@ -119,7 +127,12 @@ impl IpcServer {
                     operation: "write response",
                 })?
             }
+        }?;
+
+        if let Some(command) = command {
+            dispatcher.after_response(&command).await;
         }
+        Ok(())
     }
 
     /// Validate and dispatch a single request.
@@ -129,7 +142,7 @@ impl IpcServer {
         request: IpcRequestEnvelope,
         dispatcher: Arc<dyn IpcDispatcher>,
         cancel: &CancellationToken,
-    ) -> Result<Option<IpcResponseEnvelope>, TransportError> {
+    ) -> Result<Option<(IpcResponseEnvelope, Option<IpcCommand>)>, TransportError> {
         let request_id = request.request_id.clone();
 
         // Protocol version check.
@@ -138,34 +151,41 @@ impl IpcServer {
                 "IPC: version mismatch: client={}, server={}",
                 request.protocol_version, IPC_PROTOCOL_VERSION,
             );
-            return Ok(Some(IpcResponseEnvelope {
-                protocol_version: IPC_PROTOCOL_VERSION,
-                request_id,
-                result: IpcResult::error(
-                    IpcErrorCode::ProtocolVersionMismatch,
-                    format!(
-                        "unsupported protocol version {} (server expects {})",
-                        request.protocol_version, IPC_PROTOCOL_VERSION,
+            return Ok(Some((
+                IpcResponseEnvelope {
+                    protocol_version: IPC_PROTOCOL_VERSION,
+                    request_id,
+                    result: IpcResult::error(
+                        IpcErrorCode::ProtocolVersionMismatch,
+                        format!(
+                            "unsupported protocol version {} (server expects {})",
+                            request.protocol_version, IPC_PROTOCOL_VERSION,
+                        ),
                     ),
-                ),
-            }));
+                },
+                None,
+            )));
         }
 
+        let command = request.command;
         let result = tokio::select! {
             biased;
 
             _ = cancel.cancelled() => return Ok(None),
-            result = timeout(IPC_REQUEST_TIMEOUT, dispatcher.dispatch(request.command)) => {
+            result = timeout(IPC_REQUEST_TIMEOUT, dispatcher.dispatch(command.clone())) => {
                 result.map_err(|_| TransportError::TimedOut {
                     operation: "dispatch request",
                 })?
             }
         };
 
-        Ok(Some(IpcResponseEnvelope {
-            protocol_version: IPC_PROTOCOL_VERSION,
-            request_id,
-            result,
-        }))
+        Ok(Some((
+            IpcResponseEnvelope {
+                protocol_version: IPC_PROTOCOL_VERSION,
+                request_id,
+                result,
+            },
+            Some(command),
+        )))
     }
 }

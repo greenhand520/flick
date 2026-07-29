@@ -69,6 +69,7 @@ pub fn update(state: &mut AppState, message: AppMessage) -> Task<AppMessage> {
             let actions = state.panel.update(PanelEvent::Show { activation_token });
             apply_actions(state, actions)
         }
+        AppMessage::HostEvent(HostToUi::Shutdown) => iced::exit(),
         AppMessage::HostEvent(HostToUi::HideSearchPanel) => {
             let actions = state.panel.update(PanelEvent::Hide);
             apply_actions(state, actions)

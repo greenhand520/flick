@@ -127,6 +127,7 @@ fn host_to_ui_round_trips() {
             activation_token: Some("token123".into()),
         },
         HostToUi::HideSearchPanel,
+        HostToUi::Shutdown,
         HostToUi::RuntimeStatus(RuntimeStatus::Running),
     ];
     for msg in messages {

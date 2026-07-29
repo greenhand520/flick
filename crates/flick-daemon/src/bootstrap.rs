@@ -2,6 +2,7 @@
 //!
 //! Shared types and functions used by main.rs for both graphical and headless modes.
 
+use crate::lifecycle::{DaemonLifecycle, ShutdownReason};
 use flick_adapters_linux::diagnostics::probe_session;
 use flick_adapters_linux::portal::{IntentSink, PortalShortcutAdapter};
 use flick_adapters_linux::session::ShortcutError;
@@ -65,6 +66,7 @@ pub struct DaemonIpcDispatcher {
     #[allow(dead_code)]
     pub intent_tx: mpsc::UnboundedSender<UiIntent>,
     pub portal: Option<Arc<PortalShortcutAdapter>>,
+    pub lifecycle: DaemonLifecycle,
 }
 
 #[async_trait::async_trait]
@@ -150,6 +152,12 @@ impl flick_ipc::server::IpcDispatcher for DaemonIpcDispatcher {
             }
         }
     }
+
+    async fn after_response(&self, command: &IpcCommand) {
+        if matches!(command, IpcCommand::Shutdown) {
+            self.lifecycle.request_shutdown(ShutdownReason::Ipc);
+        }
+    }
 }
 
 fn shortcut_configuration_error(error: ShortcutError) -> IpcResult {
@@ -192,6 +200,7 @@ pub fn create_ipc_dispatcher(
     _host_event_tx: mpsc::UnboundedSender<HostToUi>,
     intent_tx: mpsc::UnboundedSender<UiIntent>,
     portal: Option<Arc<PortalShortcutAdapter>>,
+    lifecycle: DaemonLifecycle,
 ) -> Arc<DaemonIpcDispatcher> {
     let runtime_port = Arc::new(RuntimeAdapter { runtime }) as Arc<dyn RuntimePort>;
     Arc::new(DaemonIpcDispatcher {
@@ -199,6 +208,7 @@ pub fn create_ipc_dispatcher(
         coordinator,
         intent_tx,
         portal,
+        lifecycle,
     })
 }
 
@@ -244,15 +254,17 @@ pub async fn shutdown(mut handle: DaemonHandle) {
 
 // ─── Headless mode ──────────────────────────────────────────────────────────
 
-pub async fn run_headless(socket_path: std::path::PathBuf) {
+pub async fn run_headless(socket_path: std::path::PathBuf) -> Result<(), String> {
     use crate::headless::HeadlessRuntime;
+    use tokio::signal::unix::{SignalKind, signal};
 
     info!("Starting in headless mode");
 
+    let lifecycle = DaemonLifecycle::new();
     let headless = HeadlessRuntime::new().await;
     let runtime = headless.runtime;
 
-    let (host_event_tx, host_event_rx) = mpsc::unbounded_channel::<HostToUi>();
+    let (host_event_tx, mut host_event_rx) = mpsc::unbounded_channel::<HostToUi>();
     let (intent_tx, _intent_rx) = mpsc::unbounded_channel::<UiIntent>();
 
     let event_sink = Arc::new(ChannelEventSink {
@@ -263,36 +275,79 @@ pub async fn run_headless(socket_path: std::path::PathBuf) {
     }) as Arc<dyn RuntimePort>;
     let coordinator = Arc::new(ApplicationCoordinator::new(runtime_port, event_sink));
 
-    // Log host events
-    tokio::spawn(async move {
-        let mut rx = host_event_rx;
-        while let Some(event) = rx.recv().await {
-            match &event {
-                HostToUi::ShowSearchPanel { .. } => info!("UI: Show search panel"),
-                HostToUi::HideSearchPanel => info!("UI: Hide search panel"),
-                HostToUi::Routes { generation, items } => {
-                    info!("UI: Routes for gen {generation}: {} items", items.len())
+    let event_lifecycle = lifecycle.clone();
+    let event_worker = tokio::spawn(async move {
+        loop {
+            tokio::select! {
+                _ = event_lifecycle.cancelled() => break,
+                event = host_event_rx.recv() => match event {
+                    Some(HostToUi::Shutdown) | None => break,
+                    Some(HostToUi::ShowSearchPanel { .. }) => info!("UI: Show search panel"),
+                    Some(HostToUi::HideSearchPanel) => info!("UI: Hide search panel"),
+                    Some(HostToUi::Routes { generation, items }) => {
+                        info!("UI: Routes for gen {generation}: {} items", items.len());
+                    }
+                    Some(HostToUi::InvocationCompleted { invocation_id, .. }) => {
+                        info!("UI: Invocation {invocation_id} completed");
+                    }
+                    Some(HostToUi::RuntimeStatus(status)) => info!("UI: Runtime status: {status:?}"),
                 }
-                HostToUi::InvocationCompleted { invocation_id, .. } => {
-                    info!("UI: Invocation {invocation_id} completed")
-                }
-                HostToUi::RuntimeStatus(status) => info!("UI: Runtime status: {status:?}"),
             }
         }
     });
 
-    let dispatcher = create_ipc_dispatcher(runtime, coordinator, host_event_tx, intent_tx, None);
-    let cancel = CancellationToken::new();
-    let handle = match bind_and_run_ipc(&socket_path, dispatcher, cancel.clone()).await {
-        Ok(h) => h,
+    let dispatcher = create_ipc_dispatcher(
+        runtime,
+        coordinator,
+        host_event_tx.clone(),
+        intent_tx,
+        None,
+        lifecycle.clone(),
+    );
+    let handle = match bind_and_run_ipc(&socket_path, dispatcher, lifecycle.token()).await {
+        Ok(handle) => handle,
         Err(e) => {
             error!("IPC bind failed: {e}");
-            return;
+            lifecycle.request_shutdown(ShutdownReason::StartupFailed);
+            let _ = event_worker.await;
+            return Err(format!("IPC: {e}"));
         }
     };
 
     info!("Headless daemon running");
-    tokio::signal::ctrl_c().await.ok();
-    cancel.cancel();
+    let mut sigterm = match signal(SignalKind::terminate()) {
+        Ok(signal) => Some(signal),
+        Err(error) => {
+            warn!(%error, "SIGTERM handling is unavailable");
+            None
+        }
+    };
+
+    if let Some(sigterm) = sigterm.as_mut() {
+        tokio::select! {
+            result = tokio::signal::ctrl_c() => {
+                if let Err(error) = result {
+                    warn!(%error, "Ctrl+C handling failed");
+                }
+                lifecycle.request_shutdown(ShutdownReason::Signal);
+            }
+            _ = sigterm.recv() => lifecycle.request_shutdown(ShutdownReason::Signal),
+            _ = lifecycle.cancelled() => {}
+        }
+    } else {
+        tokio::select! {
+            result = tokio::signal::ctrl_c() => {
+                if let Err(error) = result {
+                    warn!(%error, "Ctrl+C handling failed");
+                }
+                lifecycle.request_shutdown(ShutdownReason::Signal);
+            }
+            _ = lifecycle.cancelled() => {}
+        }
+    }
+
+    let _ = host_event_tx.send(HostToUi::Shutdown);
     shutdown(handle).await;
+    let _ = event_worker.await;
+    Ok(())
 }

@@ -63,6 +63,7 @@ impl IcedShell {
                     PanelEvent::Show { activation_token }
                 }
                 HostToUi::HideSearchPanel => PanelEvent::Hide,
+                HostToUi::Shutdown => return,
             },
             ShellMessage::DebounceFlush => PanelEvent::DebounceFlush,
         };
