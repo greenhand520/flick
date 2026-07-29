@@ -29,7 +29,8 @@ fn main() {
     assert!(state.panel.visible);
 
     let _ = app::update(&mut state, AppMessage::InputChanged("echo".into()));
-    let _ = app::update(&mut state, AppMessage::DebounceFlush);
+    let revision = state.panel.debounce_revision();
+    let _ = app::update(&mut state, AppMessage::DebounceFlush { revision });
     let command = ui_rx.try_recv().expect("query command");
     assert!(matches!(command, UiToHost::QueryChanged { .. }));
 

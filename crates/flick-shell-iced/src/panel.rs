@@ -1,74 +1,53 @@
 //! Search panel state machine.
 //!
-//! Manages the visual and logical state of the search panel:
-//! - Window visibility lifecycle: NotCreated → Visible → Hidden → Visible
-//! - Query input with generation tracking
-//! - Route item list with selection navigation
-//! - Invocation result display
-//! - Runtime status display
-//!
-//! This module has NO dependency on Iced, Runtime, or Portal.
-//! It is a pure state machine driven by `PanelEvent` and producing
-//! `PanelAction` (outbound commands).
+//! This module owns logical panel state, independent of the native Iced
+//! window. Closing the native window hides the panel while retaining its
+//! logical session for a short, bounded resume period.
 
 use flick_domain::*;
+use std::time::{Duration, Instant};
 
-// ─── Panel events (input to the state machine) ──────────────────────────────
+/// A hidden panel retains its logical session for this duration.
+pub const PANEL_RESUME_WINDOW: Duration = Duration::from_secs(10);
 
-/// Events that drive the panel state machine.
+/// Events accepted by [`PanelState`].
 #[derive(Debug, Clone)]
 pub enum PanelEvent {
-    /// Show the search panel (with optional activation token from Portal).
-    Show { activation_token: Option<String> },
-    /// Hide the search panel.
+    Show {
+        activation_token: Option<String>,
+    },
     Hide,
-    /// User changed the query text.
     InputChanged(String),
-    /// Debounce timer expired; flush the pending query.
-    DebounceFlush,
-    /// User pressed Enter to invoke.
+    /// The Iced-side debounce timer for a particular input revision expired.
+    DebounceFlush {
+        revision: u64,
+    },
     Submitted,
-    /// User pressed Escape.
     EscapePressed,
-    /// User pressed ArrowUp.
     SelectionUp,
-    /// User pressed ArrowDown.
     SelectionDown,
-    /// Window was closed by the WM.
     WindowClosed,
-    /// Host sent routes for a generation.
     Routes {
         generation: QueryGeneration,
         items: Vec<RouteItem>,
     },
-    /// Host completed an invocation.
     InvocationCompleted {
         invocation_id: InvocationId,
         outcome: ActionOutcome,
     },
-    /// Runtime status update.
     RuntimeStatus(RuntimeStatus),
 }
 
-/// Actions emitted by the panel state machine (outbound commands).
+/// Outbound commands emitted by [`PanelState`].
 #[derive(Debug, Clone, PartialEq)]
 pub enum PanelAction {
-    /// Send a message to the host.
     SendToHost(UiToHost),
-    /// Start or restart the debounce timer.
-    StartDebounce,
-    /// Cancel the debounce timer.
-    CancelDebounce,
+    StartDebounce { revision: u64 },
 }
 
-// ─── Selection state ────────────────────────────────────────────────────────
-
-/// Which item is currently selected in the route list.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SelectionState {
-    /// Index into the routes list. 0 when list is empty.
     pub index: usize,
-    /// Total number of routes. 0 when list is empty.
     pub total: usize,
 }
 
@@ -77,37 +56,29 @@ impl SelectionState {
         Self { index: 0, total: 0 }
     }
 
-    /// Update total count and clamp index.
     pub fn set_total(&mut self, total: usize) {
         self.total = total;
-        if self.index >= total && total > 0 {
-            self.index = total - 1;
-        } else if total == 0 {
+        if total == 0 {
             self.index = 0;
+        } else if self.index >= total {
+            self.index = total - 1;
         }
     }
 
-    /// Move selection up (towards index 0). No-op if empty or already at top.
     pub fn move_up(&mut self) {
         if self.total > 0 && self.index > 0 {
             self.index -= 1;
         }
     }
 
-    /// Move selection down (towards total-1). No-op if empty or already at bottom.
     pub fn move_down(&mut self) {
-        if self.total > 0 && self.index < self.total - 1 {
+        if self.total > 0 && self.index + 1 < self.total {
             self.index += 1;
         }
     }
 
-    /// Get the selected route, if any.
     pub fn selected<'a>(&self, routes: &'a [RouteItem]) -> Option<&'a RouteItem> {
-        if self.total > 0 && self.index < routes.len() {
-            routes.get(self.index)
-        } else {
-            None
-        }
+        (self.total > 0).then(|| routes.get(self.index)).flatten()
     }
 }
 
@@ -117,37 +88,26 @@ impl Default for SelectionState {
     }
 }
 
-// ─── Panel state ────────────────────────────────────────────────────────────
-
-/// The complete state of the search panel.
-///
-/// This is a pure data struct. Rendering is handled separately.
+/// Logical state for one search-panel session.
 #[derive(Debug)]
 pub struct PanelState {
-    /// Whether the window exists and is visible.
     pub visible: bool,
-    /// Whether the window has ever been created.
     pub created: bool,
-    /// Current query text.
+    /// The real-time, controlled text input value.
     pub query: String,
-    /// Pending query (not yet flushed by debounce).
+    /// Compatibility field retained during Phase 0; always mirrors [`Self::query`].
     pub pending_query: String,
-    /// Current generation counter.
     pub generation: QueryGeneration,
-    /// Current route items from the host.
     pub routes: Vec<RouteItem>,
-    /// Selection state.
     pub selection: SelectionState,
-    /// The most recent invocation ID (if any).
     pub active_invocation: Option<InvocationId>,
-    /// The most recent invocation result.
     pub last_outcome: Option<ActionOutcome>,
-    /// Current runtime status.
     pub runtime_status: RuntimeStatus,
-    /// Activation token from Portal (if any).
     pub activation_token: Option<String>,
-    /// Whether the activation token was applied (Phase 0: always false).
     pub activation_token_applied: bool,
+    debounce_revision: u64,
+    flushed_debounce_revision: Option<u64>,
+    hidden_at: Option<Instant>,
 }
 
 impl PanelState {
@@ -165,18 +125,35 @@ impl PanelState {
             runtime_status: RuntimeStatus::Running,
             activation_token: None,
             activation_token_applied: false,
+            debounce_revision: 0,
+            flushed_debounce_revision: None,
+            hidden_at: None,
         }
     }
 
-    /// Process an event and return any actions to execute.
+    /// Current input-debounce revision, exposed for Iced task wiring and tests.
+    pub fn debounce_revision(&self) -> u64 {
+        self.debounce_revision
+    }
+
+    /// Applies an event using the current monotonic time.
+    ///
+    /// Production callers generally use this method. [`Self::update_at`] keeps
+    /// the session-expiry boundary deterministic in tests and embedding code.
     pub fn update(&mut self, event: PanelEvent) -> Vec<PanelAction> {
+        self.update_at(event, Instant::now())
+    }
+
+    /// Applies an event at a caller-supplied monotonic timestamp.
+    pub fn update_at(&mut self, event: PanelEvent, now: Instant) -> Vec<PanelAction> {
         match event {
-            PanelEvent::Show { activation_token } => self.on_show(activation_token),
-            PanelEvent::Hide => self.on_hide(),
+            PanelEvent::Show { activation_token } => self.on_show(activation_token, now),
+            PanelEvent::Hide | PanelEvent::WindowClosed | PanelEvent::EscapePressed => {
+                self.on_hide(now)
+            }
             PanelEvent::InputChanged(text) => self.on_input_changed(text),
-            PanelEvent::DebounceFlush => self.on_debounce_flush(),
+            PanelEvent::DebounceFlush { revision } => self.on_debounce_flush(revision),
             PanelEvent::Submitted => self.on_submitted(),
-            PanelEvent::EscapePressed => self.on_escape(),
             PanelEvent::SelectionUp => {
                 self.selection.move_up();
                 vec![]
@@ -185,7 +162,6 @@ impl PanelState {
                 self.selection.move_down();
                 vec![]
             }
-            PanelEvent::WindowClosed => self.on_hide(),
             PanelEvent::Routes { generation, items } => self.on_routes(generation, items),
             PanelEvent::InvocationCompleted {
                 invocation_id,
@@ -198,31 +174,68 @@ impl PanelState {
         }
     }
 
-    fn on_show(&mut self, activation_token: Option<String>) -> Vec<PanelAction> {
+    fn on_show(&mut self, activation_token: Option<String>, now: Instant) -> Vec<PanelAction> {
+        if self
+            .hidden_at
+            .is_some_and(|hidden| now.saturating_duration_since(hidden) > PANEL_RESUME_WINDOW)
+        {
+            self.reset_expired_session();
+        }
+
         self.created = true;
         self.visible = true;
+        self.hidden_at = None;
         self.activation_token = activation_token;
-        // Phase 0: token is not applied to any Wayland API
         self.activation_token_applied = false;
         vec![]
     }
 
-    fn on_hide(&mut self) -> Vec<PanelAction> {
+    fn on_hide(&mut self, now: Instant) -> Vec<PanelAction> {
+        // A focus loss can be followed by the compositor's close request. The
+        // first event owns the transition and reports exactly one close to host.
+        if !self.visible {
+            return vec![];
+        }
+
         self.visible = false;
+        self.hidden_at = Some(now);
+        // Outstanding Iced debounce tasks are not cancellable. Invalidating
+        // their revision makes any late completion harmless.
+        self.debounce_revision = self.debounce_revision.wrapping_add(1);
+        self.flushed_debounce_revision = None;
         vec![PanelAction::SendToHost(UiToHost::SearchPanelClosed)]
     }
 
     fn on_input_changed(&mut self, text: String) -> Vec<PanelAction> {
-        self.pending_query = text;
-        vec![PanelAction::StartDebounce]
+        // `query` is the controlled Iced TextInput value. It must update in the
+        // same event turn as user input so cursor editing and long Backspace
+        // repeats never observe stale model text.
+        self.query = text;
+        self.pending_query.clone_from(&self.query);
+        // QueryGeneration protects against asynchronous runtime results; the
+        // local revision below independently protects Iced debounce tasks.
+        self.generation = self.generation.next();
+        self.debounce_revision = self.debounce_revision.wrapping_add(1);
+        self.flushed_debounce_revision = None;
+        self.routes.clear();
+        self.selection.set_total(0);
+        self.last_outcome = None;
+        self.active_invocation = None;
+
+        vec![PanelAction::StartDebounce {
+            revision: self.debounce_revision,
+        }]
     }
 
-    fn on_debounce_flush(&mut self) -> Vec<PanelAction> {
-        if self.pending_query == self.query {
+    fn on_debounce_flush(&mut self, revision: u64) -> Vec<PanelAction> {
+        if revision != self.debounce_revision
+            || self.flushed_debounce_revision == Some(revision)
+            || !self.visible
+        {
             return vec![];
         }
-        self.query = self.pending_query.clone();
-        self.generation = self.generation.next();
+
+        self.flushed_debounce_revision = Some(revision);
         vec![PanelAction::SendToHost(UiToHost::QueryChanged {
             generation: self.generation,
             text: self.query.clone(),
@@ -233,25 +246,17 @@ impl PanelState {
         if self.query.is_empty() || self.routes.is_empty() {
             return vec![];
         }
-        if let Some(route) = self.selection.selected(&self.routes) {
-            let invocation_id = InvocationId::new();
-            self.active_invocation = Some(invocation_id);
-            vec![PanelAction::SendToHost(UiToHost::Invoke {
-                invocation_id,
-                action_id: route.action_id.clone(),
-                input: ActionInput::plain_text(&self.query),
-            })]
-        } else {
-            vec![]
-        }
-    }
+        let Some(route) = self.selection.selected(&self.routes) else {
+            return vec![];
+        };
 
-    fn on_escape(&mut self) -> Vec<PanelAction> {
-        self.visible = false;
-        vec![
-            PanelAction::CancelDebounce,
-            PanelAction::SendToHost(UiToHost::SearchPanelClosed),
-        ]
+        let invocation_id = InvocationId::new();
+        self.active_invocation = Some(invocation_id);
+        vec![PanelAction::SendToHost(UiToHost::Invoke {
+            invocation_id,
+            action_id: route.action_id.clone(),
+            input: ActionInput::plain_text(&self.query),
+        })]
     }
 
     fn on_routes(
@@ -259,12 +264,10 @@ impl PanelState {
         generation: QueryGeneration,
         items: Vec<RouteItem>,
     ) -> Vec<PanelAction> {
-        // Only accept routes for the current generation.
         if generation == self.generation {
             self.routes = items;
             self.selection.set_total(self.routes.len());
         }
-        // else: stale generation — silently discard
         vec![]
     }
 
@@ -273,11 +276,27 @@ impl PanelState {
         invocation_id: InvocationId,
         outcome: ActionOutcome,
     ) -> Vec<PanelAction> {
-        if self.active_invocation == Some(invocation_id) {
-            self.active_invocation = None;
+        // An invocation may finish after a new query or an expired session. Do
+        // not let it resurrect stale result UI.
+        if self.active_invocation != Some(invocation_id) {
+            return vec![];
         }
+
+        self.active_invocation = None;
         self.last_outcome = Some(outcome);
         vec![]
+    }
+
+    fn reset_expired_session(&mut self) {
+        self.query.clear();
+        self.pending_query.clear();
+        self.generation = self.generation.next();
+        self.debounce_revision = self.debounce_revision.wrapping_add(1);
+        self.flushed_debounce_revision = None;
+        self.routes.clear();
+        self.selection.set_total(0);
+        self.active_invocation = None;
+        self.last_outcome = None;
     }
 }
 

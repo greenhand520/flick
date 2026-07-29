@@ -6,19 +6,26 @@
 use crate::panel::{PanelAction, PanelEvent, PanelState};
 use flick_domain::*;
 use iced::widget::{column, container, scrollable, text, text_input};
-use iced::{Element, Length, Subscription, Task, Theme};
+use iced::{Color, Element, Length, Subscription, Task, Theme};
 use std::hash::{Hash, Hasher};
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 use tokio::sync::mpsc;
 
-pub const PANEL_WIDTH: f32 = 480.0;
+pub const PANEL_WIDTH: f32 = 666.0;
 pub const INPUT_ONLY_HEIGHT: f32 = 72.0;
 pub const MAX_PANEL_HEIGHT: f32 = 360.0;
 const CONTENT_GAP: f32 = 8.0;
 const RESULT_ROW_HEIGHT: f32 = 32.0;
 const RESULT_VERTICAL_PADDING: f32 = 32.0;
 const MAX_RESULTS_HEIGHT: f32 = 200.0;
+const RESULT_TEXT_COLOR: Color = Color::from_rgb(0.92, 0.94, 0.98);
+const RESULT_MUTED_TEXT_COLOR: Color = Color::from_rgb(0.73, 0.77, 0.86);
+const RESULT_ROW_BACKGROUND: Color = Color::from_rgb(0.10, 0.12, 0.17);
+const SELECTED_RESULT_ROW_BACKGROUND: Color = Color::from_rgb(0.20, 0.31, 0.52);
+const OUTCOME_BACKGROUND: Color = Color::from_rgb(0.13, 0.16, 0.22);
+const SEARCH_INPUT_ID: &str = "flick.search-input";
 
 /// Whether the panel needs a results/outcome section below its text input.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -87,6 +94,8 @@ pub struct AppState {
     /// One Iced subscription takes this receiver and forwards its ordered events.
     host_rx: HostEventReceiver,
     window_id: Option<iced::window::Id>,
+    /// Increments for each deferred native-window layout request.
+    layout_revision: u64,
 }
 
 /// Messages accepted by the Iced update loop.
@@ -101,7 +110,14 @@ pub enum AppMessage {
     Shutdown,
     WindowOpened(iced::window::Id),
     CloseRequested(iced::window::Id),
-    DebounceFlush,
+    DebounceFlush {
+        revision: u64,
+    },
+    WindowUnfocused(iced::window::Id),
+    ApplyPanelLayout {
+        window_id: iced::window::Id,
+        revision: u64,
+    },
 }
 
 /// Converts a host event to the Iced bridge message that handles it.
@@ -128,6 +144,7 @@ pub fn boot(
                 receiver: Arc::new(Mutex::new(Some(host_rx))),
             },
             window_id: None,
+            layout_revision: 0,
         },
         Task::none(),
     )
@@ -175,27 +192,59 @@ pub fn update(state: &mut AppState, message: AppMessage) -> Task<AppMessage> {
             Task::none()
         }
         AppMessage::WindowOpened(id) => {
-            if state.panel.visible && state.window_id == Some(id) {
-                Task::none()
+            if is_current_panel_window(state, id) {
+                // The user explicitly invoked Flick through its shortcut. Once
+                // the native window exists, make the search field ready for
+                // immediate typing without refocusing it on later UI updates.
+                Task::batch([
+                    iced::window::gain_focus(id),
+                    iced::widget::operation::focus(SEARCH_INPUT_ID),
+                ])
             } else {
                 // A hide/shutdown can race the asynchronous open completion.
                 // Do not resurrect a stale window id in that case.
                 iced::window::close(id)
             }
         }
+        AppMessage::WindowUnfocused(id) => {
+            if !is_current_panel_window(state, id) {
+                return Task::none();
+            }
+            update_panel(state, PanelEvent::Hide)
+        }
         AppMessage::CloseRequested(id) => {
-            if state.window_id != Some(id) {
+            if !is_current_panel_window(state, id) {
                 return Task::none();
             }
             update_panel(state, PanelEvent::WindowClosed)
         }
-        AppMessage::DebounceFlush => update_panel(state, PanelEvent::DebounceFlush),
+        AppMessage::DebounceFlush { revision } => {
+            update_panel(state, PanelEvent::DebounceFlush { revision })
+        }
+        AppMessage::ApplyPanelLayout {
+            window_id,
+            revision,
+        } => {
+            if can_apply_panel_layout(state, window_id, revision) {
+                iced::window::resize(window_id, panel_window_size(&state.panel))
+            } else {
+                Task::none()
+            }
+        }
     }
+}
+
+fn is_current_panel_window(state: &AppState, window_id: iced::window::Id) -> bool {
+    state.panel.visible && state.window_id == Some(window_id)
+}
+
+fn can_apply_panel_layout(state: &AppState, window_id: iced::window::Id, revision: u64) -> bool {
+    is_current_panel_window(state, window_id) && state.layout_revision == revision
 }
 
 fn update_panel(state: &mut AppState, event: PanelEvent) -> Task<AppMessage> {
     let size_before = panel_window_size(&state.panel);
-    let actions = state.panel.update(event);
+    let actions = state.panel.update_at(event, Instant::now());
     apply_actions(state, actions, size_before)
 }
 
@@ -211,15 +260,15 @@ fn apply_actions(
             PanelAction::SendToHost(message) => {
                 let _ = state.host_tx.send(message);
             }
-            PanelAction::StartDebounce => {
+            PanelAction::StartDebounce { revision } => {
                 tasks.push(Task::perform(
-                    async {
+                    async move {
                         tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+                        revision
                     },
-                    |_| AppMessage::DebounceFlush,
+                    |revision| AppMessage::DebounceFlush { revision },
                 ));
             }
-            PanelAction::CancelDebounce => {}
         }
     }
 
@@ -230,10 +279,17 @@ fn apply_actions(
     }
 
     if state.panel.visible
-        && let Some(id) = state.window_id
+        && let Some(window_id) = state.window_id
         && panel_window_size(&state.panel) != size_before
     {
-        tasks.push(iced::window::resize(id, panel_window_size(&state.panel)));
+        // Let Iced apply the new widget tree before asking Wayland to resize the
+        // existing native window. The revision prevents a delayed older layout
+        // request from overwriting a newer query/result state.
+        state.layout_revision = state.layout_revision.wrapping_add(1);
+        tasks.push(Task::done(AppMessage::ApplyPanelLayout {
+            window_id,
+            revision: state.layout_revision,
+        }));
     }
 
     if !state.panel.visible
@@ -259,6 +315,7 @@ fn panel_window_settings(panel: &PanelState) -> iced::window::Settings {
         max_size: Some(iced::Size::new(PANEL_WIDTH, MAX_PANEL_HEIGHT)),
         resizable: false,
         decorations: false,
+        transparent: true,
         // The close request is mapped to SearchPanelClosed; the daemon itself
         // remains alive and opens a new panel window on the next activation.
         exit_on_close_request: false,
@@ -269,6 +326,7 @@ fn panel_window_settings(panel: &PanelState) -> iced::window::Settings {
 /// Renders one visible panel window.
 pub fn view(state: &AppState, _window: iced::window::Id) -> Element<'_, AppMessage> {
     let search_input = text_input("Search actions...", &state.panel.query)
+        .id(SEARCH_INPUT_ID)
         .on_input(AppMessage::InputChanged)
         .on_submit(AppMessage::Submitted)
         .padding(12)
@@ -289,15 +347,17 @@ fn results_view(panel: &PanelState) -> Element<'_, AppMessage> {
     let mut content = column![].spacing(4);
 
     for (index, route) in panel.routes.iter().enumerate() {
-        let prefix = if index == panel.selection.index {
-            "▶ "
-        } else {
-            "  "
-        };
+        let selected = index == panel.selection.index;
+        let prefix = if selected { "▶ " } else { "  " };
         content = content.push(
-            container(text(format!("{prefix}{}", route.title)).size(14))
-                .padding(4)
-                .width(Length::Fill),
+            container(
+                text(format!("{prefix}{}", route.title))
+                    .size(14)
+                    .color(RESULT_TEXT_COLOR),
+            )
+            .padding(4)
+            .width(Length::Fill)
+            .style(move |_| result_row_style(selected)),
         );
     }
 
@@ -308,15 +368,33 @@ fn results_view(panel: &PanelState) -> Element<'_, AppMessage> {
             ActionOutcome::Error(error) => format!("Error: {error}"),
         };
         content = content.push(
-            container(text(outcome_text).size(14))
+            container(text(outcome_text).size(14).color(RESULT_MUTED_TEXT_COLOR))
                 .padding(8)
-                .width(Length::Fill),
+                .width(Length::Fill)
+                .style(|_| {
+                    container::Style::default()
+                        .color(RESULT_MUTED_TEXT_COLOR)
+                        .background(OUTCOME_BACKGROUND)
+                }),
         );
     }
 
     scrollable(content)
+        .width(Length::Fill)
         .height(Length::Fixed(results_area_height(panel)))
         .into()
+}
+
+fn result_row_style(selected: bool) -> container::Style {
+    let background = if selected {
+        SELECTED_RESULT_ROW_BACKGROUND
+    } else {
+        RESULT_ROW_BACKGROUND
+    };
+
+    container::Style::default()
+        .color(RESULT_TEXT_COLOR)
+        .background(background)
 }
 
 fn keyboard_message(event: iced::keyboard::Event) -> Option<AppMessage> {
@@ -346,6 +424,9 @@ fn runtime_event_message(
 ) -> Option<AppMessage> {
     match event {
         iced::Event::Keyboard(event) => keyboard_message(event),
+        iced::Event::Window(iced::window::Event::Unfocused) => {
+            Some(AppMessage::WindowUnfocused(window_id))
+        }
         iced::Event::Window(iced::window::Event::CloseRequested) => {
             Some(AppMessage::CloseRequested(window_id))
         }
@@ -392,7 +473,7 @@ pub fn subscription(state: &AppState) -> Subscription<AppMessage> {
 
 /// Uses Flick's dark shell theme.
 pub fn theme(_state: &AppState, _window: iced::window::Id) -> Theme {
-    Theme::Dark
+    Theme::TokyoNight
 }
 
 /// Runs the Iced daemon application on the calling thread.
@@ -539,6 +620,119 @@ mod tests {
         assert!(matches!(
             host_rx.try_recv(),
             Ok(UiToHost::SearchPanelClosed)
+        ));
+    }
+
+    #[test]
+    fn focus_loss_hides_only_the_current_panel_window() {
+        let (mut state, mut host_rx) = app_state();
+        let current_id = iced::window::Id::unique();
+        state.panel.visible = true;
+        state.window_id = Some(current_id);
+
+        let _ = update(
+            &mut state,
+            AppMessage::WindowUnfocused(iced::window::Id::unique()),
+        );
+        assert!(state.panel.visible);
+        assert_eq!(state.window_id, Some(current_id));
+        assert!(host_rx.try_recv().is_err());
+
+        let _ = update(&mut state, AppMessage::WindowUnfocused(current_id));
+        assert!(!state.panel.visible);
+        assert_eq!(state.window_id, None);
+        assert!(matches!(
+            host_rx.try_recv(),
+            Ok(UiToHost::SearchPanelClosed)
+        ));
+
+        // Compositors may deliver CloseRequested after Unfocused. It must not
+        // emit a duplicate SearchPanelClosed notification.
+        let _ = update(&mut state, AppMessage::CloseRequested(current_id));
+        assert!(host_rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn stale_window_opened_after_hide_cannot_resurrect_the_panel() {
+        let (mut state, _host_rx) = app_state();
+        let id = iced::window::Id::unique();
+        state.panel.visible = true;
+        state.window_id = Some(id);
+
+        let _ = update(&mut state, AppMessage::HostEvent(HostToUi::HideSearchPanel));
+        assert!(!state.panel.visible);
+        assert_eq!(state.window_id, None);
+
+        let _ = update(&mut state, AppMessage::WindowOpened(id));
+        assert!(!state.panel.visible);
+        assert_eq!(state.window_id, None);
+    }
+
+    #[test]
+    fn only_the_current_visible_window_accepts_window_lifecycle_events() {
+        let (mut state, _host_rx) = app_state();
+        let current = iced::window::Id::unique();
+        state.panel.visible = true;
+        state.window_id = Some(current);
+
+        assert!(is_current_panel_window(&state, current));
+        assert!(!is_current_panel_window(&state, iced::window::Id::unique()));
+
+        state.panel.visible = false;
+        assert!(!is_current_panel_window(&state, current));
+    }
+
+    #[test]
+    fn only_the_latest_current_layout_request_is_applied() {
+        let (mut state, _host_rx) = app_state();
+        let current = iced::window::Id::unique();
+        state.panel.visible = true;
+        state.window_id = Some(current);
+        state.layout_revision = 4;
+
+        assert!(can_apply_panel_layout(&state, current, 4));
+        assert!(!can_apply_panel_layout(&state, current, 3));
+        assert!(!can_apply_panel_layout(
+            &state,
+            iced::window::Id::unique(),
+            4
+        ));
+
+        state.panel.visible = false;
+        assert!(!can_apply_panel_layout(&state, current, 4));
+    }
+
+    #[test]
+    fn obsolete_app_debounce_flush_does_not_query_host() {
+        let (mut state, mut host_rx) = app_state();
+        let _ = update(
+            &mut state,
+            AppMessage::HostEvent(HostToUi::ShowSearchPanel {
+                activation_token: None,
+            }),
+        );
+        let _ = update(&mut state, AppMessage::InputChanged("ec".into()));
+        let obsolete_revision = state.panel.debounce_revision();
+        let _ = update(&mut state, AppMessage::InputChanged("echo".into()));
+        let current_revision = state.panel.debounce_revision();
+
+        let _ = update(
+            &mut state,
+            AppMessage::DebounceFlush {
+                revision: obsolete_revision,
+            },
+        );
+        assert!(host_rx.try_recv().is_err());
+
+        let _ = update(
+            &mut state,
+            AppMessage::DebounceFlush {
+                revision: current_revision,
+            },
+        );
+        assert!(matches!(
+            host_rx.try_recv(),
+            Ok(UiToHost::QueryChanged { text, .. }) if text == "echo"
         ));
     }
 }

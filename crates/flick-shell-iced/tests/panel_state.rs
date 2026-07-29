@@ -90,17 +90,16 @@ fn window_closed_hides_panel() {
 }
 
 #[test]
-fn escape_hides_and_cancels_debounce() {
+fn escape_hides_and_invalidates_debounce() {
     let mut panel = PanelState::new();
     panel.update(PanelEvent::Show {
         activation_token: None,
     });
     let actions = panel.update(PanelEvent::EscapePressed);
     assert!(!panel.visible);
-    assert_eq!(actions.len(), 2);
-    assert!(matches!(&actions[0], PanelAction::CancelDebounce));
+    assert_eq!(actions.len(), 1);
     assert!(matches!(
-        &actions[1],
+        &actions[0],
         PanelAction::SendToHost(UiToHost::SearchPanelClosed)
     ));
 }
@@ -111,18 +110,27 @@ fn escape_hides_and_cancels_debounce() {
 fn input_changed_starts_debounce() {
     let mut panel = PanelState::new();
     let actions = panel.update(PanelEvent::InputChanged("hello".into()));
+    assert_eq!(panel.query, "hello");
     assert_eq!(panel.pending_query, "hello");
     assert_eq!(actions.len(), 1);
-    assert!(matches!(&actions[0], PanelAction::StartDebounce));
+    assert!(matches!(
+        &actions[0],
+        PanelAction::StartDebounce { revision } if *revision == panel.debounce_revision()
+    ));
 }
 
 #[test]
-fn debounce_flush_increments_generation() {
+fn debounce_flush_sends_current_generation_and_query() {
     let mut panel = PanelState::new();
     let gen_before = panel.generation;
+    panel.update(PanelEvent::Show {
+        activation_token: None,
+    });
 
     panel.update(PanelEvent::InputChanged("hello".into()));
-    let actions = panel.update(PanelEvent::DebounceFlush);
+    let actions = panel.update(PanelEvent::DebounceFlush {
+        revision: panel.debounce_revision(),
+    });
 
     assert_eq!(panel.generation, gen_before.next());
     assert_eq!(panel.query, "hello");
@@ -137,16 +145,20 @@ fn debounce_flush_increments_generation() {
 }
 
 #[test]
-fn each_input_and_flush_increments_generation() {
+fn each_input_increments_generation() {
     let mut panel = PanelState::new();
     let g0 = panel.generation;
 
     panel.update(PanelEvent::InputChanged("a".into()));
-    panel.update(PanelEvent::DebounceFlush);
+    panel.update(PanelEvent::DebounceFlush {
+        revision: panel.debounce_revision(),
+    });
     let g1 = panel.generation;
 
     panel.update(PanelEvent::InputChanged("ab".into()));
-    panel.update(PanelEvent::DebounceFlush);
+    panel.update(PanelEvent::DebounceFlush {
+        revision: panel.debounce_revision(),
+    });
     let g2 = panel.generation;
 
     assert!(g0 < g1);
@@ -157,10 +169,14 @@ fn each_input_and_flush_increments_generation() {
 fn debounce_flush_with_same_query_is_noop() {
     let mut panel = PanelState::new();
     panel.update(PanelEvent::InputChanged("hello".into()));
-    panel.update(PanelEvent::DebounceFlush);
+    panel.update(PanelEvent::DebounceFlush {
+        revision: panel.debounce_revision(),
+    });
 
     // Flush again with same pending query (unchanged)
-    let actions = panel.update(PanelEvent::DebounceFlush);
+    let actions = panel.update(PanelEvent::DebounceFlush {
+        revision: panel.debounce_revision(),
+    });
     assert!(actions.is_empty(), "same query should not re-flush");
 }
 
@@ -170,7 +186,9 @@ fn debounce_flush_with_same_query_is_noop() {
 fn routes_for_current_generation_are_accepted() {
     let mut panel = PanelState::new();
     panel.update(PanelEvent::InputChanged("echo hello".into()));
-    panel.update(PanelEvent::DebounceFlush);
+    panel.update(PanelEvent::DebounceFlush {
+        revision: panel.debounce_revision(),
+    });
 
     let gn = panel.generation;
     let routes = vec![make_route("flick.builtin.echo.v1.echo", "Echo", 1.0)];
@@ -189,12 +207,16 @@ fn old_generation_routes_are_discarded() {
 
     // First query
     panel.update(PanelEvent::InputChanged("first".into()));
-    panel.update(PanelEvent::DebounceFlush);
+    panel.update(PanelEvent::DebounceFlush {
+        revision: panel.debounce_revision(),
+    });
     let gn1 = panel.generation;
 
     // Second query (newer generation)
     panel.update(PanelEvent::InputChanged("second".into()));
-    panel.update(PanelEvent::DebounceFlush);
+    panel.update(PanelEvent::DebounceFlush {
+        revision: panel.debounce_revision(),
+    });
     let gn2 = panel.generation;
 
     // Routes for older generation arrive
@@ -224,7 +246,9 @@ fn old_generation_routes_are_discarded() {
 fn selection_starts_at_zero() {
     let mut panel = PanelState::new();
     panel.update(PanelEvent::InputChanged("echo".into()));
-    panel.update(PanelEvent::DebounceFlush);
+    panel.update(PanelEvent::DebounceFlush {
+        revision: panel.debounce_revision(),
+    });
     let gn = panel.generation;
     let routes = vec![
         make_route("a", "Alpha", 1.0),
@@ -244,7 +268,9 @@ fn selection_starts_at_zero() {
 fn arrow_down_moves_selection() {
     let mut panel = PanelState::new();
     panel.update(PanelEvent::InputChanged("test".into()));
-    panel.update(PanelEvent::DebounceFlush);
+    panel.update(PanelEvent::DebounceFlush {
+        revision: panel.debounce_revision(),
+    });
     let gn = panel.generation;
     let routes = vec![make_route("a", "Alpha", 1.0), make_route("b", "Beta", 0.8)];
     panel.update(PanelEvent::Routes {
@@ -264,7 +290,9 @@ fn arrow_down_moves_selection() {
 fn arrow_up_moves_selection() {
     let mut panel = PanelState::new();
     panel.update(PanelEvent::InputChanged("test".into()));
-    panel.update(PanelEvent::DebounceFlush);
+    panel.update(PanelEvent::DebounceFlush {
+        revision: panel.debounce_revision(),
+    });
     let gn = panel.generation;
     let routes = vec![make_route("a", "Alpha", 1.0), make_route("b", "Beta", 0.8)];
     panel.update(PanelEvent::Routes {
@@ -304,7 +332,9 @@ fn submit_sends_invoke_for_selected_route() {
         activation_token: None,
     });
     panel.update(PanelEvent::InputChanged("echo hello".into()));
-    panel.update(PanelEvent::DebounceFlush);
+    panel.update(PanelEvent::DebounceFlush {
+        revision: panel.debounce_revision(),
+    });
     let gn = panel.generation;
     let routes = vec![make_route("flick.builtin.echo.v1.echo", "Echo", 1.0)];
     panel.update(PanelEvent::Routes {
@@ -346,7 +376,9 @@ fn submit_on_empty_routes_is_noop() {
         activation_token: None,
     });
     panel.update(PanelEvent::InputChanged("echo hello".into()));
-    panel.update(PanelEvent::DebounceFlush);
+    panel.update(PanelEvent::DebounceFlush {
+        revision: panel.debounce_revision(),
+    });
     // No routes loaded
     let actions = panel.update(PanelEvent::Submitted);
     assert!(actions.is_empty());
@@ -356,7 +388,9 @@ fn submit_on_empty_routes_is_noop() {
 fn submit_after_selection_navigates_invokes_correct_item() {
     let mut panel = PanelState::new();
     panel.update(PanelEvent::InputChanged("test".into()));
-    panel.update(PanelEvent::DebounceFlush);
+    panel.update(PanelEvent::DebounceFlush {
+        revision: panel.debounce_revision(),
+    });
     let gn = panel.generation;
     let routes = vec![
         make_route("first", "First", 1.0),
@@ -386,7 +420,9 @@ fn submit_after_selection_navigates_invokes_correct_item() {
 fn invocation_completed_clears_active_and_stores_outcome() {
     let mut panel = PanelState::new();
     panel.update(PanelEvent::InputChanged("echo hi".into()));
-    panel.update(PanelEvent::DebounceFlush);
+    panel.update(PanelEvent::DebounceFlush {
+        revision: panel.debounce_revision(),
+    });
     let gn = panel.generation;
     panel.update(PanelEvent::Routes {
         generation: gn,
@@ -486,5 +522,162 @@ fn result_area_becomes_visible_for_an_invocation_outcome_without_routes() {
     assert!(
         flick_shell_iced::app::panel_window_size(&panel).height
             > flick_shell_iced::app::INPUT_ONLY_HEIGHT
+    );
+}
+
+// ─── Phase 0 session retention and debounce correctness ────────────────────
+
+#[test]
+fn newer_input_immediately_clears_stale_results_and_outcome() {
+    let mut panel = PanelState::new();
+    panel.update(PanelEvent::Show {
+        activation_token: None,
+    });
+    panel.update(PanelEvent::InputChanged("echo first".into()));
+    let generation = panel.generation;
+    panel.update(PanelEvent::Routes {
+        generation,
+        items: vec![make_route("echo", "Echo", 1.0)],
+    });
+    panel.last_outcome = Some(ActionOutcome::Notice {
+        message: "old result".into(),
+    });
+
+    panel.update(PanelEvent::InputChanged("echo second".into()));
+
+    assert_eq!(panel.query, "echo second");
+    assert_eq!(panel.pending_query, "echo second");
+    assert!(panel.routes.is_empty());
+    assert_eq!(panel.selection.total, 0);
+    assert!(panel.last_outcome.is_none());
+}
+
+#[test]
+fn obsolete_debounce_revision_never_queries_host() {
+    let mut panel = PanelState::new();
+    panel.update(PanelEvent::Show {
+        activation_token: None,
+    });
+    panel.update(PanelEvent::InputChanged("ec".into()));
+    let obsolete_revision = panel.debounce_revision();
+    panel.update(PanelEvent::InputChanged("echo".into()));
+    let current_revision = panel.debounce_revision();
+
+    assert!(
+        panel
+            .update(PanelEvent::DebounceFlush {
+                revision: obsolete_revision,
+            })
+            .is_empty()
+    );
+
+    let actions = panel.update(PanelEvent::DebounceFlush {
+        revision: current_revision,
+    });
+    assert!(matches!(
+        &actions[..],
+        [PanelAction::SendToHost(UiToHost::QueryChanged { text, .. })] if text == "echo"
+    ));
+}
+
+#[test]
+fn hide_invalidates_pending_debounce_and_reports_close_once() {
+    let mut panel = PanelState::new();
+    panel.update(PanelEvent::Show {
+        activation_token: None,
+    });
+    panel.update(PanelEvent::InputChanged("echo".into()));
+    let pending_revision = panel.debounce_revision();
+
+    let first_hide = panel.update(PanelEvent::Hide);
+    assert!(matches!(
+        &first_hide[..],
+        [PanelAction::SendToHost(UiToHost::SearchPanelClosed)]
+    ));
+    assert!(
+        panel
+            .update(PanelEvent::DebounceFlush {
+                revision: pending_revision,
+            })
+            .is_empty()
+    );
+    assert!(panel.update(PanelEvent::WindowClosed).is_empty());
+}
+
+#[test]
+fn hidden_panel_resumes_before_expiry_and_resets_after_expiry() {
+    use std::time::{Duration, Instant};
+
+    let start = Instant::now();
+    let mut panel = PanelState::new();
+    panel.update_at(
+        PanelEvent::Show {
+            activation_token: None,
+        },
+        start,
+    );
+    panel.update(PanelEvent::InputChanged("echo hello".into()));
+    let generation_before_hide = panel.generation;
+    panel.update(PanelEvent::Routes {
+        generation: generation_before_hide,
+        items: vec![make_route("echo", "Echo", 1.0)],
+    });
+    panel.last_outcome = Some(ActionOutcome::Notice {
+        message: "retained".into(),
+    });
+    panel.update_at(PanelEvent::Hide, start + Duration::from_secs(1));
+
+    panel.update_at(
+        PanelEvent::Show {
+            activation_token: None,
+        },
+        start + Duration::from_secs(10),
+    );
+    assert_eq!(panel.query, "echo hello");
+    assert_eq!(panel.routes.len(), 1);
+    assert!(panel.last_outcome.is_some());
+
+    panel.update_at(PanelEvent::Hide, start + Duration::from_secs(11));
+    panel.update_at(
+        PanelEvent::Show {
+            activation_token: None,
+        },
+        start + Duration::from_secs(21) + Duration::from_nanos(1),
+    );
+
+    assert!(panel.query.is_empty());
+    assert!(panel.pending_query.is_empty());
+    assert!(panel.routes.is_empty());
+    assert_eq!(panel.selection.total, 0);
+    assert!(panel.last_outcome.is_none());
+    assert!(panel.generation > generation_before_hide);
+}
+
+#[test]
+fn new_input_collapses_the_results_area_to_input_only_height() {
+    let mut panel = PanelState::new();
+    panel.update(PanelEvent::Show {
+        activation_token: None,
+    });
+    panel.update(PanelEvent::InputChanged("echo".into()));
+    let generation = panel.generation;
+    panel.update(PanelEvent::Routes {
+        generation,
+        items: vec![make_route("echo", "Echo", 1.0)],
+    });
+    assert_eq!(
+        flick_shell_iced::app::results_area(&panel),
+        flick_shell_iced::app::ResultsArea::Visible
+    );
+
+    panel.update(PanelEvent::InputChanged("ec".into()));
+
+    assert_eq!(
+        flick_shell_iced::app::results_area(&panel),
+        flick_shell_iced::app::ResultsArea::Hidden
+    );
+    assert_eq!(
+        flick_shell_iced::app::panel_window_size(&panel).height,
+        flick_shell_iced::app::INPUT_ONLY_HEIGHT
     );
 }
