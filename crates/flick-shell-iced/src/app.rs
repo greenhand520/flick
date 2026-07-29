@@ -1,36 +1,95 @@
 //! Iced daemon application for the Flick search panel.
 //!
-//! Uses `iced::daemon::daemon()` — no window on startup.
-//! Opens window on ShowSearchPanel, closes on Escape/WindowClosed.
+//! The daemon starts without a window. Host events open and close the panel;
+//! Iced keyboard/window events are translated into the same [`AppMessage`] path.
 
 use crate::panel::{PanelAction, PanelEvent, PanelState};
 use flick_domain::*;
 use iced::widget::{column, container, scrollable, text, text_input};
 use iced::{Element, Length, Subscription, Task, Theme};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::hash::{Hash, Hasher};
+use std::pin::Pin;
+use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
 
-// ─── Global host event channel (one-time setup) ─────────────────────────────
+pub const PANEL_WIDTH: f32 = 480.0;
+pub const INPUT_ONLY_HEIGHT: f32 = 72.0;
+pub const MAX_PANEL_HEIGHT: f32 = 360.0;
+const CONTENT_GAP: f32 = 8.0;
+const RESULT_ROW_HEIGHT: f32 = 32.0;
+const RESULT_VERTICAL_PADDING: f32 = 32.0;
+const MAX_RESULTS_HEIGHT: f32 = 200.0;
 
-static HOST_RX: OnceLock<Arc<Mutex<Option<mpsc::UnboundedReceiver<HostToUi>>>>> = OnceLock::new();
-
-fn take_host_rx() -> Option<mpsc::UnboundedReceiver<HostToUi>> {
-    HOST_RX
-        .get()
-        .and_then(|arc| arc.lock().ok())
-        .and_then(|mut guard| guard.take())
+/// Whether the panel needs a results/outcome section below its text input.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResultsArea {
+    Hidden,
+    Visible,
 }
 
-// ─── Application state ──────────────────────────────────────────────────────
+/// Returns whether routes or an invocation outcome require result UI.
+pub fn results_area(panel: &PanelState) -> ResultsArea {
+    if panel.routes.is_empty() && panel.last_outcome.is_none() {
+        ResultsArea::Hidden
+    } else {
+        ResultsArea::Visible
+    }
+}
 
+/// Height reserved for results/outcome content when it is visible.
+///
+/// This is intentionally shared by [`panel_window_size`] and [`results_view`]:
+/// a small result set must not open a short window containing a fixed 200 px
+/// scrollable, while a larger set remains bounded and scrollable.
+fn results_area_height(panel: &PanelState) -> f32 {
+    match results_area(panel) {
+        ResultsArea::Hidden => 0.0,
+        ResultsArea::Visible => {
+            let rows = panel.routes.len().clamp(1, 6) as f32;
+            (RESULT_VERTICAL_PADDING + (rows * RESULT_ROW_HEIGHT)).min(MAX_RESULTS_HEIGHT)
+        }
+    }
+}
+
+/// Calculates the search panel's content-driven logical window size.
+pub fn panel_window_size(panel: &PanelState) -> iced::Size {
+    let results_height = results_area_height(panel);
+    let content_gap = if results_height > 0.0 {
+        CONTENT_GAP
+    } else {
+        0.0
+    };
+
+    iced::Size::new(
+        PANEL_WIDTH,
+        (INPUT_ONLY_HEIGHT + content_gap + results_height).min(MAX_PANEL_HEIGHT),
+    )
+}
+
+/// App-owned, one-shot receiver source for the host-event subscription.
+#[derive(Clone)]
+struct HostEventReceiver {
+    receiver: Arc<Mutex<Option<mpsc::UnboundedReceiver<HostToUi>>>>,
+}
+
+// Iced uses subscription data only as an identity key. Each AppState owns one
+// receiver, so a stable key deliberately avoids making Tokio's receiver Hash.
+impl Hash for HostEventReceiver {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        "flick-host-event-receiver".hash(state);
+    }
+}
+
+/// Application state owned by the single Iced bridge.
 pub struct AppState {
     pub panel: PanelState,
     host_tx: mpsc::UnboundedSender<UiToHost>,
+    /// One Iced subscription takes this receiver and forwards its ordered events.
+    host_rx: HostEventReceiver,
     window_id: Option<iced::window::Id>,
 }
 
-// ─── Messages ───────────────────────────────────────────────────────────────
-
+/// Messages accepted by the Iced update loop.
 #[derive(Debug, Clone)]
 pub enum AppMessage {
     InputChanged(String),
@@ -39,43 +98,50 @@ pub enum AppMessage {
     SelectionUp,
     SelectionDown,
     HostEvent(HostToUi),
+    Shutdown,
     WindowOpened(iced::window::Id),
     CloseRequested(iced::window::Id),
     DebounceFlush,
 }
 
-// ─── Boot ───────────────────────────────────────────────────────────────────
+/// Converts a host event to the Iced bridge message that handles it.
+///
+/// Shutdown is a lifecycle control message, not panel data: mapping it here
+/// ensures a hidden daemon also exits its Iced event loop.
+pub fn map_host_event(host_event: HostToUi) -> AppMessage {
+    match host_event {
+        HostToUi::Shutdown => AppMessage::Shutdown,
+        other => AppMessage::HostEvent(other),
+    }
+}
 
+/// Starts the daemon Iced program without opening a window.
 pub fn boot(
     host_tx: mpsc::UnboundedSender<UiToHost>,
     host_rx: mpsc::UnboundedReceiver<HostToUi>,
 ) -> (AppState, Task<AppMessage>) {
-    // Store receiver globally for the subscription to consume
-    let _ = HOST_RX.set(Arc::new(Mutex::new(Some(host_rx))));
-
-    let state = AppState {
-        panel: PanelState::new(),
-        host_tx,
-        window_id: None,
-    };
-    (state, Task::none())
+    (
+        AppState {
+            panel: PanelState::new(),
+            host_tx,
+            host_rx: HostEventReceiver {
+                receiver: Arc::new(Mutex::new(Some(host_rx))),
+            },
+            window_id: None,
+        },
+        Task::none(),
+    )
 }
 
-// ─── Update ─────────────────────────────────────────────────────────────────
-
+/// Applies one Iced message to the panel and produces any required tasks.
 pub fn update(state: &mut AppState, message: AppMessage) -> Task<AppMessage> {
     match message {
-        AppMessage::HostEvent(HostToUi::ShowSearchPanel { activation_token }) => {
-            let actions = state.panel.update(PanelEvent::Show { activation_token });
-            apply_actions(state, actions)
-        }
-        AppMessage::HostEvent(HostToUi::Shutdown) => iced::exit(),
-        AppMessage::HostEvent(HostToUi::HideSearchPanel) => {
-            let actions = state.panel.update(PanelEvent::Hide);
-            apply_actions(state, actions)
-        }
         AppMessage::HostEvent(host_event) => {
             let event = match host_event {
+                HostToUi::ShowSearchPanel { activation_token } => {
+                    PanelEvent::Show { activation_token }
+                }
+                HostToUi::HideSearchPanel => PanelEvent::Hide,
                 HostToUi::Routes { generation, items } => PanelEvent::Routes { generation, items },
                 HostToUi::InvocationCompleted {
                     invocation_id,
@@ -85,23 +151,21 @@ pub fn update(state: &mut AppState, message: AppMessage) -> Task<AppMessage> {
                     outcome,
                 },
                 HostToUi::RuntimeStatus(status) => PanelEvent::RuntimeStatus(status),
-                _ => return Task::none(),
+                HostToUi::Shutdown => return update(state, AppMessage::Shutdown),
             };
-            let actions = state.panel.update(event);
-            apply_actions(state, actions)
+            update_panel(state, event)
         }
-        AppMessage::InputChanged(t) => {
-            let actions = state.panel.update(PanelEvent::InputChanged(t));
-            apply_actions(state, actions)
+        AppMessage::Shutdown => {
+            let close_panel = if state.panel.visible {
+                update_panel(state, PanelEvent::Hide)
+            } else {
+                close_hidden_window(state)
+            };
+            Task::batch([close_panel, iced::exit()])
         }
-        AppMessage::Submitted => {
-            let actions = state.panel.update(PanelEvent::Submitted);
-            apply_actions(state, actions)
-        }
-        AppMessage::EscapePressed => {
-            let actions = state.panel.update(PanelEvent::EscapePressed);
-            apply_actions(state, actions)
-        }
+        AppMessage::InputChanged(text) => update_panel(state, PanelEvent::InputChanged(text)),
+        AppMessage::Submitted => update_panel(state, PanelEvent::Submitted),
+        AppMessage::EscapePressed => update_panel(state, PanelEvent::EscapePressed),
         AppMessage::SelectionUp => {
             state.panel.update(PanelEvent::SelectionUp);
             Task::none()
@@ -111,27 +175,41 @@ pub fn update(state: &mut AppState, message: AppMessage) -> Task<AppMessage> {
             Task::none()
         }
         AppMessage::WindowOpened(id) => {
-            state.window_id = Some(id);
-            Task::none()
+            if state.panel.visible && state.window_id == Some(id) {
+                Task::none()
+            } else {
+                // A hide/shutdown can race the asynchronous open completion.
+                // Do not resurrect a stale window id in that case.
+                iced::window::close(id)
+            }
         }
-        AppMessage::CloseRequested(_id) => {
-            let actions = state.panel.update(PanelEvent::WindowClosed);
-            apply_actions(state, actions)
+        AppMessage::CloseRequested(id) => {
+            if state.window_id != Some(id) {
+                return Task::none();
+            }
+            update_panel(state, PanelEvent::WindowClosed)
         }
-        AppMessage::DebounceFlush => {
-            let actions = state.panel.update(PanelEvent::DebounceFlush);
-            apply_actions(state, actions)
-        }
+        AppMessage::DebounceFlush => update_panel(state, PanelEvent::DebounceFlush),
     }
 }
 
-fn apply_actions(state: &mut AppState, actions: Vec<PanelAction>) -> Task<AppMessage> {
+fn update_panel(state: &mut AppState, event: PanelEvent) -> Task<AppMessage> {
+    let size_before = panel_window_size(&state.panel);
+    let actions = state.panel.update(event);
+    apply_actions(state, actions, size_before)
+}
+
+fn apply_actions(
+    state: &mut AppState,
+    actions: Vec<PanelAction>,
+    size_before: iced::Size,
+) -> Task<AppMessage> {
     let mut tasks = Vec::new();
 
     for action in actions {
         match action {
-            PanelAction::SendToHost(msg) => {
-                let _ = state.host_tx.send(msg);
+            PanelAction::SendToHost(message) => {
+                let _ = state.host_tx.send(message);
             }
             PanelAction::StartDebounce => {
                 tasks.push(Task::perform(
@@ -145,19 +223,19 @@ fn apply_actions(state: &mut AppState, actions: Vec<PanelAction>) -> Task<AppMes
         }
     }
 
-    // Open window if panel visible and no window yet
     if state.panel.visible && state.window_id.is_none() {
-        let (id, task) = iced::window::open(iced::window::Settings {
-            size: iced::Size::new(480.0, 400.0),
-            resizable: false,
-            decorations: true,
-            ..Default::default()
-        });
+        let (id, task) = iced::window::open(panel_window_settings(&state.panel));
         state.window_id = Some(id);
         tasks.push(task.map(AppMessage::WindowOpened));
     }
 
-    // Close window if panel hidden and window exists
+    if state.panel.visible
+        && let Some(id) = state.window_id
+        && panel_window_size(&state.panel) != size_before
+    {
+        tasks.push(iced::window::resize(id, panel_window_size(&state.panel)));
+    }
+
     if !state.panel.visible
         && let Some(id) = state.window_id.take()
     {
@@ -167,44 +245,67 @@ fn apply_actions(state: &mut AppState, actions: Vec<PanelAction>) -> Task<AppMes
     Task::batch(tasks)
 }
 
-// ─── View ───────────────────────────────────────────────────────────────────
-
-pub fn view(state: &AppState, _window: iced::window::Id) -> Element<'_, AppMessage> {
-    if !state.panel.visible {
-        return container(text(""))
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .into();
+fn close_hidden_window(state: &mut AppState) -> Task<AppMessage> {
+    match state.window_id.take() {
+        Some(id) => iced::window::close(id),
+        None => Task::none(),
     }
+}
 
+fn panel_window_settings(panel: &PanelState) -> iced::window::Settings {
+    iced::window::Settings {
+        size: panel_window_size(panel),
+        min_size: Some(iced::Size::new(PANEL_WIDTH, INPUT_ONLY_HEIGHT)),
+        max_size: Some(iced::Size::new(PANEL_WIDTH, MAX_PANEL_HEIGHT)),
+        resizable: false,
+        decorations: false,
+        // The close request is mapped to SearchPanelClosed; the daemon itself
+        // remains alive and opens a new panel window on the next activation.
+        exit_on_close_request: false,
+        ..Default::default()
+    }
+}
+
+/// Renders one visible panel window.
+pub fn view(state: &AppState, _window: iced::window::Id) -> Element<'_, AppMessage> {
     let search_input = text_input("Search actions...", &state.panel.query)
         .on_input(AppMessage::InputChanged)
         .on_submit(AppMessage::Submitted)
         .padding(12)
         .size(16);
 
-    let mut routes_col = column![].spacing(4);
-    for (i, route) in state.panel.routes.iter().enumerate() {
-        let prefix = if i == state.panel.selection.index {
+    let mut content = column![search_input].spacing(CONTENT_GAP).padding(16);
+    if results_area(&state.panel) == ResultsArea::Visible {
+        content = content.push(results_view(&state.panel));
+    }
+
+    container(content)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .into()
+}
+
+fn results_view(panel: &PanelState) -> Element<'_, AppMessage> {
+    let mut content = column![].spacing(4);
+
+    for (index, route) in panel.routes.iter().enumerate() {
+        let prefix = if index == panel.selection.index {
             "▶ "
         } else {
             "  "
         };
-        routes_col = routes_col.push(
+        content = content.push(
             container(text(format!("{prefix}{}", route.title)).size(14))
                 .padding(4)
                 .width(Length::Fill),
         );
     }
-    let routes_scroll = scrollable(routes_col).height(Length::Fixed(200.0));
 
-    let mut content = column![search_input, routes_scroll].spacing(8).padding(16);
-
-    if let Some(outcome) = &state.panel.last_outcome {
+    if let Some(outcome) = &panel.last_outcome {
         let outcome_text = match outcome {
-            ActionOutcome::Data(val) => format!("Result: {val}"),
+            ActionOutcome::Data(value) => format!("Result: {value}"),
             ActionOutcome::Notice { message } => format!("Notice: {message}"),
-            ActionOutcome::Error(err) => format!("Error: {err}"),
+            ActionOutcome::Error(error) => format!("Error: {error}"),
         };
         content = content.push(
             container(text(outcome_text).size(14))
@@ -213,59 +314,107 @@ pub fn view(state: &AppState, _window: iced::window::Id) -> Element<'_, AppMessa
         );
     }
 
-    container(content)
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .center_x(Length::Fill)
+    scrollable(content)
+        .height(Length::Fixed(results_area_height(panel)))
         .into()
 }
 
-// ─── Subscription ───────────────────────────────────────────────────────────
+fn keyboard_message(event: iced::keyboard::Event) -> Option<AppMessage> {
+    use iced::keyboard::{Event, Key, key::Named};
 
-/// Subscription that bridges the host event channel into Iced messages.
-/// Uses `run_with` where data=() (always same hash) and the stream
-/// consumes the global receiver on first invocation.
-fn host_event_stream() -> impl iced::futures::Stream<Item = AppMessage> {
-    iced::stream::channel(
+    match event {
+        Event::KeyPressed {
+            key: Key::Named(Named::Escape),
+            ..
+        } => Some(AppMessage::EscapePressed),
+        Event::KeyPressed {
+            key: Key::Named(Named::ArrowUp),
+            ..
+        } => Some(AppMessage::SelectionUp),
+        Event::KeyPressed {
+            key: Key::Named(Named::ArrowDown),
+            ..
+        } => Some(AppMessage::SelectionDown),
+        _ => None,
+    }
+}
+
+fn runtime_event_message(
+    event: iced::Event,
+    _status: iced::event::Status,
+    window_id: iced::window::Id,
+) -> Option<AppMessage> {
+    match event {
+        iced::Event::Keyboard(event) => keyboard_message(event),
+        iced::Event::Window(iced::window::Event::CloseRequested) => {
+            Some(AppMessage::CloseRequested(window_id))
+        }
+        _ => None,
+    }
+}
+
+fn host_event_stream(
+    host_events: &HostEventReceiver,
+) -> Pin<Box<dyn iced::futures::Stream<Item = AppMessage> + Send>> {
+    let receiver = Arc::clone(&host_events.receiver);
+    Box::pin(iced::stream::channel(
         100,
         move |mut sender: iced::futures::channel::mpsc::Sender<AppMessage>| async move {
             use iced::futures::SinkExt;
-            if let Some(mut rx) = take_host_rx() {
-                while let Some(event) = rx.recv().await {
-                    let _ = sender.send(AppMessage::HostEvent(event)).await;
-                }
-            } else {
-                // No receiver available — never produce items
+
+            let receiver = receiver
+                .lock()
+                .expect("host event receiver mutex poisoned")
+                .take();
+            let Some(mut receiver) = receiver else {
                 std::future::pending::<()>().await;
+                return;
+            };
+
+            while let Some(event) = receiver.recv().await {
+                if sender.send(map_host_event(event)).await.is_err() {
+                    break;
+                }
             }
         },
-    )
+    ))
 }
 
-pub fn subscription(_state: &AppState) -> Subscription<AppMessage> {
-    Subscription::run(host_event_stream)
+/// Subscribes to the daemon host channel plus actual keyboard/window events.
+pub fn subscription(state: &AppState) -> Subscription<AppMessage> {
+    Subscription::batch([
+        Subscription::run_with(state.host_rx.clone(), |host_events| {
+            host_event_stream(host_events)
+        }),
+        iced::event::listen_with(runtime_event_message),
+    ])
 }
 
-// ─── Theme ───────────────────────────────────────────────────────────────────
-
+/// Uses Flick's dark shell theme.
 pub fn theme(_state: &AppState, _window: iced::window::Id) -> Theme {
     Theme::Dark
 }
 
-// ─── Entry point ─────────────────────────────────────────────────────────────
-
+/// Runs the Iced daemon application on the calling thread.
 pub fn run(
     host_tx: mpsc::UnboundedSender<UiToHost>,
     host_rx: mpsc::UnboundedReceiver<HostToUi>,
 ) -> iced::Result {
-    // Wrap in Arc<Mutex<Option>> so the closure can be Fn (not FnOnce)
     let host_tx = Arc::new(Mutex::new(Some(host_tx)));
     let host_rx = Arc::new(Mutex::new(Some(host_rx)));
 
     iced::daemon::daemon(
         move || {
-            let tx = host_tx.lock().unwrap().take().expect("boot called twice");
-            let rx = host_rx.lock().unwrap().take().expect("boot called twice");
+            let tx = host_tx
+                .lock()
+                .expect("host sender mutex poisoned")
+                .take()
+                .expect("Flick Iced boot called twice");
+            let rx = host_rx
+                .lock()
+                .expect("host receiver mutex poisoned")
+                .take()
+                .expect("Flick Iced boot called twice");
             boot(tx, rx)
         },
         update,
@@ -274,4 +423,122 @@ pub fn run(
     .subscription(subscription)
     .theme(theme)
     .run()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn key_event(key: iced::keyboard::Key) -> iced::keyboard::Event {
+        use iced::keyboard::{Event, Key, Location, Modifiers, key::Named};
+
+        Event::KeyPressed {
+            key,
+            modified_key: Key::Named(Named::Enter),
+            physical_key: iced::keyboard::key::Physical::Unidentified(
+                iced::keyboard::key::NativeCode::Unidentified,
+            ),
+            location: Location::Standard,
+            modifiers: Modifiers::default(),
+            text: None,
+            repeat: false,
+        }
+    }
+
+    fn app_state() -> (AppState, mpsc::UnboundedReceiver<UiToHost>) {
+        let (_host_tx, host_rx) = mpsc::unbounded_channel();
+        let (ui_tx, ui_rx) = mpsc::unbounded_channel();
+        let (state, _) = boot(ui_tx, host_rx);
+        (state, ui_rx)
+    }
+
+    #[test]
+    fn shutdown_host_event_maps_to_shutdown_message() {
+        assert!(matches!(
+            map_host_event(HostToUi::Shutdown),
+            AppMessage::Shutdown
+        ));
+    }
+
+    #[test]
+    fn keyboard_mapping_only_handles_panel_navigation_keys() {
+        use iced::keyboard::{Key, key::Named};
+
+        assert!(matches!(
+            keyboard_message(key_event(Key::Named(Named::Escape))),
+            Some(AppMessage::EscapePressed)
+        ));
+        assert!(matches!(
+            keyboard_message(key_event(Key::Named(Named::ArrowUp))),
+            Some(AppMessage::SelectionUp)
+        ));
+        assert!(matches!(
+            keyboard_message(key_event(Key::Named(Named::ArrowDown))),
+            Some(AppMessage::SelectionDown)
+        ));
+        assert!(keyboard_message(key_event(Key::Named(Named::Enter))).is_none());
+    }
+
+    #[test]
+    fn escape_hides_an_open_panel() {
+        let (mut state, mut host_rx) = app_state();
+        let _ = update(
+            &mut state,
+            AppMessage::HostEvent(HostToUi::ShowSearchPanel {
+                activation_token: None,
+            }),
+        );
+        assert!(state.panel.visible);
+
+        let _ = update(&mut state, AppMessage::EscapePressed);
+
+        assert!(!state.panel.visible);
+        assert!(matches!(
+            host_rx.try_recv(),
+            Ok(UiToHost::SearchPanelClosed)
+        ));
+    }
+
+    #[test]
+    fn selection_messages_change_only_the_selection() {
+        let (mut state, _host_rx) = app_state();
+        state.panel.routes = vec![
+            RouteItem {
+                action_id: ActionId::new("first").unwrap(),
+                title: "First".into(),
+                score: 1.0,
+            },
+            RouteItem {
+                action_id: ActionId::new("second").unwrap(),
+                title: "Second".into(),
+                score: 0.5,
+            },
+        ];
+        state.panel.selection.set_total(state.panel.routes.len());
+        let query_before = state.panel.query.clone();
+        let routes_before = state.panel.routes.clone();
+
+        let _ = update(&mut state, AppMessage::SelectionDown);
+
+        assert_eq!(state.panel.selection.index, 1);
+        assert_eq!(state.panel.query, query_before);
+        assert_eq!(state.panel.routes, routes_before);
+    }
+
+    #[test]
+    fn close_request_sends_search_panel_closed_and_clears_window_id() {
+        let (mut state, mut host_rx) = app_state();
+        let id = iced::window::Id::unique();
+        state.panel.visible = true;
+        state.window_id = Some(id);
+
+        let _ = update(&mut state, AppMessage::CloseRequested(id));
+
+        assert!(!state.panel.visible);
+        assert_eq!(state.window_id, None);
+        assert!(matches!(
+            host_rx.try_recv(),
+            Ok(UiToHost::SearchPanelClosed)
+        ));
+    }
 }

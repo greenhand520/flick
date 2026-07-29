@@ -437,3 +437,54 @@ fn runtime_status_is_stored() {
         _ => panic!("expected Degraded"),
     }
 }
+
+// ─── State-to-view layout ───────────────────────────────────────────────────
+
+#[test]
+fn result_area_is_hidden_for_the_initial_panel() {
+    let panel = PanelState::new();
+    assert_eq!(
+        flick_shell_iced::app::results_area(&panel),
+        flick_shell_iced::app::ResultsArea::Hidden
+    );
+    assert_eq!(
+        flick_shell_iced::app::panel_window_size(&panel).height,
+        flick_shell_iced::app::INPUT_ONLY_HEIGHT
+    );
+}
+
+#[test]
+fn result_area_becomes_visible_when_routes_arrive() {
+    let mut panel = PanelState::new();
+    let generation = panel.generation;
+    panel.update(PanelEvent::Routes {
+        generation,
+        items: vec![make_route("echo", "Echo", 1.0)],
+    });
+
+    assert_eq!(
+        flick_shell_iced::app::results_area(&panel),
+        flick_shell_iced::app::ResultsArea::Visible
+    );
+    assert!(
+        flick_shell_iced::app::panel_window_size(&panel).height
+            > flick_shell_iced::app::INPUT_ONLY_HEIGHT
+    );
+}
+
+#[test]
+fn result_area_becomes_visible_for_an_invocation_outcome_without_routes() {
+    let mut panel = PanelState::new();
+    panel.last_outcome = Some(ActionOutcome::Notice {
+        message: "Done".into(),
+    });
+
+    assert_eq!(
+        flick_shell_iced::app::results_area(&panel),
+        flick_shell_iced::app::ResultsArea::Visible
+    );
+    assert!(
+        flick_shell_iced::app::panel_window_size(&panel).height
+            > flick_shell_iced::app::INPUT_ONLY_HEIGHT
+    );
+}

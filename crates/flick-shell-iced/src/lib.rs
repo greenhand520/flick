@@ -1,20 +1,13 @@
 //! `flick-shell-iced` — Iced-based shell for Flick.
 //!
-//! Phase 0: minimal search panel with Iced daemon mode.
-//! - No window on startup; created on ShowSearchPanel
-//! - Text input with generation tracking
-//! - Route item list with selection
-//! - Invocation result display
-//! - Esc/window-close hides (daemon keeps running)
+//! Phase 0 owns one Iced bridge model:
+//! - no window on startup;
+//! - host events open/close the search panel;
+//! - Esc/window-close hide the panel while the daemon stays alive;
+//! - daemon shutdown exits Iced even while the panel is hidden.
 
 pub mod app;
-pub mod bridge;
-pub mod message;
 pub mod panel;
-pub mod shell;
 
 pub use app::AppState;
-pub use bridge::IcedHostBridge;
-pub use message::ShellMessage;
 pub use panel::{PanelAction, PanelEvent, PanelState, SelectionState};
-pub use shell::{IcedShell, WindowRole};
