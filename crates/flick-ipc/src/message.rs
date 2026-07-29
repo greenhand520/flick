@@ -95,6 +95,8 @@ pub enum IpcErrorCode {
     ActionNotFound,
     /// The command payload failed validation.
     InvalidInput,
+    /// The required graphical desktop session or Portal is unavailable.
+    DesktopUnavailable,
     /// An unexpected internal error occurred.
     Internal,
     /// The invocation was cancelled.
@@ -110,6 +112,7 @@ impl IpcErrorCode {
             Self::UnknownCommand => "unknown_command",
             Self::ActionNotFound => "action_not_found",
             Self::InvalidInput => "invalid_input",
+            Self::DesktopUnavailable => "desktop_unavailable",
             Self::Internal => "internal",
             Self::Cancelled => "cancelled",
         }

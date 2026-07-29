@@ -2,7 +2,11 @@
 
 use serde::{Deserialize, Serialize};
 
-/// Full session diagnostics snapshot.
+/// Session facts that can be collected without opening a desktop Portal session.
+///
+/// Portal state belongs to [`crate::portal::PortalShortcutAdapter`] and is
+/// reported separately by daemon diagnostics. Keeping the probe limited to
+/// environment facts avoids presenting stale or simulated Portal information.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionDiagnostics {
     pub session_type: SessionType,
@@ -10,15 +14,6 @@ pub struct SessionDiagnostics {
     pub runtime_dir: Presence,
     pub session_bus: Presence,
     pub current_desktop: ValueOrMissing,
-    pub portal_global_shortcuts: PortalCapability,
-    pub portal_backend: ValueOrMissing,
-    pub shortcut_state: String,
-    pub shortcut_count: u32,
-    pub portal_session_age: Option<String>,
-    pub last_portal_error: Option<String>,
-    pub reconnect_attempt: Option<u32>,
-    pub next_reconnect_at: Option<String>,
-    pub external_fallback: ExternalFallback,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -40,19 +35,6 @@ pub enum ValueOrMissing {
     Missing,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum PortalCapability {
-    Available { version: u32 },
-    Unavailable { reason: String },
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum ExternalFallback {
-    CommandAvailable,
-    NotConfigured,
-    Unknown,
-}
-
 /// Probe the current session environment.
 pub fn probe_session() -> SessionDiagnostics {
     let session_type = match std::env::var("XDG_SESSION_TYPE").as_deref() {
@@ -72,17 +54,6 @@ pub fn probe_session() -> SessionDiagnostics {
         runtime_dir,
         session_bus,
         current_desktop,
-        portal_global_shortcuts: PortalCapability::Unavailable {
-            reason: "not probed".into(),
-        },
-        portal_backend: ValueOrMissing::Missing,
-        shortcut_state: "unknown".into(),
-        shortcut_count: 0,
-        portal_session_age: None,
-        last_portal_error: None,
-        reconnect_attempt: None,
-        next_reconnect_at: None,
-        external_fallback: ExternalFallback::Unknown,
     }
 }
 

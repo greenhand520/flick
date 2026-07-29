@@ -75,6 +75,7 @@ fn run_graphical(socket_path: PathBuf) -> Result<(), String> {
 
     use crate::lifecycle::{DaemonLifecycle, ShutdownReason};
     use flick_adapters_linux::portal::PortalShortcutAdapter;
+    use flick_adapters_linux::portal_client::AshpdPortalClient;
     use flick_application::coordinator::ApplicationCoordinator;
     use flick_application::ports::RuntimePort;
     use flick_domain::*;
@@ -143,13 +144,22 @@ fn run_graphical(socket_path: PathBuf) -> Result<(), String> {
                 });
 
                 let (intent_tx, mut intent_rx) = mpsc::unbounded_channel::<UiIntent>();
-                let portal = Arc::new(PortalShortcutAdapter::new(Arc::new(
-                    bootstrap::ChannelIntentSink {
+                let portal = Arc::new(PortalShortcutAdapter::new_with_client(
+                    Arc::new(bootstrap::ChannelIntentSink {
                         tx: intent_tx.clone(),
-                    },
-                )));
-                if let Err(error) = portal.initialize().await {
-                    tracing::warn!("Portal init failed: {error:?}");
+                    }),
+                    Arc::new(AshpdPortalClient::new()),
+                ));
+                match portal.initialize().await {
+                    Ok(snapshot) => tracing::info!(?snapshot, "Portal initialized"),
+                    Err(error) => {
+                        let snapshot = portal.diagnostics().await;
+                        tracing::warn!(
+                            ?error,
+                            ?snapshot,
+                            "Portal init failed; IPC remains available"
+                        );
+                    }
                 }
 
                 let intent_worker_lifecycle = lifecycle.clone();
@@ -172,6 +182,7 @@ fn run_graphical(socket_path: PathBuf) -> Result<(), String> {
                     host_event_tx.clone(),
                     intent_tx,
                     Some(Arc::clone(&portal)),
+                    socket_path.clone(),
                     lifecycle.clone(),
                 );
                 let handle =

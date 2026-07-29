@@ -20,7 +20,10 @@ use flick_domain::*;
 use flick_ipc::message::{IpcCommand, IpcErrorCode, IpcResult};
 use flick_ipc::server::IpcDispatcher;
 use flick_runtime::ActionRuntime;
-use std::sync::{Arc, Mutex};
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicUsize, Ordering},
+};
 use std::time::Duration;
 use tokio::sync::mpsc;
 
@@ -67,6 +70,9 @@ impl HostEventSink for TestEventSink {
 struct ConfigurePortalClient {
     bind_result: Mutex<Result<Vec<ShortcutBinding>, ShortcutError>>,
     event_rx: Mutex<Option<mpsc::UnboundedReceiver<PortalEvent>>>,
+    bind_triggers: Mutex<Vec<String>>,
+    open_and_list_calls: AtomicUsize,
+    bind_calls: AtomicUsize,
 }
 
 impl ConfigurePortalClient {
@@ -75,13 +81,29 @@ impl ConfigurePortalClient {
         Self {
             bind_result: Mutex::new(bind_result),
             event_rx: Mutex::new(Some(event_rx)),
+            bind_triggers: Mutex::new(Vec::new()),
+            open_and_list_calls: AtomicUsize::new(0),
+            bind_calls: AtomicUsize::new(0),
         }
+    }
+
+    fn bind_triggers(&self) -> Vec<String> {
+        self.bind_triggers.lock().unwrap().clone()
+    }
+
+    fn open_and_list_calls(&self) -> usize {
+        self.open_and_list_calls.load(Ordering::SeqCst)
+    }
+
+    fn bind_calls(&self) -> usize {
+        self.bind_calls.load(Ordering::SeqCst)
     }
 }
 
 #[async_trait]
 impl PortalClient for ConfigurePortalClient {
     async fn open_session_and_list(&self) -> Result<PortalSession, ShortcutError> {
+        self.open_and_list_calls.fetch_add(1, Ordering::SeqCst);
         Ok(PortalSession {
             id: PortalSessionId::new(1),
             bindings: Vec::new(),
@@ -97,8 +119,13 @@ impl PortalClient for ConfigurePortalClient {
 
     async fn bind_show_search(
         &self,
-        _preferred_trigger: &str,
+        preferred_trigger: &str,
     ) -> Result<Vec<ShortcutBinding>, ShortcutError> {
+        self.bind_calls.fetch_add(1, Ordering::SeqCst);
+        self.bind_triggers
+            .lock()
+            .unwrap()
+            .push(preferred_trigger.to_owned());
         self.bind_result.lock().unwrap().clone()
     }
 
@@ -149,6 +176,7 @@ async fn build_dispatcher_with_lifecycle(
             coordinator,
             intent_tx,
             portal,
+            socket_path: std::path::PathBuf::from("/tmp/flick-bootstrap-test.sock"),
             lifecycle,
         },
         events,
@@ -301,12 +329,13 @@ async fn shutdown_response_is_successful_before_lifecycle_is_cancelled() {
 }
 
 #[tokio::test]
-async fn shortcuts_configure_awaits_portal_and_returns_binding_without_showing_panel() {
+async fn shortcuts_configure_awaits_portal_and_returns_bound_state_without_showing_panel() {
+    let fake = Arc::new(ConfigurePortalClient::new(Ok(vec![show_search_binding(
+        "Ctrl+Space",
+    )])));
     let portal = Arc::new(PortalShortcutAdapter::new_with_client(
         Arc::new(NoopIntentSink),
-        Arc::new(ConfigurePortalClient::new(Ok(vec![show_search_binding(
-            "Ctrl+Space",
-        )]))),
+        fake.clone(),
     ));
     let (dispatcher, mut events) = build_dispatcher(Some(portal)).await;
 
@@ -318,15 +347,65 @@ async fn shortcuts_configure_awaits_portal_and_returns_binding_without_showing_p
 
     match result {
         IpcResult::Ok(value) => {
-            assert_eq!(value["shortcut_id"], "show-search");
-            assert_eq!(value["actual_trigger"], "Ctrl+Space");
+            assert_eq!(value["state"], "bound");
+            assert_eq!(value["shortcut"]["id"], "show-search");
+            assert_eq!(value["shortcut"]["actual_trigger"], "Ctrl+Space");
         }
         other => panic!("expected shortcut configuration success, got {other:?}"),
     }
+    assert_eq!(fake.bind_triggers(), vec!["Super+Space"]);
     assert!(
         events.try_recv().is_err(),
         "configure must not show the panel"
     );
+}
+
+#[tokio::test]
+async fn shortcuts_reconnect_recreates_and_lists_without_binding_or_showing_panel() {
+    let fake = Arc::new(ConfigurePortalClient::new(Ok(Vec::new())));
+    let portal = Arc::new(PortalShortcutAdapter::new_with_client(
+        Arc::new(NoopIntentSink),
+        fake.clone(),
+    ));
+    let (dispatcher, mut events) = build_dispatcher(Some(portal)).await;
+
+    let result = dispatcher.dispatch(IpcCommand::ShortcutsReconnect).await;
+
+    match result {
+        IpcResult::Ok(value) => {
+            assert_eq!(value["state"], "unconfigured");
+            assert_eq!(value["session_active"], true);
+        }
+        other => panic!("expected reconnect snapshot, got {other:?}"),
+    }
+    assert_eq!(fake.open_and_list_calls(), 1);
+    assert_eq!(fake.bind_calls(), 0);
+    assert!(
+        events.try_recv().is_err(),
+        "reconnect must not show the panel"
+    );
+}
+
+#[tokio::test]
+async fn doctor_merges_session_portal_and_ipc_facts() {
+    let fake = Arc::new(ConfigurePortalClient::new(Ok(Vec::new())));
+    let portal = Arc::new(PortalShortcutAdapter::new_with_client(
+        Arc::new(NoopIntentSink),
+        fake,
+    ));
+    portal.initialize().await.expect("fake Portal initializes");
+    let (dispatcher, _) = build_dispatcher(Some(portal)).await;
+
+    let result = dispatcher.dispatch(IpcCommand::Doctor).await;
+
+    match result {
+        IpcResult::Ok(value) => {
+            assert!(value.get("session").is_some());
+            assert_eq!(value["portal"]["state"], "unconfigured");
+            assert!(value["ipc"]["socket"].is_string());
+        }
+        other => panic!("expected merged doctor result, got {other:?}"),
+    }
 }
 
 #[tokio::test]
@@ -338,7 +417,7 @@ async fn shortcuts_configure_returns_safe_errors_without_a_portal_or_after_cance
     let unavailable = without_portal.dispatch(request).await;
     match unavailable {
         IpcResult::Error { code, message } => {
-            assert_eq!(code, IpcErrorCode::Internal);
+            assert_eq!(code, IpcErrorCode::DesktopUnavailable);
             assert!(!message.contains("Super+Space"));
         }
         other => panic!("expected unavailable Portal error, got {other:?}"),

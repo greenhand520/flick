@@ -223,6 +223,19 @@ fn format_result_protocol_mismatch_exit_code_3() {
     assert_eq!(exit_code, 3);
 }
 
+#[test]
+fn format_result_desktop_unavailable_is_a_nonzero_error() {
+    let result = IpcResult::Error {
+        code: IpcErrorCode::DesktopUnavailable,
+        message: "Portal session is unavailable".into(),
+    };
+    let (output, is_stderr, exit_code) = format_result(&result, true);
+    assert!(!is_stderr);
+    assert_eq!(exit_code, 1);
+    let parsed: serde_json::Value = serde_json::from_str(&output).unwrap();
+    assert_eq!(parsed["error"]["code"], "desktop_unavailable");
+}
+
 // ─── Unit tests: connection error formatting ─────────────────────────────────
 
 #[test]

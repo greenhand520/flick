@@ -6,6 +6,7 @@ use crate::lifecycle::{DaemonLifecycle, ShutdownReason};
 use flick_adapters_linux::diagnostics::probe_session;
 use flick_adapters_linux::portal::{IntentSink, PortalShortcutAdapter};
 use flick_adapters_linux::session::ShortcutError;
+use flick_adapters_linux::shortcut_state::{PortalSnapshot, ShortcutState};
 use flick_application::coordinator::ApplicationCoordinator;
 use flick_application::ports::{HostEventSink, RuntimePort};
 use flick_domain::*;
@@ -13,7 +14,7 @@ use flick_ipc::message::*;
 use flick_ipc::server::IpcServer;
 use flick_ipc::unix::{TransportError, UnixSocketServer};
 use flick_runtime::ActionRuntime;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -66,6 +67,7 @@ pub struct DaemonIpcDispatcher {
     #[allow(dead_code)]
     pub intent_tx: mpsc::UnboundedSender<UiIntent>,
     pub portal: Option<Arc<PortalShortcutAdapter>>,
+    pub socket_path: PathBuf,
     pub lifecycle: DaemonLifecycle,
 }
 
@@ -115,12 +117,22 @@ impl flick_ipc::server::IpcDispatcher for DaemonIpcDispatcher {
                 }
             }
             IpcCommand::Status => IpcResult::Ok(serde_json::json!({ "daemon_status": "running" })),
-            IpcCommand::Doctor => IpcResult::Ok(serde_json::json!(probe_session())),
+            IpcCommand::Doctor => {
+                let portal = match &self.portal {
+                    Some(portal) => portal_snapshot_value(&portal.diagnostics().await),
+                    None => serde_json::json!({ "state": "headless_not_started" }),
+                };
+                IpcResult::Ok(serde_json::json!({
+                    "session": probe_session(),
+                    "portal": portal,
+                    "ipc": { "socket": self.socket_path.display().to_string() },
+                }))
+            }
             IpcCommand::ShortcutsConfigure { preferred_trigger } => {
                 info!("Shortcut configuration requested");
                 let Some(portal) = &self.portal else {
                     return IpcResult::Error {
-                        code: IpcErrorCode::Internal,
+                        code: IpcErrorCode::DesktopUnavailable,
                         message: "Global shortcut configuration is unavailable.".into(),
                     };
                 };
@@ -129,15 +141,25 @@ impl flick_ipc::server::IpcDispatcher for DaemonIpcDispatcher {
                     Ok(binding) => {
                         info!("Portal shortcut configured");
                         IpcResult::Ok(serde_json::json!({
-                            "shortcut_id": binding.id,
-                            "actual_trigger": binding.actual_trigger,
+                            "state": "bound",
+                            "shortcut": binding,
                         }))
                     }
                     Err(error) => shortcut_configuration_error(error),
                 }
             }
             IpcCommand::ShortcutsReconnect => {
-                IpcResult::Ok(serde_json::json!({ "reconnect": "requested" }))
+                let Some(portal) = &self.portal else {
+                    return IpcResult::Error {
+                        code: IpcErrorCode::DesktopUnavailable,
+                        message: "Global shortcut recovery is unavailable.".into(),
+                    };
+                };
+
+                match portal.reconnect().await {
+                    Ok(snapshot) => IpcResult::Ok(portal_snapshot_value(&snapshot)),
+                    Err(error) => shortcut_configuration_error(error),
+                }
             }
             IpcCommand::Shutdown => IpcResult::Ok(serde_json::json!({ "shutdown": true })),
             IpcCommand::Show => {
@@ -167,7 +189,7 @@ fn shortcut_configuration_error(error: ShortcutError) -> IpcResult {
             "Shortcut configuration was cancelled.",
         ),
         ShortcutError::Unavailable { .. } => (
-            IpcErrorCode::Internal,
+            IpcErrorCode::DesktopUnavailable,
             "Global shortcut configuration is unavailable.",
         ),
         ShortcutError::RequestEnded { .. } => (
@@ -175,7 +197,7 @@ fn shortcut_configuration_error(error: ShortcutError) -> IpcResult {
             "Shortcut configuration did not complete.",
         ),
         ShortcutError::SessionError { .. } => (
-            IpcErrorCode::Internal,
+            IpcErrorCode::DesktopUnavailable,
             "Global shortcut session is unavailable. Try configuring again.",
         ),
         ShortcutError::Internal { .. } => {
@@ -192,6 +214,34 @@ fn shortcut_configuration_error(error: ShortcutError) -> IpcResult {
     }
 }
 
+fn portal_snapshot_value(snapshot: &PortalSnapshot) -> serde_json::Value {
+    let (state, state_detail) = match &snapshot.state {
+        ShortcutState::Unavailable { reason } => {
+            ("unavailable", serde_json::json!({ "reason": reason }))
+        }
+        ShortcutState::Unconfigured => ("unconfigured", serde_json::Value::Null),
+        ShortcutState::Configuring => ("configuring", serde_json::Value::Null),
+        ShortcutState::Bound => ("bound", serde_json::Value::Null),
+        ShortcutState::Denied => ("denied", serde_json::Value::Null),
+        ShortcutState::Recovering { attempt } => {
+            ("recovering", serde_json::json!({ "attempt": attempt }))
+        }
+        ShortcutState::Error { operation, message } => (
+            "error",
+            serde_json::json!({ "operation": operation, "message": message }),
+        ),
+    };
+
+    serde_json::json!({
+        "state": state,
+        "state_detail": state_detail,
+        "session_active": snapshot.session_active,
+        "shortcut_count": snapshot.shortcut_count,
+        "last_error": snapshot.last_error,
+        "reconnect_attempt": snapshot.reconnect_attempt,
+    })
+}
+
 // ─── Public helpers ──────────────────────────────────────────────────────────
 
 pub fn create_ipc_dispatcher(
@@ -200,6 +250,7 @@ pub fn create_ipc_dispatcher(
     _host_event_tx: mpsc::UnboundedSender<HostToUi>,
     intent_tx: mpsc::UnboundedSender<UiIntent>,
     portal: Option<Arc<PortalShortcutAdapter>>,
+    socket_path: PathBuf,
     lifecycle: DaemonLifecycle,
 ) -> Arc<DaemonIpcDispatcher> {
     let runtime_port = Arc::new(RuntimeAdapter { runtime }) as Arc<dyn RuntimePort>;
@@ -208,6 +259,7 @@ pub fn create_ipc_dispatcher(
         coordinator,
         intent_tx,
         portal,
+        socket_path,
         lifecycle,
     })
 }
@@ -302,6 +354,7 @@ pub async fn run_headless(socket_path: std::path::PathBuf) -> Result<(), String>
         host_event_tx.clone(),
         intent_tx,
         None,
+        socket_path.clone(),
         lifecycle.clone(),
     );
     let handle = match bind_and_run_ipc(&socket_path, dispatcher, lifecycle.token()).await {

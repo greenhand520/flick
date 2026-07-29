@@ -68,6 +68,7 @@ pub fn format_result(result: &IpcResult, json_output: bool) -> (String, bool, i3
             let exit_code = match code {
                 IpcErrorCode::DaemonUnavailable => 2,
                 IpcErrorCode::ProtocolVersionMismatch => 3,
+                IpcErrorCode::DesktopUnavailable => 1,
                 _ => 1,
             };
             (output, !json_output, exit_code)

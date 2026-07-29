@@ -62,6 +62,7 @@ struct TestDispatcher {
     runtime: Arc<dyn RuntimePort>,
     coordinator: Arc<flick_application::ApplicationCoordinator>,
     events: Arc<Mutex<Vec<HostToUi>>>,
+    socket_path: std::path::PathBuf,
 }
 
 #[async_trait::async_trait]
@@ -120,7 +121,11 @@ impl IpcDispatcher for TestDispatcher {
                 }
             }
             IpcCommand::Status => IpcResult::Ok(serde_json::json!({"daemon_status": "running"})),
-            IpcCommand::Doctor => IpcResult::Ok(serde_json::json!({"session": "headless"})),
+            IpcCommand::Doctor => IpcResult::Ok(serde_json::json!({
+                "session": "headless",
+                "portal": { "state": "headless_not_started" },
+                "ipc": { "socket": self.socket_path.display().to_string() },
+            })),
             IpcCommand::ShortcutsConfigure {
                 preferred_trigger: _,
             } => IpcResult::Ok(serde_json::json!({"configure": "requested"})),
@@ -156,6 +161,7 @@ async fn spawn_headless_daemon(tmpdir: &TempDir) -> (std::path::PathBuf, Arc<Tes
         runtime: adapter,
         coordinator,
         events,
+        socket_path: socket_path.clone(),
     });
 
     // Bind IPC
@@ -302,6 +308,8 @@ async fn e2e_doctor_returns_session_info() {
     match &resp.result {
         IpcResult::Ok(val) => {
             assert!(val.get("session").is_some());
+            assert_eq!(val["portal"]["state"], "headless_not_started");
+            assert_eq!(val["ipc"]["socket"], path.display().to_string());
         }
         other => panic!("expected Ok, got {other:?}"),
     }
@@ -330,6 +338,16 @@ async fn e2e_real_headless_daemon_stops_and_removes_socket_after_shutdown() {
     })
     .await
     .expect("headless daemon must bind its IPC socket");
+
+    let doctor = send_ipc(&socket_path, IpcCommand::Doctor).await;
+    match doctor.result {
+        IpcResult::Ok(value) => {
+            assert!(value.get("session").is_some());
+            assert_eq!(value["portal"]["state"], "headless_not_started");
+            assert_eq!(value["ipc"]["socket"], socket_path.display().to_string());
+        }
+        other => panic!("expected headless doctor result, got {other:?}"),
+    }
 
     let response = send_ipc(&socket_path, IpcCommand::Shutdown).await;
     match response.result {
