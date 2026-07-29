@@ -10,7 +10,7 @@ use flick_application::ports::{HostEventSink, RuntimePort};
 use flick_domain::*;
 use flick_ipc::message::*;
 use flick_ipc::server::IpcServer;
-use flick_ipc::unix::UnixSocketServer;
+use flick_ipc::unix::{TransportError, UnixSocketServer};
 use flick_runtime::ActionRuntime;
 use std::path::Path;
 use std::sync::Arc;
@@ -205,7 +205,7 @@ pub fn create_ipc_dispatcher(
 pub struct DaemonHandle {
     pub cancel_token: CancellationToken,
     pub socket_path: std::path::PathBuf,
-    pub ipc_handle: Option<tokio::task::JoinHandle<()>>,
+    pub ipc_handle: Option<tokio::task::JoinHandle<Result<(), TransportError>>>,
 }
 
 pub async fn bind_and_run_ipc(
@@ -217,15 +217,8 @@ pub async fn bind_and_run_ipc(
     info!("IPC socket bound at {}", socket_path.display());
 
     let ipc_server = IpcServer::new(server, dispatcher);
-    let cancel_clone = cancel.clone();
-    let handle = tokio::spawn(async move {
-        tokio::select! {
-            result = ipc_server.run() => {
-                if let Err(e) = result { error!("IPC server error: {e}"); }
-            }
-            _ = cancel_clone.cancelled() => { info!("IPC server shutting down"); }
-        }
-    });
+    let server_cancel = cancel.clone();
+    let handle = tokio::spawn(async move { ipc_server.run(server_cancel).await });
 
     Ok(DaemonHandle {
         cancel_token: cancel,
@@ -236,13 +229,16 @@ pub async fn bind_and_run_ipc(
 
 pub async fn shutdown(mut handle: DaemonHandle) {
     handle.cancel_token.cancel();
-    if let Some(h) = handle.ipc_handle.take() {
-        let _ = h.await;
+    if let Some(task) = handle.ipc_handle.take() {
+        match task.await {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => error!(%error, "IPC server stopped with an error"),
+            Err(error) => error!(%error, "IPC server task panicked"),
+        }
     }
+    // Task 4 intentionally removes only the socket. Runtime-directory ownership
+    // tracking belongs to Task 5, so never delete a parent directory here.
     let _ = tokio::fs::remove_file(&handle.socket_path).await;
-    if let Some(parent) = handle.socket_path.parent() {
-        let _ = tokio::fs::remove_dir(parent).await;
-    }
     info!("flick-daemon stopped");
 }
 

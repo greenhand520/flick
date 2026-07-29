@@ -370,3 +370,27 @@ async fn unknown_action_returns_structured_error() {
         other => panic!("expected UnknownAction error, got {other:?}"),
     }
 }
+
+#[tokio::test]
+async fn shutdown_removes_only_the_socket_and_preserves_its_parent_directory() {
+    let tmpdir = tempfile::TempDir::new().unwrap();
+    let runtime_dir = tmpdir.path().join("runtime");
+    tokio::fs::create_dir(&runtime_dir).await.unwrap();
+    let socket_path = runtime_dir.join("flick.sock");
+    tokio::fs::write(&socket_path, b"test socket placeholder")
+        .await
+        .unwrap();
+
+    let handle = bootstrap::DaemonHandle {
+        cancel_token: tokio_util::sync::CancellationToken::new(),
+        socket_path: socket_path.clone(),
+        ipc_handle: None,
+    };
+    bootstrap::shutdown(handle).await;
+
+    assert!(!socket_path.exists(), "shutdown must remove the socket");
+    assert!(
+        runtime_dir.exists(),
+        "Task 4 must not delete a parent directory it does not own"
+    );
+}

@@ -57,7 +57,9 @@ async fn spawn_test_server(
     let server = unix::bind(&path).expect("bind failed");
     let ipc_server = IpcServer::new(server, dispatcher.clone());
     tokio::spawn(async move {
-        let _ = ipc_server.run().await;
+        let _ = ipc_server
+            .run(tokio_util::sync::CancellationToken::new())
+            .await;
     });
     (path, dispatcher)
 }

@@ -4,10 +4,13 @@ use crate::message::{
     IPC_PROTOCOL_VERSION, IpcCommand, IpcErrorCode, IpcRequestEnvelope, IpcResponseEnvelope,
     IpcResult,
 };
-use crate::unix::{self, UnixSocketServer};
+use crate::unix::{self, IPC_REQUEST_TIMEOUT, TransportError, UnixSocketServer};
 use async_trait::async_trait;
 use std::sync::Arc;
 use tokio::net::UnixStream;
+use tokio::task::JoinSet;
+use tokio::time::timeout;
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
 
 /// Trait that the application layer implements to handle IPC commands.
@@ -32,45 +35,101 @@ impl IpcServer {
         Self { server, dispatcher }
     }
 
-    /// Run the accept loop.  This method does **not** return under normal
-    /// operation; it processes one client at a time (Phase 0).
-    pub async fn run(self) -> Result<(), std::io::Error> {
-        loop {
-            let stream = self.server.accept().await.map_err(|e| match e {
-                unix::TransportError::Io(io) => io,
-                other => std::io::Error::other(other.to_string()),
-            })?;
+    /// Run the accept loop until `cancel` is cancelled.
+    ///
+    /// Every accepted connection is handled by a supervised task. Cancellation
+    /// stops accepting new connections, interrupts in-flight reads and dispatch
+    /// calls, then waits for every client task before returning.
+    pub async fn run(self, cancel: CancellationToken) -> Result<(), TransportError> {
+        let mut clients = JoinSet::new();
+        let client_cancel = cancel.child_token();
+        let mut accept_error = None;
 
-            let dispatcher = Arc::clone(&self.dispatcher);
-            // Phase 0: handle one client at a time inline.
-            // A later phase will spawn per-connection tasks.
-            Self::handle_client(stream, dispatcher).await;
+        loop {
+            tokio::select! {
+                biased;
+
+                _ = cancel.cancelled() => break,
+                accepted = self.server.accept() => match accepted {
+                    Ok(stream) => {
+                        let dispatcher = Arc::clone(&self.dispatcher);
+                        let client_cancel = client_cancel.clone();
+                        clients.spawn(async move {
+                            if let Err(error) = Self::handle_client(stream, dispatcher, client_cancel).await {
+                                warn!(%error, "IPC client request failed");
+                            }
+                        });
+                    }
+                    Err(error) => {
+                        accept_error = Some(error);
+                        break;
+                    }
+                },
+                Some(joined) = clients.join_next(), if !clients.is_empty() => {
+                    if let Err(error) = joined {
+                        warn!(%error, "IPC client task panicked");
+                    }
+                }
+            }
+        }
+
+        // Also release client work if accepting fails independently of daemon
+        // cancellation, before waiting for every supervised task to finish.
+        client_cancel.cancel();
+        while let Some(joined) = clients.join_next().await {
+            if let Err(error) = joined {
+                warn!(%error, "IPC client task panicked during shutdown");
+            }
+        }
+
+        match accept_error {
+            Some(error) => Err(error),
+            None => Ok(()),
         }
     }
 
     /// Handle a single client connection: read request → dispatch → write
-    /// response.  The connection is closed after one round-trip (Phase 0).
-    async fn handle_client(mut stream: UnixStream, dispatcher: Arc<dyn IpcDispatcher>) {
-        let request = match unix::read_request(&mut stream).await {
-            Ok(r) => r,
-            Err(e) => {
-                warn!("IPC: failed to read request: {e}");
-                return;
+    /// response. The connection is closed after one round-trip (Phase 0).
+    async fn handle_client(
+        mut stream: UnixStream,
+        dispatcher: Arc<dyn IpcDispatcher>,
+        cancel: CancellationToken,
+    ) -> Result<(), TransportError> {
+        let request = tokio::select! {
+            biased;
+
+            _ = cancel.cancelled() => return Ok(()),
+            result = timeout(IPC_REQUEST_TIMEOUT, unix::read_request(&mut stream)) => {
+                result.map_err(|_| TransportError::TimedOut {
+                    operation: "read request",
+                })??
             }
         };
 
-        let response = Self::process_request(request, dispatcher).await;
+        let Some(response) = Self::process_request(request, dispatcher, &cancel).await? else {
+            return Ok(());
+        };
 
-        if let Err(e) = unix::write_response(&mut stream, &response).await {
-            warn!("IPC: failed to write response: {e}");
+        tokio::select! {
+            biased;
+
+            _ = cancel.cancelled() => Ok(()),
+            result = timeout(IPC_REQUEST_TIMEOUT, unix::write_response(&mut stream, &response)) => {
+                result.map_err(|_| TransportError::TimedOut {
+                    operation: "write response",
+                })?
+            }
         }
     }
 
     /// Validate and dispatch a single request.
+    ///
+    /// `None` means daemon shutdown cancelled the in-flight dispatch.
     async fn process_request(
         request: IpcRequestEnvelope,
         dispatcher: Arc<dyn IpcDispatcher>,
-    ) -> IpcResponseEnvelope {
+        cancel: &CancellationToken,
+    ) -> Result<Option<IpcResponseEnvelope>, TransportError> {
         let request_id = request.request_id.clone();
 
         // Protocol version check.
@@ -79,7 +138,7 @@ impl IpcServer {
                 "IPC: version mismatch: client={}, server={}",
                 request.protocol_version, IPC_PROTOCOL_VERSION,
             );
-            return IpcResponseEnvelope {
+            return Ok(Some(IpcResponseEnvelope {
                 protocol_version: IPC_PROTOCOL_VERSION,
                 request_id,
                 result: IpcResult::error(
@@ -89,15 +148,24 @@ impl IpcServer {
                         request.protocol_version, IPC_PROTOCOL_VERSION,
                     ),
                 ),
-            };
+            }));
         }
 
-        let result = dispatcher.dispatch(request.command).await;
+        let result = tokio::select! {
+            biased;
 
-        IpcResponseEnvelope {
+            _ = cancel.cancelled() => return Ok(None),
+            result = timeout(IPC_REQUEST_TIMEOUT, dispatcher.dispatch(request.command)) => {
+                result.map_err(|_| TransportError::TimedOut {
+                    operation: "dispatch request",
+                })?
+            }
+        };
+
+        Ok(Some(IpcResponseEnvelope {
             protocol_version: IPC_PROTOCOL_VERSION,
             request_id,
             result,
-        }
+        }))
     }
 }

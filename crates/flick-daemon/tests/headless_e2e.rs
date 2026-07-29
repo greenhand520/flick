@@ -151,7 +151,9 @@ async fn spawn_headless_daemon(tmpdir: &TempDir) -> (std::path::PathBuf, Arc<Tes
     let server = unix::bind(&socket_path).expect("bind failed");
     let ipc_server = IpcServer::new(server, dispatcher.clone());
     tokio::spawn(async move {
-        let _ = ipc_server.run().await;
+        let _ = ipc_server
+            .run(tokio_util::sync::CancellationToken::new())
+            .await;
     });
 
     (socket_path, dispatcher)

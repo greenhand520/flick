@@ -4,11 +4,18 @@ use crate::codec::{self, CodecError};
 use crate::message::{IpcRequestEnvelope, IpcResponseEnvelope};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
+use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{UnixListener, UnixStream};
 
 /// Maximum payload size in bytes (mirrors [`codec::MAX_FRAME_SIZE`]).
 const MAX_FRAME_SIZE: usize = codec::MAX_FRAME_SIZE as usize;
+
+/// Maximum time the CLI waits to establish a local IPC connection.
+pub const IPC_CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// Maximum time allowed for one complete IPC request operation.
+pub const IPC_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 
 // ─── Errors ───────────────────────────────────────────────────────────────────
 
@@ -23,6 +30,9 @@ pub enum TransportError {
 
     #[error("another instance is already listening on this socket")]
     AlreadyRunning,
+
+    #[error("IPC {operation} timed out")]
+    TimedOut { operation: &'static str },
 }
 
 // ─── Server ───────────────────────────────────────────────────────────────────
@@ -108,7 +118,11 @@ pub struct UnixSocketClient {
 
 /// Connect to the IPC server at `path`.
 pub async fn connect(path: &Path) -> Result<UnixSocketClient, TransportError> {
-    let stream = UnixStream::connect(path).await?;
+    let stream = tokio::time::timeout(IPC_CONNECT_TIMEOUT, UnixStream::connect(path))
+        .await
+        .map_err(|_| TransportError::TimedOut {
+            operation: "connect",
+        })??;
     Ok(UnixSocketClient { stream })
 }
 
@@ -125,9 +139,14 @@ impl UnixSocketClient {
         &mut self,
         request: &IpcRequestEnvelope,
     ) -> Result<IpcResponseEnvelope, TransportError> {
-        write_envelope(&mut self.stream, request).await?;
-        let response: IpcResponseEnvelope = read_envelope(&mut self.stream).await?;
-        Ok(response)
+        tokio::time::timeout(IPC_REQUEST_TIMEOUT, async {
+            write_envelope(&mut self.stream, request).await?;
+            read_envelope(&mut self.stream).await
+        })
+        .await
+        .map_err(|_| TransportError::TimedOut {
+            operation: "request",
+        })?
     }
 }
 
