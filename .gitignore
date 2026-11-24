@@ -8,6 +8,7 @@
 .codex
 .opencode
 .agents
+.omp
 .superpowers
 .planning
 **/superpowers/
@@ -15,8 +16,11 @@
 **/plans/
 **/operations/
 **/development/
-AGENTS.md
 findings.md
 progress.md
 task_plan.md
 
+
+# local build cache (read-only ~/.cargo workaround)
+.cargo-home
+.gpui_probe

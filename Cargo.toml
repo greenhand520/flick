@@ -11,10 +11,11 @@ members = [
     "crates/flick-daemon",
     "crates/flick-cli",
     "crates/flick-testkit",
+    "crates/flick-shell-gpui",
 ]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 license = "GPL-3.0-or-later"
 
@@ -27,6 +28,12 @@ thiserror = "2.0"
 tokio = { version = "1.53", features = ["full"] }
 tokio-util = { version = "0.7", features = ["rt"] }
 async-trait = "0.1"
+
+# Search
+ib_pinyin = {version = "0.3"}
+
+# Storage
+rusqlite = {version = "0.40"}
 
 # Linux / Portal
 ashpd = { version = "0.13", default-features = false, features = ["tokio"] }
