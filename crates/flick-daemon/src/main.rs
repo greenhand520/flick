@@ -1,4 +1,4 @@
-//! flick-daemon: composition root and entry point.
+//! flick-daemon：组合根目录和入口点。
 
 mod bootstrap;
 mod headless;
@@ -110,8 +110,8 @@ fn run_graphical(socket_path: PathBuf) -> Result<(), String> {
     let panic_error = Arc::clone(&background_error);
     let socket_path_for_cleanup = socket_path.clone();
 
-    // Background thread: all Tokio-owned services (IPC, Portal, coordinator,
-    // and workers). The Iced event loop remains on the process main thread.
+    // 后台线程：所有由 Tokio 拥有的服务（IPC、Portal、协调器，
+    // 以及工作线程）。Iced 事件循环保留在进程主线程上。
     let bg_thread = std::thread::spawn(move || {
         let result = catch_unwind(AssertUnwindSafe(|| {
             let rt = tokio::runtime::Runtime::new().expect("failed to create bg runtime");
@@ -252,27 +252,20 @@ fn run_graphical(socket_path: PathBuf) -> Result<(), String> {
         }
     });
 
-    tracing::info!("Launching Iced on main thread");
-    let iced_result = flick_shell_iced::app::run(ui_cmd_tx, host_event_rx);
-    lifecycle.request_shutdown(if iced_result.is_ok() {
-        ShutdownReason::IcedExited
-    } else {
-        ShutdownReason::IcedFailed
-    });
+    tracing::info!("Launching GPUI on main thread");
+    flick_shell_gpui::run(ui_cmd_tx, host_event_rx);
+    lifecycle.request_shutdown(ShutdownReason::ShellExited);
     let background_thread_panicked = bg_thread.join().is_err();
     if background_thread_panicked || background_panicked.load(Ordering::Acquire) {
         let _ = std::fs::remove_file(&socket_path_for_cleanup);
     }
 
-    match iced_result {
-        Ok(()) => match background_error
-            .lock()
-            .expect("background error mutex poisoned")
-            .take()
-        {
-            Some(error) => Err(error),
-            None => Ok(()),
-        },
-        Err(error) => Err(format!("Iced: {error}")),
+    match background_error
+        .lock()
+        .expect("background error mutex poisoned")
+        .take()
+    {
+        Some(error) => Err(error),
+        None => Ok(()),
     }
 }

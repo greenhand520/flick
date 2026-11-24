@@ -14,7 +14,7 @@ flick-runtime = { path = "../flick-runtime" }
 flick-builtins = { path = "../flick-builtins" }
 flick-ipc = { path = "../flick-ipc" }
 flick-adapters-linux = { path = "../flick-adapters-linux" }
-flick-shell-iced = { path = "../flick-shell-iced" }
+flick-shell-gpui = { path = "../flick-shell-gpui" }
 tokio = { workspace = true }
 tokio-util = { workspace = true }
 serde = { workspace = true }

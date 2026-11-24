@@ -7,7 +7,6 @@ members = [
     "crates/flick-builtins",
     "crates/flick-ipc",
     "crates/flick-adapters-linux",
-    "crates/flick-shell-iced",
     "crates/flick-daemon",
     "crates/flick-cli",
     "crates/flick-testkit",
@@ -36,11 +35,8 @@ ib_pinyin = {version = "0.3"}
 rusqlite = {version = "0.40"}
 
 # Linux / Portal
-ashpd = { version = "0.13", default-features = false, features = ["tokio"] }
+ashpd = { version = "0.13", default-features = false, features = ["async-io"] }
 zbus = "5.18"
-
-# UI
-iced = { version = "0.14", features = ["tokio"] }
 
 # Testing
 tempfile = "3.27"

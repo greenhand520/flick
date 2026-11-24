@@ -1,10 +1,10 @@
-//! Bootstrap contract tests.
+//! 引导契约测试。
 //!
-//! Verifies the daemon composition root:
-//! - Headless mode starts Runtime + IPC without Iced/Portal
-//! - IPC dispatcher correctly handles all commands
-//! - Shutdown cleans up socket
-//! - Portal unavailability doesn't crash daemon
+//! 验证守护进程的组合根目录：
+//! - 无头模式在没有 Iced/Portal 的情况下启动 Runtime + IPC
+//! - IPC 调度器正确处理所有命令
+//! - 关闭时清理套接字
+//! - Portal 不可用不会导致守护进程崩溃
 
 use async_trait::async_trait;
 use flick_adapters_linux::portal::{IntentSink, PortalShortcutAdapter};
@@ -38,7 +38,7 @@ mod bootstrap;
 #[path = "../src/lifecycle.rs"]
 mod lifecycle;
 
-// ─── Test helpers ───────────────────────────────────────────────────────────
+// ─── 测试辅助函数 ───────────────────────────────────────────────────────────
 
 struct TestRuntimeAdapter {
     runtime: Arc<ActionRuntime>,
@@ -183,7 +183,7 @@ async fn build_dispatcher_with_lifecycle(
     )
 }
 
-/// Build a test coordinator + runtime pair.
+/// 构建一个测试用的协调器 + 运行时组合。
 async fn build_test_stack() -> (
     Arc<ApplicationCoordinator>,
     Arc<ActionRuntime>,
@@ -202,7 +202,7 @@ async fn build_test_stack() -> (
     (coordinator, runtime, event_rx)
 }
 
-// ─── Tests ──────────────────────────────────────────────────────────────────
+// ─── 测试 ──────────────────────────────────────────────────────────────────
 
 #[tokio::test]
 async fn headless_runtime_registers_echo() {
@@ -242,7 +242,7 @@ async fn coordinator_toggle_emits_show_hide() {
 async fn coordinator_portal_intent_does_not_invoke_runtime() {
     let (coordinator, runtime, mut events) = build_test_stack().await;
 
-    // Record initial invocation count via a route check
+    // 通过路由检查记录初始调用次数
     let routes_before = runtime.route("echo", InputKind::PlainText).await;
 
     coordinator.handle_intent(UiIntent::ShowSearchPanel {
@@ -257,7 +257,7 @@ async fn coordinator_portal_intent_does_not_invoke_runtime() {
         other => panic!("expected ShowSearchPanel, got {other:?}"),
     }
 
-    // Runtime should not have been touched
+    // Runtime 不应被触及
     let routes_after = runtime.route("echo", InputKind::PlainText).await;
     assert_eq!(routes_before.len(), routes_after.len());
 }
@@ -457,12 +457,12 @@ async fn socket_cleanup_on_shutdown() {
     let tmpdir = tempfile::TempDir::new().unwrap();
     let socket_path = tmpdir.path().join("test.sock");
 
-    // Bind a server
+    // 绑定服务器
     let server = flick_ipc::unix::UnixSocketServer::bind(&socket_path);
     assert!(server.is_ok());
     assert!(socket_path.exists());
 
-    // Simulate cleanup
+    // 模拟清理
     drop(server);
     let _ = std::fs::remove_file(&socket_path);
     assert!(!socket_path.exists());

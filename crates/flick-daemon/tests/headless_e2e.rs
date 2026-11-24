@@ -1,11 +1,11 @@
-//! Headless end-to-end test.
+//! 无头端到端测试。
 //!
-//! Verifies the full daemon path in headless mode:
-//! - Starts a headless daemon with IPC
-//! - Sends commands via CLI-style IPC client
-//! - Verifies status, echo (UI + CLI callers), unknown action, shutdown
+//! 验证无头模式下的完整守护进程路径：
+//! - 启动带 IPC 的无头守护进程
+//! - 通过 CLI 风格的 IPC 客户端发送命令
+//! - 验证状态、echo（UI + CLI 调用方）、未知动作、关闭
 //!
-//! This test requires Unix socket access (fails in sandbox).
+//! 此测试需要 Unix Socket 访问权限（在沙箱中失败）。
 
 use flick_application::ports::{HostEventSink, RuntimePort};
 use flick_domain::*;
@@ -26,7 +26,7 @@ mod headless;
 #[path = "../src/lifecycle.rs"]
 mod lifecycle;
 
-// ─── Test daemon wiring ─────────────────────────────────────────────────────
+// ─── 测试守护进程接线 ─────────────────────────────────────────────────────
 
 struct TestRuntimeAdapter {
     runtime: Arc<flick_runtime::ActionRuntime>,
@@ -140,11 +140,11 @@ impl IpcDispatcher for TestDispatcher {
 async fn spawn_headless_daemon(tmpdir: &TempDir) -> (std::path::PathBuf, Arc<TestDispatcher>) {
     let socket_path = tmpdir.path().join("flick.sock");
 
-    // Create runtime + builtins
+    // 创建运行时 + 内置动作
     let runtime = Arc::new(flick_runtime::ActionRuntime::new());
     flick_builtins::register_phase0_builtins(&runtime).await;
 
-    // Create coordinator
+    // 创建协调器
     let events = Arc::new(Mutex::new(Vec::new()));
     let sink = Arc::new(TestEventSink {
         events: Arc::clone(&events),
@@ -164,7 +164,7 @@ async fn spawn_headless_daemon(tmpdir: &TempDir) -> (std::path::PathBuf, Arc<Tes
         socket_path: socket_path.clone(),
     });
 
-    // Bind IPC
+    // 绑定 IPC
     let server = unix::bind(&socket_path).expect("bind failed");
     let ipc_server = IpcServer::new(server, dispatcher.clone());
     tokio::spawn(async move {
@@ -186,7 +186,7 @@ async fn send_ipc(path: &std::path::Path, command: IpcCommand) -> IpcResponseEnv
     client.request(&request).await.expect("request failed")
 }
 
-// ─── Tests ──────────────────────────────────────────────────────────────────
+// ─── 测试 ──────────────────────────────────────────────────────────────────
 
 #[tokio::test]
 async fn e2e_status_reports_running() {
@@ -405,8 +405,8 @@ async fn e2e_socket_removed_after_server_drop() {
     assert!(socket_path.exists());
 
     drop(server);
-    // Socket file should still exist after drop (OS behavior),
-    // but the listener is closed. Manual cleanup is expected.
+    // 套接字文件在 drop 后应仍然存在（操作系统行为），
+    // 但监听器已关闭。需要手动清理。
     let _ = std::fs::remove_file(&socket_path);
     assert!(!socket_path.exists());
 }

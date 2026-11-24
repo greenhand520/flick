@@ -1,6 +1,6 @@
-//! Bootstrap helpers for flick-daemon.
+//! flick-daemon 的引导辅助函数。
 //!
-//! Shared types and functions used by main.rs for both graphical and headless modes.
+//! main.rs 共享的类型和函数，用于图形和无头两种模式。
 
 use crate::lifecycle::{DaemonLifecycle, ShutdownReason};
 use flick_adapters_linux::diagnostics::probe_session;
@@ -20,7 +20,7 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
-// ─── Adapter types ───────────────────────────────────────────────────────────
+// ─── 适配器类型 ───────────────────────────────────────────────────────────
 
 pub struct RuntimeAdapter {
     pub runtime: Arc<ActionRuntime>,
@@ -59,7 +59,7 @@ impl IntentSink for ChannelIntentSink {
     }
 }
 
-// ─── IPC Dispatcher ──────────────────────────────────────────────────────────
+// ─── IPC 调度器 ──────────────────────────────────────────────────────────
 
 pub struct DaemonIpcDispatcher {
     pub runtime: Arc<dyn RuntimePort>,
@@ -242,7 +242,7 @@ fn portal_snapshot_value(snapshot: &PortalSnapshot) -> serde_json::Value {
     })
 }
 
-// ─── Public helpers ──────────────────────────────────────────────────────────
+// ─── 公共辅助函数 ──────────────────────────────────────────────────────────
 
 pub fn create_ipc_dispatcher(
     runtime: Arc<ActionRuntime>,
@@ -298,13 +298,13 @@ pub async fn shutdown(mut handle: DaemonHandle) {
             Err(error) => error!(%error, "IPC server task panicked"),
         }
     }
-    // Task 4 intentionally removes only the socket. Runtime-directory ownership
-    // tracking belongs to Task 5, so never delete a parent directory here.
+    // Task 4 有意只移除套接字。运行时目录的所有权
+    // 跟踪属于 Task 5，因此此处绝不删除父目录。
     let _ = tokio::fs::remove_file(&handle.socket_path).await;
     info!("flick-daemon stopped");
 }
 
-// ─── Headless mode ──────────────────────────────────────────────────────────
+// ─── 无头模式 ──────────────────────────────────────────────────────────
 
 pub async fn run_headless(socket_path: std::path::PathBuf) -> Result<(), String> {
     use crate::headless::HeadlessRuntime;

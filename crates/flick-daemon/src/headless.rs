@@ -1,18 +1,18 @@
-//! Headless runtime: runs Runtime + IPC without Iced or Portal.
+//! 无头运行时：在没有 Iced 或 Portal 的情况下运行 Runtime + IPC。
 //!
-//! Used for CI, local development, and testing. Does not require
-//! a Wayland session.
+//! 用于 CI、本地开发和测试。不需要
+//! Wayland 会话。
 
 use flick_runtime::ActionRuntime;
 use std::sync::Arc;
 
-/// A handle to the headless runtime for testing.
+/// 用于测试的无头运行时句柄。
 pub struct HeadlessRuntime {
     pub runtime: Arc<ActionRuntime>,
 }
 
 impl HeadlessRuntime {
-    /// Create a new headless runtime with builtins registered.
+    /// 创建一个新的无头运行时，并注册内置动作。
     pub async fn new() -> Self {
         let runtime = Arc::new(ActionRuntime::new());
         flick_builtins::register_phase0_builtins(&runtime).await;

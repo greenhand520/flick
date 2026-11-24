@@ -7,8 +7,7 @@ use tokio_util::sync::CancellationToken;
 pub enum ShutdownReason {
     Signal,
     Ipc,
-    IcedExited,
-    IcedFailed,
+    ShellExited,
     StartupFailed,
 }
 #[derive(Clone)]
