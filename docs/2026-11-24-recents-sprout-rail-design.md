@@ -1,9 +1,11 @@
 # 搜索面板「最近工具·发芽条」交互与动画设计
 
-- 状态：Draft（待评审）
+- 状态：Draft（设计定稿；**初期不实现，仅存文档**）
 - 日期：2026-11-24
 - 相关：`crates/flick-shell-iced/src/panel.rs`、`crates/flick-domain/src/ui.rs`、`crates/flick-application/src/ports.rs`
 - 动画参考实现：`/mnt/LinuxData/eartholnpc/Downloads/SpotlightModeMorphSurface.qml`
+
+> **实现策略（重要）**：本设计**初期不实现，仅输出文档存档**。原因：这些功能目前都可以通过搜索框下方的 UI（路由结果列表）直接完成，发芽条属于后期可选的增强交互。§8 分期仅为未来落地时的路线图。
 
 ## 1. 背景与问题
 
@@ -31,6 +33,7 @@ Flick 的搜索面板当前由 `crates/flick-shell-iced` 实现，逻辑面板�
 - 不追求逐像素复刻 metaball SDF 融合（gpui 公开 API 目前不具备任意 fragment shader / SDF 能力，见 §4.3）。
 - 不做完整的 iced → gpui 全量迁移；本设计只覆盖该面板 + 该动画。
 - 不改动 iced shell 的既有对外行为（仅为共享状态机做等价抽取）。
+- 初期不落地实现；本阶段只输出设计文档（见实现策略）。
 
 ## 3. 交互规格（状态机）
 
@@ -60,7 +63,7 @@ Flick 的搜索面板当前由 `crates/flick-shell-iced` 实现，逻辑面板�
 ### 3.3 事件与转移
 
 - `Tab`（或点击 chevron）：`Collapsed → Revealing`（重新发芽）。
-- `Alt+1 … Alt+4`：激活左→右第 N 个最近工具/动作（**面板打开期间始终生效**，不依赖发芽条是否可见，便于肌肉记忆）。使用 `Alt` 修饰键以避免与"输入数字"冲突。
+- `Alt+1 … Alt+4`：激活左→右第 N 个最近工具/动作（**面板打开期间始终生效**，不依赖发芽条是否可见，便于肌肉记忆）。默认使用 `Alt` 修饰键以避免与"输入数字"冲突；**支持用户自定义改键**。
 - 用户在输入框**开始输入** → 触发 `Collapsing`，并让数字/字符回归文本输入。
 - `Esc` → `Collapsing`。
 - 选中某个圆钮（点击或 `Alt+n`）→ 面板 morph 到对应工具/动作（例如切到应用搜索 / 文件搜索 / 剪贴板 / OCR 的视图或预填查询）。
@@ -69,7 +72,7 @@ Flick 的搜索面板当前由 `crates/flick-shell-iced` 实现，逻辑面板�
 
 - **不显示数字角标**（角标影响美观）；hover 时以 tooltip 提示 `Alt+n`。
 - 停留时长 3s（可配置）。
-- 排序：**最近使用时间 + 使用频次**混合，取前 4；不足 4 个显示实际数量；recents 为空时发芽条不出现（可选：展示默认建议工具）。
+- 排序：**最近使用时间 + 使用频次**混合，取前 4；不足 4 个显示实际数量；recents 为空时展示兜底项：应用搜索、设置、文件搜索、剪贴板。
 
 ## 4. 动画规格
 
@@ -128,15 +131,15 @@ Flick 的搜索面板当前由 `crates/flick-shell-iced` 实现，逻辑面板�
 
 ### 5.4 数据来源
 
-- "最近使用的工具/动作"需新增：`RecentTool { id, title, icon, kind }` + 使用记录 `UsageRecord { tool_id, last_used_at, count }`。
-- 建议把使用记录持久化放在 runtime / application 层（跨会话记忆），而非 UI 层。
+- 单元是**工具与动作混合**：统一抽象为 `RecentTool { id, title, icon, kind }`（`kind` 区分 tool / action），来源可以是插件工具，也可以是插件内的具体动作。
+- 使用记录 `UsageRecord { tool_id, last_used_at, count }` **持久化在 runtime 层**（跨会话记忆），不放 UI 层。
 
 ## 6. 错误与边界
 
-- **recents 为空**：发芽条不出现（或展示默认建议），不阻塞面板。
+- **recents 为空**：展示兜底项（应用搜索、设置、文件搜索、剪贴板），不阻塞面板。
 - **不足 4 个**：按实际数量发芽，索引连续。
 - **动画期间输入**：立即转入 `Collapsing`，数字回归文本；不得吞掉按键。
-- **`Alt+数字` 与桌面环境冲突**：部分 DE 将 `Alt+1..9` 绑给全局切换窗口；Wayland 下应用内通常无碍，需实测并在必要时改用其它修饰键。
+- **`Alt+数字` 与桌面环境冲突**：部分 DE 将 `Alt+1..9` 绑给全局切换窗口；Wayland 下应用内通常无碍。**快捷键支持用户自定义**，冲突时可改修饰键/组合。
 - **无 gpui crate**：需先完成 shell 骨架，本动画依赖它。
 - **多显示器 / Wayland 定位**：沿用现有面板窗口的定位策略，不在本设计范围。
 
@@ -148,13 +151,19 @@ Flick 的搜索面板当前由 `crates/flick-shell-iced` 实现，逻辑面板�
 
 ## 8. 分期
 
+> 注：按上文实现策略，本设计初期不实现，以下仅为未来落地路线图。
+
 - **Phase 1**：抽 `flick-shell-core` + 协议新增 + 状态机与单测 + `flick-shell-gpui` 原型（退化方案 1，无 gooey）。
 - **Phase 2**：recents 持久化（runtime 侧）+ 排序策略打磨。
 - **Phase 3**（可选）：颈桥近似 / 若 gpui 支持 shader 再做真 metaball + blur。
 
-## 9. 未决问题
+## 9. 决策记录
 
-- 发芽条单元是"工具（plugin）"还是"动作（action）"，或二者混合？
-- recents 持久化的具体归属（runtime vs application）与容量策略。
-- `Alt+数字` 在目标桌面环境（GNOME / KDE / Hyprland）下的实际可用性。
-- 是否需要"默认建议工具"作为 recents 为空时的兜底。
+本轮评审已确定：
+
+- **发芽条单元**：工具（plugin）与动作（action）**混合**，统一为 `RecentTool`（`kind` 区分）。
+- **recents 持久化**：归属 **runtime 层**；具体容量/淘汰策略留到实现阶段再定。
+- **快捷键**：默认 `Alt+1..4`，**支持用户自定义改键**。
+- **recents 为空兜底**：应用搜索、设置、文件搜索、剪贴板。
+
+遗留（不影响本设计存档）：具体容量/淘汰策略、激活协议路径（复用 `QueryChanged` vs 新增 `ActivateTool`）在实现阶段确定。
