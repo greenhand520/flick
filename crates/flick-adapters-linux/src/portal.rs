@@ -1,8 +1,7 @@
-//! Portal GlobalShortcuts lifecycle policy.
+//! Portal GlobalShortcuts 生命周期策略。
 //!
-//! This module owns state transitions, cancellation, and recovery policy. A
-//! [`PortalClient`] owns platform-specific Portal/D-Bus objects and reports
-//! only normalized bindings, errors, and events to this adapter.
+//! 本模块负责状态转换、取消和恢复策略。[`PortalClient`] 负责持有特定于平台的
+//! Portal/D-Bus 对象，并且只向本适配器报告规范化后的绑定、错误和事件。
 
 use crate::portal_client::{PortalClient, PortalEvent, PortalSessionId};
 use crate::session::{ShortcutBinding, ShortcutError, show_search_shortcut_id};
@@ -21,7 +20,7 @@ use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
-/// Trait for forwarding UI intents (show/hide search panel).
+/// 用于转发 UI 意图（显示/隐藏搜索面板）的 trait。
 pub trait IntentSink: Send + Sync {
     fn send_intent(&self, intent: UiIntent);
 }
@@ -61,16 +60,15 @@ impl From<&PortalEvent> for ProcessedPortalEvent {
     }
 }
 
-/// The Portal GlobalShortcuts adapter.
+/// Portal GlobalShortcuts 适配器。
 ///
-/// It enforces the Phase 0 invariants: every Portal session attempts a bind at
-/// most once; only an explicit configuration command can bind; automatic
-/// recovery merely creates a session and lists shortcuts.
+/// 它强制实施 Phase 0 的不变量：每个 Portal 会话最多尝试一次绑定；只有显式的
+/// 配置命令才能执行绑定；自动恢复仅创建会话并列出快捷键。
 #[derive(Clone)]
 pub struct PortalShortcutAdapter {
     state: Arc<Mutex<PortalInner>>,
-    /// Serializes lifecycle operation startup, recovery task registration, and
-    /// shutdown. State mutexes are never held across Portal client awaits.
+    /// 串行化生命周期操作的启动、恢复任务的注册以及关闭。状态互斥锁绝不会在
+    /// 等待 Portal 客户端期间被持有。
     operation_lock: Arc<Mutex<()>>,
     lifecycle: CancellationToken,
     intent_sink: Arc<dyn IntentSink>,
@@ -85,13 +83,13 @@ struct PortalInner {
     reconnect_attempt: Option<u32>,
     backoff: RecoveryBackoff,
     bind_attempted_in_current_session: bool,
-    /// Stable host identity of the session that may affect current state.
+    /// 可能影响当前状态的会话的稳定宿主标识。
     active_portal_session_id: Option<PortalSessionId>,
-    /// Changes whenever a session is opened or invalidated. Bind completion
-    /// must match this generation before it may publish `Bound`.
+    /// 每当会话被打开或失效时都会变化。绑定完成操作必须与此代次匹配，
+    /// 才能发布 `Bound` 状态。
     session_generation: u64,
-    /// Changes whenever recovery is scheduled, manually invalidated, or shut
-    /// down. Delayed tasks must match it before opening a session.
+    /// 每当安排恢复、手动失效或关闭时都会变化。延迟任务必须先与它匹配，
+    /// 才能打开会话。
     recovery_generation: u64,
     event_consumer_started: bool,
     recovery_scheduled: bool,
@@ -123,15 +121,15 @@ impl PortalInner {
 }
 
 impl PortalShortcutAdapter {
-    /// Builds an adapter with a deliberately unavailable placeholder client.
+    /// 使用一个故意不可用的占位客户端构造适配器。
     ///
-    /// Task 7 will wire the real [`crate::portal_client::AshpdPortalClient`]
-    /// into the daemon; this constructor never simulates a successful binding.
+    /// Task 7 会将真正的 [`crate::portal_client::AshpdPortalClient`] 接入守护进程；
+    /// 此构造函数绝不模拟成功的绑定。
     pub fn new(intent_sink: Arc<dyn IntentSink>) -> Self {
         Self::new_with_client(intent_sink, Arc::new(UnavailablePortalClient::new()))
     }
 
-    /// Builds an adapter with an injected platform client.
+    /// 使用注入的平台客户端构造适配器。
     pub fn new_with_client(
         intent_sink: Arc<dyn IntentSink>,
         client: Arc<dyn PortalClient>,
@@ -165,7 +163,7 @@ impl PortalShortcutAdapter {
         }
     }
 
-    /// Returns the operator-visible shortcut state.
+    /// 返回操作员可见的快捷键状态。
     pub async fn state(&self) -> ShortcutState {
         self.state.lock().await.state.clone()
     }
@@ -179,8 +177,8 @@ impl PortalShortcutAdapter {
         receiver
     }
 
-    /// Starts one Portal event consumer, creates a session, and lists bindings.
-    /// It never opens authorization UI or attempts a bind.
+    /// 启动一个 Portal 事件消费者，创建会话并列出绑定。
+    /// 它绝不打开授权 UI，也不尝试执行绑定。
     pub async fn initialize(&self) -> Result<PortalSnapshot, ShortcutError> {
         let _operation = self.operation_lock.lock().await;
         self.ensure_running().await?;
@@ -188,7 +186,7 @@ impl PortalShortcutAdapter {
         self.open_session_and_list().await
     }
 
-    /// Explicitly binds the show-search shortcut with the requested trigger.
+    /// 使用请求的触发器显式绑定 show-search 快捷键。
     pub async fn configure_search_shortcut(
         &self,
         preferred_trigger: &str,
@@ -212,8 +210,8 @@ impl PortalShortcutAdapter {
                 return Err(shutdown_error());
             }
             inner.state = ShortcutState::Configuring;
-            // This must happen before awaiting Portal: BindShortcuts is
-            // single-use for the session even when its request fails.
+            // 这必须在等待 Portal 之前完成：即使请求失败，BindShortcuts
+            // 对该会话而言也是一次性的。
             inner.bind_attempted_in_current_session = true;
             inner.session_generation
         };
@@ -294,8 +292,8 @@ impl PortalShortcutAdapter {
         }
     }
 
-    /// Explicitly opens a new Portal session and lists current bindings.
-    /// This method intentionally never calls `bind_show_search`.
+    /// 显式打开一个新的 Portal 会话并列出当前绑定。
+    /// 此方法有意绝不调用 `bind_show_search`。
     pub async fn reconnect(&self) -> Result<PortalSnapshot, ShortcutError> {
         let _operation = self.operation_lock.lock().await;
         self.ensure_running().await?;
@@ -304,18 +302,16 @@ impl PortalShortcutAdapter {
         self.open_session_and_list().await
     }
 
-    /// Returns the current operator-facing diagnostics snapshot.
+    /// 返回当前面向操作员的诊断快照。
     pub async fn diagnostics(&self) -> PortalSnapshot {
         self.state.lock().await.snapshot()
     }
 
-    /// Stops local event/recovery tasks and closes the platform session.
+    /// 停止本地事件/恢复任务并关闭平台会话。
     ///
-    /// Shutdown is announced and cancellation is signalled *before* waiting
-    /// for `operation_lock`: a Portal call that currently owns that lock must
-    /// be able to leave through its cancellation branch. Task creation and
-    /// handle registration remain serialized by `operation_lock`, so after
-    /// cancellation this method can safely collect every registered task.
+    /// 在等待 `operation_lock` *之前*，会先宣布关闭并发出取消信号：当前持有该锁的
+    /// Portal 调用必须能够经由其取消分支退出。任务创建和句柄注册仍由
+    /// `operation_lock` 串行化，因此在取消之后，本方法可以安全地收集所有已注册的任务。
     pub async fn shutdown(&self) {
         let should_close = {
             let mut inner = self.state.lock().await;
@@ -340,10 +336,9 @@ impl PortalShortcutAdapter {
 
         self.lifecycle.cancel();
 
-        // Lifecycle task creation and handle registration occur while normal
-        // operations hold this lock. Cancellation above guarantees that a
-        // currently blocked Portal call yields it promptly instead of making
-        // shutdown wait for external Portal I/O forever.
+        // 生命周期任务的创建和句柄的注册发生在正常操作持有此锁期间。上面的取消操作
+        // 保证当前被阻塞的 Portal 调用会迅速让出该锁，而不是让关闭操作永远等待
+        // 外部 Portal I/O。
         let _operation = self.operation_lock.lock().await;
         let (event_task, recovery_task) = {
             let mut inner = self.state.lock().await;
@@ -362,7 +357,7 @@ impl PortalShortcutAdapter {
         Ok(())
     }
 
-    /// Called only while `operation_lock` is held.
+    /// 仅在持有 `operation_lock` 时调用。
     async fn invalidate_pending_recovery_locked(&self) {
         let task = {
             let mut inner = self.state.lock().await;
@@ -373,7 +368,7 @@ impl PortalShortcutAdapter {
         abort_and_join(task).await;
     }
 
-    /// Called only while `operation_lock` is held.
+    /// 仅在持有 `operation_lock` 时调用。
     async fn ensure_event_consumer_locked(&self) -> Result<(), ShortcutError> {
         let mut inner = self.state.lock().await;
         if inner.event_consumer_started {
@@ -416,8 +411,8 @@ impl PortalShortcutAdapter {
             }
         });
 
-        // `operation_lock` is still held, so shutdown cannot observe a
-        // spawn-before-registration window.
+        // `operation_lock` 仍被持有，因此关闭操作无法观察到
+        // “先生成后注册”的窗口期。
         self.state.lock().await.event_task = Some(task);
         Ok(())
     }
@@ -494,11 +489,10 @@ impl PortalShortcutAdapter {
                     }
                 };
 
-                // Forwarding was gated until the state/id publication above.
-                // Process anything already observed by the subscribed streams
-                // while this lifecycle operation still owns `operation_lock`,
-                // so a pre-publication close cannot escape as a transient
-                // Bound/Unconfigured result.
+                // 在上面的状态/id 发布之前，转发一直被门控。
+                // 当本生命周期操作仍持有 `operation_lock` 时，处理订阅流
+                // 已观察到的所有事件，这样发布前的关闭就不会以瞬时的
+                // Bound/Unconfigured 结果逃逸出去。
                 for event in buffered_events {
                     self.handle_portal_event_while_operation_locked(event).await;
                 }
@@ -548,9 +542,8 @@ impl PortalShortcutAdapter {
         self.handle_portal_event_inner(event, false).await;
     }
 
-    /// Handles events returned by the client activation handshake while the
-    /// caller already owns `operation_lock`. Recovery scheduling must not try
-    /// to acquire that non-reentrant lock again.
+    /// 处理客户端激活握手返回的事件，此时调用方已持有 `operation_lock`。
+    /// 恢复调度不得再次尝试获取该不可重入的锁。
     async fn handle_portal_event_while_operation_locked(&self, event: PortalEvent) {
         self.handle_portal_event_inner(event, true).await;
     }
@@ -568,10 +561,9 @@ impl PortalShortcutAdapter {
                 if self.event_matches_active_session(session_id).await {
                     if shortcut_id == show_search_shortcut_id() {
                         debug!(shortcut_id = %shortcut_id, "Portal shortcut activated");
-                        // Portal activation tokens are never surfaced to Flick UI.
-                        self.intent_sink.send_intent(UiIntent::ShowSearchPanel {
-                            activation_token: None,
-                        });
+                        // 快捷键是切换语义：可见则收起、不可见则唤起。
+                        // Portal 的激活令牌不会暴露给 Flick UI。
+                        self.intent_sink.send_intent(UiIntent::ToggleSearchPanel);
                     } else {
                         debug!(shortcut_id = %shortcut_id, "Ignoring unrelated Portal shortcut activation");
                     }
@@ -640,9 +632,8 @@ impl PortalShortcutAdapter {
             && inner.active_portal_session_id == Some(session_id)
     }
 
-    /// Invalidates the current session immediately, then registers one delayed
-    /// recovery. The invalidation is what prevents an in-flight bind from later
-    /// publishing `Bound`.
+    /// 立即使当前会话失效，然后注册一个延迟恢复。正是这个失效操作阻止了
+    /// 进行中的绑定稍后发布 `Bound`。
     async fn begin_recovery_for_session(
         &self,
         session_id: PortalSessionId,
@@ -662,8 +653,7 @@ impl PortalShortcutAdapter {
             .await;
     }
 
-    /// Variant for activation-handshake events when the caller already holds
-    /// `operation_lock`.
+    /// 当调用方已持有 `operation_lock` 时，用于处理激活握手事件的变体。
     async fn begin_recovery_for_session_while_operation_locked(
         &self,
         session_id: PortalSessionId,
@@ -681,8 +671,7 @@ impl PortalShortcutAdapter {
             .await;
     }
 
-    /// Performs the identity check and every recovery-visible state mutation
-    /// in one state critical section.
+    /// 在一个状态临界区中执行身份检查以及所有对恢复可见的状态变更。
     async fn prepare_recovery_for_session(
         &self,
         session_id: PortalSessionId,
@@ -719,7 +708,7 @@ impl PortalShortcutAdapter {
         Some((recovery_generation, attempt, delay))
     }
 
-    /// Called only while `operation_lock` is held.
+    /// 仅在持有 `operation_lock` 时调用。
     fn schedule_recovery_while_operation_locked<'a>(
         &'a self,
         (recovery_generation, attempt, delay): (u64, u32, std::time::Duration),
@@ -761,8 +750,8 @@ impl PortalShortcutAdapter {
                 adapter.finish_recovery(recovery_generation).await;
             });
 
-            // `operation_lock` is still held, so shutdown cannot observe a
-            // spawn-before-registration window.
+            // `operation_lock` 仍被持有，因此关闭操作无法观察到
+            // “先生成后注册”的窗口期。
             let mut inner = self.state.lock().await;
             if inner.recovery_is_current(recovery_generation) && !self.lifecycle.is_cancelled() {
                 inner.recovery_task = Some(task);
@@ -831,8 +820,8 @@ fn shutdown_error() -> ShortcutError {
     }
 }
 
-/// Deliberately non-functional client used by [`PortalShortcutAdapter::new`]
-/// until Task 7 wires [`crate::portal_client::AshpdPortalClient`] into the daemon.
+/// 故意不工作的客户端，由 [`PortalShortcutAdapter::new`] 使用，
+/// 直到 Task 7 将 [`crate::portal_client::AshpdPortalClient`] 接入守护进程。
 struct UnavailablePortalClient {
     receiver: StdMutex<Option<mpsc::UnboundedReceiver<PortalEvent>>>,
 }
@@ -952,8 +941,8 @@ mod tests {
             self.activated_session_ids.lock().unwrap().clone()
         }
 
-        /// Models a Portal signal that the subscribed listener observed before
-        /// Flick confirmed publication of the returned host session id.
+        /// 模拟这样一个 Portal 信号：订阅的监听器在 Flick 确认发布返回的宿主
+        /// 会话 id 之前就观察到了它。
         fn buffer_before_activation(&self, event: PortalEvent) {
             self.buffered_before_activation
                 .lock()
@@ -1030,8 +1019,8 @@ mod tests {
         let adapter = PortalShortcutAdapter::new_with_client(intent_sink.clone(), client.clone());
 
         adapter.initialize().await.unwrap();
-        // The fake has subscribed to B already, but keeps this signal private
-        // until the adapter publishes B and explicitly activates forwarding.
+        // 这个假客户端已经订阅了 B，但会对此信号保密，
+        // 直到适配器发布 B 并显式激活转发为止。
         client.buffer_before_activation(PortalEvent::SessionClosed {
             session_id: session_b,
         });
@@ -1114,9 +1103,7 @@ mod tests {
         assert_eq!(client.bind_calls(), 0);
         assert!(matches!(
             intent_sink.intents().as_slice(),
-            [UiIntent::ShowSearchPanel {
-                activation_token: None
-            }]
+            [UiIntent::ToggleSearchPanel]
         ));
     }
 }

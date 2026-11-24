@@ -1,8 +1,8 @@
-//! Domain protocol tests: verifying the core types work as designed.
+//! 领域协议测试：验证核心类型按设计工作。
 
 use flick_domain::*;
 
-// ─── UiIntent is never an Action invocation ──────────────────────────────────
+// ─── UiIntent 从不是动作调用 ──────────────────────────────────
 
 #[test]
 fn portal_intent_is_not_an_action_request() {
@@ -18,7 +18,7 @@ fn hide_intent_is_not_an_action_request() {
     assert!(!intent.is_action_invocation());
 }
 
-// ─── ActionRequest construction ──────────────────────────────────────────────
+// ─── ActionRequest 构造 ──────────────────────────────────────────────
 
 #[test]
 fn action_request_keeps_direct_caller_and_unique_invocation() {
@@ -35,17 +35,17 @@ fn echo_request_has_correct_action_id() {
 
 #[test]
 fn shortcut_caller_cannot_be_used_for_echo_in_phase0() {
-    // Verify CallerKind::Shortcut exists but we document it's not for Phase 0 echo
+    // 验证 CallerKind::Shortcut 存在，但我们记录它不用于 Phase 0 的 echo
     let caller = Caller {
         kind: CallerKind::Shortcut,
         id: "global-hotkey".into(),
     };
     assert_eq!(caller.kind, CallerKind::Shortcut);
-    // In Phase 0, only Ui and Cli should be used for Echo.
-    // This test documents the boundary; enforcement is in the application layer.
+    // 在 Phase 0 中，Echo 只应使用 Ui 和 Cli。
+    // 此测试记录该边界；强制检查在应用层。
 }
 
-// ─── ID validation ───────────────────────────────────────────────────────────
+// ─── 标识符验证 ───────────────────────────────────────────────────────────
 
 #[test]
 fn action_id_rejects_blank_values() {
@@ -78,7 +78,7 @@ fn query_generation_default_is_initial() {
     assert_eq!(g.value(), 1);
 }
 
-// ─── JSON serialization ──────────────────────────────────────────────────────
+// ─── JSON 序列化 ──────────────────────────────────────────────────────
 
 #[test]
 fn action_outcome_data_serializes_stably() {

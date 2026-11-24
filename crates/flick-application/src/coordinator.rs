@@ -105,6 +105,10 @@ impl ApplicationCoordinator {
                 self.panel_visible.store(false, Ordering::SeqCst);
                 self.sink.send(HostToUi::HideSearchPanel);
             }
+            UiIntent::ToggleSearchPanel => {
+                // 快捷键切换：可见则收起、否则唤出。
+                self.toggle_search_panel();
+            }
         }
     }
 

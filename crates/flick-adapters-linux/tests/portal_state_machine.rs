@@ -1,4 +1,4 @@
-//! Deterministic Portal shortcut lifecycle tests.
+//! 确定性的 Portal 快捷键生命周期测试。
 
 use async_trait::async_trait;
 use flick_adapters_linux::portal::{IntentSink, PortalShortcutAdapter};
@@ -21,7 +21,7 @@ type BindRelease = oneshot::Sender<BindResult>;
 type OpenGate = oneshot::Receiver<()>;
 type OpenRelease = oneshot::Sender<()>;
 
-/// Fake intent sink that records received intents.
+/// 记录所接收意图的假意图接收端。
 struct FakeIntentSink {
     intents: Mutex<Vec<UiIntent>>,
     next_intent_observer: Mutex<Option<oneshot::Sender<()>>>,
@@ -63,8 +63,8 @@ struct FakePortalClient {
     listed: Mutex<Vec<ShortcutBinding>>,
     next_session_id: Mutex<u64>,
     active_session_id: Mutex<Option<PortalSessionId>>,
-    /// Models a client-owned remote session after CreateSession succeeds but
-    /// before open/list returns it to the adapter.
+    /// 模拟 CreateSession 成功之后、open/list 将其返回给适配器之前，
+    /// 客户端所持有的远端会话。
     pending_session_id: Mutex<Option<PortalSessionId>>,
     bind_results: Mutex<VecDeque<BindResult>>,
     open_and_list_calls: Mutex<u32>,
@@ -440,10 +440,8 @@ async fn show_search_activation_creates_exactly_one_show_intent() {
     let intents = intent_sink.intents();
     assert_eq!(intents.len(), 1);
     match &intents[0] {
-        UiIntent::ShowSearchPanel { activation_token } => {
-            assert!(activation_token.is_none());
-        }
-        _ => panic!("expected a show-search intent"),
+        UiIntent::ToggleSearchPanel => {}
+        _ => panic!("expected a toggle-search intent"),
     }
 }
 
@@ -508,8 +506,8 @@ async fn shutdown_closes_a_pending_opened_session_exactly_once() {
         Err(ShortcutError::SessionError { .. })
     ));
 
-    // Releasing the fake after the cancelled open has been dropped cannot
-    // re-register the session or produce a second client close.
+    // 在被取消的 open 已丢弃之后释放假客户端，不会重新注册会话，
+    // 也不会产生第二次客户端关闭。
     fake.release_open();
     assert_eq!(fake.close_calls(), 1);
     assert!(fake.has_no_registered_session());
@@ -617,8 +615,8 @@ async fn shutdown_cancels_a_blocked_bind_without_resurrecting_live_state() {
     ));
     assert_eq!(fake.close_calls(), 1);
 
-    // The cancelled bind future drops its receiver. A late Portal completion
-    // must therefore be harmless and must not restore active/Bound state.
+    // 被取消的绑定 future 会丢弃其接收端。因此，迟到的 Portal 完成事件
+    // 必须是无害的，且不得恢复 active/Bound 状态。
     fake.release_bind(Ok(vec![show_search_binding("Super+Space")]));
     yield_runtime().await;
 

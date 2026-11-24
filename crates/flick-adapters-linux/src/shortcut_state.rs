@@ -1,28 +1,28 @@
-//! Portal GlobalShortcuts state and diagnostics models.
+//! Portal GlobalShortcuts 状态与诊断模型。
 
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
-/// Operator-visible state of the Portal GlobalShortcuts adapter.
+/// 操作员可见的 Portal GlobalShortcuts 适配器状态。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ShortcutState {
-    /// The desktop Portal capability cannot currently be used.
+    /// 当前无法使用桌面 Portal 能力。
     Unavailable { reason: String },
-    /// A Portal session is available but does not list show-search.
+    /// Portal 会话可用，但未列出 show-search。
     Unconfigured,
-    /// An explicit user-requested binding operation is awaiting Portal.
+    /// 用户显式请求的绑定操作正在等待 Portal 响应。
     Configuring,
-    /// The active Portal session lists the show-search shortcut.
+    /// 当前活跃的 Portal 会话列出了 show-search 快捷键。
     Bound,
-    /// The user cancelled or rejected the Portal binding request.
+    /// 用户取消或拒绝了 Portal 绑定请求。
     Denied,
-    /// A closed/failed session has one scheduled open-and-list recovery.
+    /// 已关闭/失败的会话已安排一次“打开并列出”恢复操作。
     Recovering { attempt: u32 },
-    /// A Portal, transport, or protocol operation failed.
+    /// Portal、传输或协议操作失败。
     Error { operation: String, message: String },
 }
 
-/// Last Portal error retained for operator diagnostics.
+/// 为操作员诊断保留的最近一次 Portal 错误。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PortalDiagnosticError {
     pub operation: String,
@@ -30,7 +30,7 @@ pub struct PortalDiagnosticError {
     pub message: String,
 }
 
-/// Serializable snapshot of shortcut state and its active Portal session.
+/// 快捷键状态及其活跃 Portal 会话的可序列化快照。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PortalSnapshot {
     pub state: ShortcutState,
@@ -40,7 +40,7 @@ pub struct PortalSnapshot {
     pub reconnect_attempt: Option<u32>,
 }
 
-/// Backoff schedule for one automatic recovery after a Portal failure.
+/// Portal 失败后一次自动恢复的退避计划。
 pub struct RecoveryBackoff {
     schedule: Vec<Duration>,
     max_interval: Duration,
@@ -59,7 +59,7 @@ impl RecoveryBackoff {
         }
     }
 
-    /// Get the delay for the given attempt (0-indexed).
+    /// 获取给定尝试次数对应的延迟（从 0 开始计数）。
     pub fn delay_for_attempt(&self, attempt: u32) -> Duration {
         let idx = attempt as usize;
         if idx < self.schedule.len() {

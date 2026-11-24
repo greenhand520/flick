@@ -1,9 +1,9 @@
-//! `flick-domain` — Core domain types for the Flick runtime.
+//! `flick-domain` — Flick 运行时的核心领域类型。
 //!
-//! This crate contains framework-agnostic types shared by UI, CLI, Runtime,
-//! and IPC layers. It has no dependency on Iced, Portal, D-Bus, SQLite,
-//! Tokio (except `CancellationToken` in `ActionContext`), XDG, systemd,
-//! or Unix Socket.
+//! 本 crate 包含 UI、CLI、Runtime 和 IPC 层共享的
+//! 与框架无关的类型。它不依赖 Iced、Portal、D-Bus、SQLite、
+//! Tokio（`ActionContext` 中的 `CancellationToken` 除外）、XDG、systemd、
+//! 或 Unix Socket。
 
 pub mod action;
 pub mod caller;
@@ -13,7 +13,7 @@ pub mod input;
 pub mod route;
 pub mod ui;
 
-// Re-export key types at crate root for convenience.
+// 为方便使用，在 crate 根目录重新导出关键类型。
 pub use action::{
     ActionContext, ActionDescriptor, ActionInput, ActionOutcome, ActionRequest, ConcurrencyPolicy,
     Deadline, InputKind, Matcher,

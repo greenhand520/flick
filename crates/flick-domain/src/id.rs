@@ -1,11 +1,11 @@
-//! Identity types for invocations, actions, and query generations.
+//! 调用、动作和查询代次的标识符类型。
 
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::sync::Arc;
 use uuid::Uuid;
 
-/// Unique identifier for a single Action invocation.
+/// 单次动作调用的唯一标识符。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct InvocationId(Uuid);
 
@@ -27,9 +27,9 @@ impl fmt::Display for InvocationId {
     }
 }
 
-/// Monotonically increasing generation for query results.
+/// 查询结果单调递增的代次。
 ///
-/// Used to ensure stale results never overwrite current ones.
+/// 用于确保过期的结果永远不会覆盖当前结果。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct QueryGeneration(u64);
 
@@ -57,14 +57,14 @@ impl fmt::Display for QueryGeneration {
     }
 }
 
-/// Identifier for a registered Action.
+/// 已注册动作的标识符。
 ///
-/// Must be non-blank. Format: `flick.builtin.<name>.v<N>.<operation>`.
+/// 不得为空白。格式：`flick.builtin.<name>.v<N>.<operation>`。
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ActionId(Arc<str>);
 
 impl ActionId {
-    /// Create a new `ActionId`, rejecting blank values.
+    /// 创建一个新的 `ActionId`，拒绝空白值。
     pub fn new(id: impl Into<String>) -> Result<Self, crate::ActionError> {
         let s: String = id.into();
         let trimmed = s.trim();
@@ -76,7 +76,7 @@ impl ActionId {
         Ok(Self(Arc::from(trimmed)))
     }
 
-    /// Create an `ActionId` without validation (for internal/builtin use).
+    /// 不经验证创建 `ActionId`（供内部/内置使用）。
     pub fn from_static(id: &'static str) -> Self {
         Self(Arc::from(id))
     }

@@ -1,9 +1,9 @@
-//! Search query types.
+//! 搜索查询类型。
 
 use crate::action::InputKind;
 use serde::{Deserialize, Serialize};
 
-/// A search query submitted by the user.
+/// 用户提交的搜索查询。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SearchQuery {
     pub raw_text: String,

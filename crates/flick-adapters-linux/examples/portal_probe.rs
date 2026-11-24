@@ -1,9 +1,9 @@
-//! Portal capability probe.
+//! Portal 能力探测。
 //!
-//! Run: `cargo run -p flick-adapters-linux --example portal_probe`
+//! 运行：`cargo run -p flick-adapters-linux --example portal_probe`
 //!
-//! Opens and lists a GlobalShortcuts session for diagnostics only. It does not
-//! call BindShortcuts and it never forwards UI intents.
+//! 仅为诊断而打开并列出一个 GlobalShortcuts 会话。它不会调用 BindShortcuts，
+//! 也绝不转发 UI 意图。
 
 use flick_adapters_linux::{
     portal::{IntentSink, PortalShortcutAdapter},

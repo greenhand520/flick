@@ -151,7 +151,30 @@ fn run_graphical(socket_path: PathBuf) -> Result<(), String> {
                     Arc::new(AshpdPortalClient::new()),
                 ));
                 match portal.initialize().await {
-                    Ok(snapshot) => tracing::info!(?snapshot, "Portal initialized"),
+                    Ok(snapshot) => {
+                        tracing::info!(?snapshot, "Portal initialized");
+                        // 启动即申请全局快捷键：GNOME 的 GlobalShortcuts 走
+                        // BindShortcuts，会弹一次系统授权对话框。放到后台任务里
+                        // 执行，避免阻塞 IPC/UI 启动。设置 FLICK_DISABLE_AUTO_BIND=1
+                        // 可关闭自动绑定（改用 `flick shortcuts configure`）。
+                        if std::env::var_os("FLICK_DISABLE_AUTO_BIND").is_none() {
+                            let bind_portal = Arc::clone(&portal);
+                            tokio::spawn(async move {
+                                let trigger =
+                                    flick_adapters_linux::session::show_search_preferred_trigger();
+                                match bind_portal.configure_search_shortcut(trigger).await {
+                                    Ok(binding) => tracing::info!(
+                                        ?binding,
+                                        "Portal show-search shortcut bound at startup"
+                                    ),
+                                    Err(error) => tracing::warn!(
+                                        ?error,
+                                        "Portal startup binding failed; run `flick shortcuts configure` to bind manually"
+                                    ),
+                                }
+                            });
+                        }
+                    }
                     Err(error) => {
                         let snapshot = portal.diagnostics().await;
                         tracing::warn!(

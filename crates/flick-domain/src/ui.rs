@@ -1,80 +1,82 @@
-//! UI ↔ Host communication protocol.
+//! UI ↔ Host 通信协议。
 
 use crate::action::{ActionInput, ActionOutcome};
 use crate::id::{ActionId, InvocationId, QueryGeneration};
 use crate::route::RouteItem;
 use serde::{Deserialize, Serialize};
 
-// ─── UI Intent (from Portal / external triggers) ─────────────────────────────
+// ─── UI 意图（来自 Portal / 外部触发器）─────────────────────────────
 
-/// An intent to control Flick's own UI state.
+/// 用于控制 Flick 自身 UI 状态的意图。
 ///
-/// These are NOT Action invocations. Portal `show-search` produces a
-/// `UiIntent::ShowSearchPanel`, which the coordinator converts to a
-/// `HostToUi::ShowSearchPanel` message.
+/// 这些不是动作调用。Portal 的 `show-search` 会产生一个
+/// `UiIntent::ShowSearchPanel`，协调器将其转换为
+/// `HostToUi::ShowSearchPanel` 消息。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum UiIntent {
     ShowSearchPanel { activation_token: Option<String> },
     HideSearchPanel,
+    /// 切换搜索面板：不可见则唤起、可见则收起。全局快捷键使用此语义。
+    ToggleSearchPanel,
 }
 
 impl UiIntent {
-    /// Whether this intent represents an action invocation (it never does).
+    /// 此意图是否表示一次动作调用（永远不会）。
     pub fn is_action_invocation(&self) -> bool {
         false
     }
 }
 
-// ─── UI → Host messages ──────────────────────────────────────────────────────
+// ─── UI → Host 消息 ──────────────────────────────────────────────────────
 
-/// Messages from the UI to the Host (coordinator).
+/// 从 UI 发往 Host（协调器）的消息。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum UiToHost {
-    /// User typed/changed the search query.
+    /// 用户输入/更改了搜索查询。
     QueryChanged {
         generation: QueryGeneration,
         text: String,
     },
-    /// User selected a route item to invoke.
+    /// 用户选择了一个路由项进行调用。
     Invoke {
         invocation_id: InvocationId,
         action_id: ActionId,
         input: ActionInput,
     },
-    /// User cancelled an in-flight invocation.
+    /// 用户取消了一个进行中的调用。
     Cancel { invocation_id: InvocationId },
-    /// The search panel was closed by the user.
+    /// 搜索面板被用户关闭。
     SearchPanelClosed,
 }
 
-// ─── Host → UI messages ──────────────────────────────────────────────────────
+// ─── Host → UI 消息 ──────────────────────────────────────────────────────
 
-/// Messages from the Host (coordinator) to the UI.
+/// 从 Host（协调器）发往 UI 的消息。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum HostToUi {
-    /// The daemon is stopping; the shell must leave its event loop.
+    /// 守护进程正在停止；外壳必须退出其事件循环。
     Shutdown,
-    /// Route results for a search query.
+    /// 搜索查询的路由结果。
     Routes {
         generation: QueryGeneration,
         items: Vec<RouteItem>,
     },
-    /// An invocation completed.
+    /// 一次调用已完成。
     InvocationCompleted {
         invocation_id: InvocationId,
         outcome: ActionOutcome,
     },
-    /// Runtime status update.
+    /// Runtime 状态更新。
     RuntimeStatus(RuntimeStatus),
-    /// Show the search panel (with optional activation token from Portal).
+    /// 显示搜索面板（带有来自 Portal 的可选激活令牌）。
     ShowSearchPanel { activation_token: Option<String> },
-    /// Hide the search panel.
+    /// 隐藏搜索面板。
     HideSearchPanel,
 }
 
-// ─── Runtime Status ──────────────────────────────────────────────────────────
+// ─── Runtime 状态 ──────────────────────────────────────────────────────────
 
-/// Diagnostic status of the Runtime.
+/// Runtime 的诊断状态。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum RuntimeStatus {
     Running,

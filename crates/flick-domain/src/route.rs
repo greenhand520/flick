@@ -1,13 +1,13 @@
-//! Route items returned by the Runtime router.
+//! Runtime 路由器返回的路由项。
 
 use crate::id::ActionId;
 use serde::{Deserialize, Serialize};
 
-/// A candidate action route returned by the router for a search query.
+/// 路由器针对搜索查询返回的候选动作路由。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RouteItem {
     pub action_id: ActionId,
     pub title: String,
-    /// Score for ordering (higher = better match).
+    /// 用于排序的分数（越高 = 匹配越好）。
     pub score: f64,
 }

@@ -1,11 +1,11 @@
-//! Caller identity: who initiated an ActionRequest.
+//! 调用方标识：谁发起了 ActionRequest。
 
 use serde::{Deserialize, Serialize};
 
-/// The direct initiator of an ActionRequest.
+/// ActionRequest 的直接发起者。
 ///
-/// `kind` identifies the category; `id` provides an instance-specific label
-/// (e.g. "search-panel" for UI, "flick-cli" for CLI).
+/// `kind` 标识类别；`id` 提供特定于实例的标签
+/// （例如 UI 使用 "search-panel"，CLI 使用 "flick-cli"）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Caller {
     pub kind: CallerKind,
@@ -28,24 +28,24 @@ impl Caller {
     }
 }
 
-/// Category of caller.
+/// 调用方的类别。
 ///
-/// Phase 0 only uses `Ui` and `Cli`. Other variants are protocol-level
-/// placeholders for future phases.
+/// Phase 0 仅使用 `Ui` 和 `Cli`。其他变体是协议级别的
+/// 占位符，供未来阶段使用。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum CallerKind {
-    /// Flick UI (Iced search panel).
+    /// Flick UI（搜索面板）。
     Ui,
-    /// Command-line interface via IPC.
+    /// 通过 IPC 的命令行界面。
     Cli,
-    /// Reserved: future direct global shortcut invocation.
-    /// Phase 0 Portal shortcuts do NOT use this; they produce UiIntent.
+    /// 保留：未来用于直接调用全局快捷键。
+    /// Phase 0 的 Portal 快捷键不使用此变体；它们会生成 UiIntent。
     Shortcut,
-    /// Reserved: future built-in or plugin service invocation.
-    Service,
-    /// Reserved: future system events (clipboard, file watcher, timer).
+    /// 保留：未来用于内置或插件之间的调用。
+    Plugin,
+    /// 保留：未来用于系统事件（剪贴板、文件监视器、定时器）。
     SystemEvent,
-    /// Reserved: Phase 4 MCP entry point.
+    /// 保留：Phase 4 的 MCP 入口点。
     Mcp,
 }
 

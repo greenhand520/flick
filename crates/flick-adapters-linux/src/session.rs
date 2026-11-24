@@ -1,9 +1,9 @@
-//! Portal session lifecycle types.
+//! Portal 会话生命周期类型。
 
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
-/// Information about the show-search shortcut binding.
+/// 关于 show-search 快捷键绑定的信息。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ShortcutBinding {
     pub id: String,
@@ -12,30 +12,30 @@ pub struct ShortcutBinding {
     pub actual_trigger: Option<String>,
 }
 
-/// Activation event from Portal.
+/// 来自 Portal 的激活事件。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ShortcutActivation {
     pub shortcut_id: String,
     pub activation_token: Option<String>,
 }
 
-/// Errors from Portal/shortcut operations.
+/// 来自 Portal/快捷键操作的错误。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ShortcutError {
-    /// Portal interface not available.
+    /// Portal 接口不可用。
     Unavailable { reason: String },
-    /// User cancelled the binding dialog.
+    /// 用户取消了绑定对话框。
     UserCancelled,
-    /// The Portal request ended without binding.
+    /// Portal 请求在未完成绑定的情况下结束。
     RequestEnded { reason: String },
-    /// Session or transport error (recoverable).
+    /// 会话或传输错误（可恢复）。
     SessionError { reason: String },
-    /// Internal error.
+    /// 内部错误。
     Internal { message: String },
 }
 
 impl ShortcutError {
-    /// Stable operator-facing category used in diagnostics.
+    /// 用于诊断的、面向操作员的稳定类别。
     pub fn category(&self) -> &'static str {
         match self {
             Self::Unavailable { .. } => "unavailable",
@@ -46,7 +46,7 @@ impl ShortcutError {
         }
     }
 
-    /// Human-readable error message without user payloads.
+    /// 不含用户载荷的可读错误消息。
     pub fn diagnostic_message(&self) -> String {
         match self {
             Self::Unavailable { reason }
@@ -74,7 +74,7 @@ impl fmt::Display for ShortcutError {
 
 impl std::error::Error for ShortcutError {}
 
-// Shortcut definitions as functions (const String not supported in Rust).
+// 以函数形式定义快捷键（Rust 不支持 const String）。
 pub fn show_search_shortcut_id() -> &'static str {
     "show-search"
 }

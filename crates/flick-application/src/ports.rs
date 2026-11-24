@@ -1,7 +1,7 @@
 //! 应用层的窄端口 trait。
 //!
 //! 这些 trait 将协调器与具体的 Runtime 和 UI 实现解耦。
-//! 适配器（flick-runtime、flick-shell-iced、flick-ipc）提供具体实现，
+//! 适配器（flick-runtime、flick-shell-gpui、flick-ipc）提供具体实现，
 //! 测试则提供伪造实现。
 
 use async_trait::async_trait;

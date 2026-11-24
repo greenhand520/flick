@@ -1,12 +1,12 @@
-//! Structured error model for Action execution.
+//! 动作执行的结构化错误模型。
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-/// Errors that can occur during Action invocation or system operation.
+/// 动作调用或系统操作期间可能发生的错误。
 ///
-/// Each variant carries a stable machine-readable `code` and a
-/// user-safe `message` that does not leak internal details.
+/// 每个变体都带有稳定的机器可读 `code`，以及
+/// 不会泄露内部细节的用户安全 `message`。
 #[derive(Debug, Clone, PartialEq, Error, Serialize, Deserialize)]
 pub enum ActionError {
     #[error("unknown action: {action_id}")]
@@ -32,7 +32,7 @@ pub enum ActionError {
 }
 
 impl ActionError {
-    /// Stable machine-readable error code for IPC/JSON consumers.
+    /// 供 IPC/JSON 使用者使用的稳定的机器可读错误码。
     pub fn code(&self) -> &'static str {
         match self {
             Self::UnknownAction { .. } => "UNKNOWN_ACTION",
@@ -45,7 +45,7 @@ impl ActionError {
         }
     }
 
-    /// User-safe message (no D-Bus paths, socket addresses, or raw context).
+    /// 用户安全的消息（不包含 D-Bus 路径、套接字地址或原始上下文）。
     pub fn user_message(&self) -> String {
         match self {
             Self::UnknownAction { action_id } => {

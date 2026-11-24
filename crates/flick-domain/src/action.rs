@@ -1,4 +1,4 @@
-//! Core Action types: descriptors, requests, inputs, outcomes.
+//! 核心动作类型：描述符、请求、输入、结果。
 
 use crate::caller::Caller;
 use crate::error::ActionError;
@@ -6,38 +6,38 @@ use crate::id::{ActionId, InvocationId};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
-// ─── Descriptor ───────────────────────────────────────────────────────────────
+// ─── 描述符 ───────────────────────────────────────────────────────────────
 
-/// Describes a registered Action for routing and display.
+/// 描述已注册的动作，用于路由和展示。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ActionDescriptor {
     pub id: ActionId,
     pub title: String,
-    /// Keywords for plain-text search recall.
+    /// 用于纯文本搜索召回的关键词。
     pub keywords: Vec<String>,
     pub matcher: Matcher,
     pub concurrency: ConcurrencyPolicy,
 }
 
-/// How this Action is matched against user input.
+/// 此动作如何与用户输入进行匹配。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Matcher {
-    /// Keyword-based recall from plain-text input.
+    /// 基于关键词从纯文本输入中召回。
     Keyword,
-    /// Exact prefix command with word-boundary matching.
-    /// E.g., `echo` matches "echo hello" but not "echohello".
+    /// 精确前缀命令，采用词边界匹配。
+    /// 例如，`echo` 匹配 "echo hello"，但不匹配 "echohello"。
     PrefixCommand { command: String },
 }
 
 impl Matcher {
-    /// Convenience constructor for a prefix-command matcher.
+    /// 前缀命令匹配器的便捷构造函数。
     pub fn prefix_command(command: &str) -> Self {
         Self::PrefixCommand {
             command: command.to_owned(),
         }
     }
 
-    /// Returns the command string if this is a `PrefixCommand` matcher.
+    /// 如果这是 `PrefixCommand` 匹配器，则返回命令字符串。
     pub fn as_prefix_command(&self) -> Option<&str> {
         match self {
             Self::PrefixCommand { command } => Some(command),
@@ -46,18 +46,18 @@ impl Matcher {
     }
 }
 
-/// Concurrency policy for an Action.
+/// 动作的并发策略。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ConcurrencyPolicy {
-    /// Multiple invocations can run in parallel.
+    /// 多次调用可以并行运行。
     Parallel,
-    /// Only one invocation at a time; new requests queue or reject.
+    /// 同一时间只允许一次调用；新请求将排队或被拒绝。
     Exclusive,
 }
 
-// ─── Input ────────────────────────────────────────────────────────────────────
+// ─── 输入 ────────────────────────────────────────────────────────────────────
 
-/// Input for an Action invocation.
+/// 动作调用的输入。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ActionInput {
     pub kind: InputKind,
@@ -73,17 +73,17 @@ impl ActionInput {
     }
 }
 
-/// Phase 0 input kind classifier.
+/// Phase 0 输入类型分类器。
 ///
-/// Phase 1 will replace/augment this with a richer InputFacet model.
+/// Phase 1 将用更丰富的 InputFacet 模型替换/增强此实现。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum InputKind {
     PlainText,
 }
 
-// ─── Request ──────────────────────────────────────────────────────────────────
+// ─── 请求 ──────────────────────────────────────────────────────────────────
 
-/// A request to execute a registered Action.
+/// 执行已注册动作的请求。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ActionRequest {
     pub invocation_id: InvocationId,
@@ -94,7 +94,7 @@ pub struct ActionRequest {
 }
 
 impl ActionRequest {
-    /// Create an Echo action request (Phase 0 convenience).
+    /// 创建 Echo 动作请求（Phase 0 便捷方法）。
     pub fn new_echo(text: &str, caller: Caller) -> Self {
         Self {
             invocation_id: InvocationId::new(),
@@ -106,9 +106,9 @@ impl ActionRequest {
     }
 }
 
-// ─── Deadline ─────────────────────────────────────────────────────────────────
+// ─── 截止时间 ─────────────────────────────────────────────────────────────────
 
-/// Deadline for an invocation.
+/// 调用的截止时间。
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct Deadline {
     pub timeout: Duration,
@@ -122,27 +122,27 @@ impl Deadline {
     }
 }
 
-// ─── Context ──────────────────────────────────────────────────────────────────
+// ─── 上下文 ──────────────────────────────────────────────────────────────────
 
-/// Runtime context provided to an ActionHandler during invocation.
+/// 调用期间提供给 ActionHandler 的运行时上下文。
 ///
-/// Carries a cancellation token for cooperative cancellation.
+/// 携带一个取消令牌，用于协作式取消。
 pub struct ActionContext {
     pub cancellation: tokio_util::sync::CancellationToken,
 }
 
-// ─── Outcome ──────────────────────────────────────────────────────────────────
+// ─── 结果 ──────────────────────────────────────────────────────────────────
 
-/// The result of an Action invocation.
+/// 动作调用的结果。
 ///
-/// Framework-agnostic: both UI and CLI consume this.
+/// 与框架无关：UI 和 CLI 都会使用该结果。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum ActionOutcome {
-    /// Structured data result.
+    /// 结构化数据结果。
     Data(serde_json::Value),
-    /// A human-readable notice (not an error).
+    /// 人类可读的通知（非错误）。
     Notice { message: String },
-    /// An error occurred during execution.
+    /// 执行期间发生错误。
     Error(ActionError),
 }
 
@@ -184,7 +184,7 @@ mod tests {
         for outcome in outcomes {
             let json = serde_json::to_string(&outcome).unwrap();
             let back: ActionOutcome = serde_json::from_str(&json).unwrap();
-            // Debug comparison
+            // 调试比较
             assert_eq!(format!("{outcome:?}"), format!("{back:?}"));
         }
     }

@@ -1,4 +1,4 @@
-//! Typed boundary between Portal lifecycle policy and a platform client.
+//! Portal 生命周期策略与平台客户端之间的类型化边界。
 
 use crate::session::{
     ShortcutBinding, ShortcutError, show_search_shortcut_description, show_search_shortcut_id,
@@ -22,97 +22,95 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
 
-/// Stable host-level identity for a Portal shortcut session.
+/// Portal 快捷键会话的稳定宿主级标识。
 ///
-/// It is deliberately unrelated to a D-Bus object path, so no path crosses the
-/// platform/client boundary or appears in adapter policy and diagnostics.
+/// 它刻意与 D-Bus 对象路径无关，因此没有任何路径跨越平台/客户端边界，
+/// 也不会出现在适配器策略或诊断中。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct PortalSessionId(u64);
 
 impl PortalSessionId {
-    /// Creates a stable session identity. Primarily useful for host fakes.
+    /// 创建稳定的会话标识。主要用于宿主侧的假实现。
     pub const fn new(value: u64) -> Self {
         Self(value)
     }
 }
 
-/// Bindings listed from one newly opened Portal shortcut session.
+/// 从新打开的 Portal 快捷键会话中列出的绑定。
 #[derive(Debug, Clone)]
 pub struct PortalSession {
     pub id: PortalSessionId,
     pub bindings: Vec<ShortcutBinding>,
 }
 
-/// Normalized events emitted by a Portal client.
+/// 由 Portal 客户端发出的规范化事件。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PortalEvent {
-    /// A shortcut registered by the identified Portal session was activated.
+    /// 由所标识的 Portal 会话注册的快捷键被激活。
     Activated {
         session_id: PortalSessionId,
         shortcut_id: String,
         activation_token: Option<String>,
     },
-    /// The identified Portal session was closed by the desktop or Portal.
+    /// 所标识的 Portal 会话被桌面环境或 Portal 关闭。
     SessionClosed { session_id: PortalSessionId },
-    /// The Portal transport stopped delivering events for the identified session.
+    /// Portal 传输层停止为所标识的会话投递事件。
     TransportError {
         session_id: PortalSessionId,
         message: String,
     },
 }
 
-/// Platform-facing Portal client.
+/// 面向平台的 Portal 客户端。
 ///
-/// The client owns platform-specific session objects. The adapter only sees
-/// normalized bindings, errors, session identities, and events, keeping Portal
-/// implementation details out of the shortcut policy and diagnostics model.
+/// 客户端持有特定于平台的会话对象。适配器只能看到规范化的绑定、错误、
+/// 会话标识和事件，从而将 Portal 的实现细节排除在快捷键策略和诊断模型之外。
 #[async_trait::async_trait]
 pub trait PortalClient: Send + Sync {
-    /// Creates a session and lists its existing shortcut bindings.
+    /// 创建会话并列出其已有的快捷键绑定。
     async fn open_session_and_list(&self) -> Result<PortalSession, ShortcutError>;
 
-    /// Enables forwarding for an atomically published session and returns any
-    /// normalized events buffered while forwarding was gated.
+    /// 为已原子发布的会话启用转发，并返回转发被门控期间缓存的所有规范化事件。
     async fn activate_session_events(
         &self,
         session_id: PortalSessionId,
     ) -> Result<Vec<PortalEvent>, ShortcutError>;
 
-    /// Makes the one explicit bind attempt for the show-search shortcut.
+    /// 对 show-search 快捷键执行唯一的一次显式绑定尝试。
     async fn bind_show_search(
         &self,
         preferred_trigger: &str,
     ) -> Result<Vec<ShortcutBinding>, ShortcutError>;
 
-    /// Closes the currently active platform session, if any.
+    /// 关闭当前活跃的平台会话（如果存在）。
     async fn close_session(&self);
 
-    /// Returns the one receiver supplying normalized Portal events.
+    /// 返回提供规范化 Portal 事件的唯一接收端。
     ///
-    /// Returning `None` signals an internal client lifecycle/programming error.
+    /// 返回 `None` 表示客户端内部出现生命周期/编程错误。
     fn take_event_receiver(&self) -> Option<tokio::sync::mpsc::UnboundedReceiver<PortalEvent>>;
 }
 
 type ActivatedStream = Pin<Box<dyn Stream<Item = Activated> + Send>>;
 type ClosedStream = Pin<Box<dyn Stream<Item = zbus::Message> + Send>>;
 
-/// Real xdg-desktop-portal GlobalShortcuts client backed by ashpd.
+/// 由 ashpd 支撑的真正 xdg-desktop-portal GlobalShortcuts 客户端。
 ///
-/// ashpd and zbus values are deliberately contained in this implementation;
-/// callers interact only through [`PortalClient`]'s normalized types.
+/// ashpd 和 zbus 的值被刻意限制在此实现内部；
+/// 调用方仅通过 [`PortalClient`] 的规范化类型进行交互。
 pub struct AshpdPortalClient {
     state: Arc<Mutex<AshpdPortalState>>,
-    /// Serializes complete public Portal operations. In particular, replacing
-    /// a session cannot race a bind or close operation.
+    /// 串行化完整的公开 Portal 操作。特别是，替换会话不会与绑定或关闭操作产生竞态。
     operation_lock: Mutex<()>,
     event_tx: mpsc::UnboundedSender<PortalEvent>,
     event_rx: StdMutex<Option<mpsc::UnboundedReceiver<PortalEvent>>>,
+    /// 进程级只做一次 host-app 注册（写出 `.desktop` 并 `Register`）。
+    app_id_registered: AtomicBool,
 }
 
 struct AshpdPortalState {
-    /// A session that has been created remotely but is still preparing its
-    /// listener streams and ListShortcuts response. Keeping it client-owned
-    /// makes cancellation-safe close possible before it becomes active.
+    /// 已在远端创建但仍在准备其监听器流和 ListShortcuts 响应的会话。
+    /// 将其保持在客户端所有，可在其变为活跃之前实现可安全取消的关闭。
     pending: Option<PendingSession>,
     active: Option<ActiveSession>,
     next_session_id: u64,
@@ -124,15 +122,15 @@ struct PendingSession {
 
 struct ActiveSession {
     id: PortalSessionId,
-    /// Owns the global-shortcuts proxy for all calls made against this session.
+    /// 持有针对此会话进行的所有调用所使用的 global-shortcuts 代理。
     portal: Arc<GlobalShortcuts>,
-    /// Owns the ashpd session object until it is replaced or closed.
+    /// 持有 ashpd 会话对象，直到它被替换或关闭。
     session: Arc<Session<GlobalShortcuts>>,
     session_handle: String,
     listener_cancel: CancellationToken,
     listener_tasks: Vec<JoinHandle<()>>,
-    /// Listener streams are subscribed immediately, but their normalized
-    /// events remain here until the adapter publishes this id as active.
+    /// 监听器流会立即被订阅，但其规范化事件会一直保留在这里，
+    /// 直到适配器将此 id 发布为活跃状态。
     events_activated: bool,
     pending_events: Vec<PortalEvent>,
 }
@@ -148,7 +146,7 @@ struct ListenerContext {
 }
 
 impl AshpdPortalClient {
-    /// Creates a Portal client with one normalized event receiver.
+    /// 创建一个带有一个规范化事件接收端的 Portal 客户端。
     pub fn new() -> Self {
         let (event_tx, event_rx) = mpsc::unbounded_channel();
         Self {
@@ -160,13 +158,33 @@ impl AshpdPortalClient {
             operation_lock: Mutex::new(()),
             event_tx,
             event_rx: StdMutex::new(Some(event_rx)),
+            app_id_registered: AtomicBool::new(false),
         }
     }
 
-    /// Takes every client-owned remote session before closing it outside the
-    /// state mutex. `pending` and `active` are mutually exclusive during a
-    /// normal open, but both are taken defensively so replacement and shutdown
-    /// cannot leave a remote session behind.
+    /// 首次使用时注册 host-app 身份。GNOME 下若缺少这一步，`CreateSession`
+    /// 会直接以 "An app id is required" 失败。
+    async fn ensure_app_id_registered(&self) {
+        if self.app_id_registered.load(Ordering::SeqCst) {
+            return;
+        }
+        match crate::portal_identity::register_portal_app_id().await {
+            Ok(()) => {
+                self.app_id_registered.store(true, Ordering::SeqCst);
+                tracing::info!("portal host-app 身份已注册");
+            }
+            Err(error) => {
+                tracing::warn!(
+                    ?error,
+                    "portal host-app 注册失败；GlobalShortcuts 可能不可用（需可解析的 .desktop，Exec 指向存在的二进制）"
+                );
+            }
+        }
+    }
+
+    /// 在状态互斥锁之外关闭之前，取出客户端持有的所有远端会话。
+    /// 在正常打开过程中，`pending` 和 `active` 是互斥的，但这里出于防御性
+    /// 将两者都取出，以确保替换和关闭不会遗留远端会话。
     async fn take_registered_sessions(&self) -> (Option<PendingSession>, Option<ActiveSession>) {
         let mut state = self.state.lock().await;
         (state.pending.take(), state.active.take())
@@ -182,10 +200,9 @@ impl AshpdPortalClient {
         }
     }
 
-    /// Registers the session immediately after CreateSession succeeds. No
-    /// signal subscription or ListShortcuts await may happen before this
-    /// succeeds, because shutdown must be able to find and close this handle
-    /// if the open future is cancelled.
+    /// 在 CreateSession 成功后立即注册会话。在此之前不得进行任何信号订阅或
+    /// 等待 ListShortcuts，因为如果打开 future 被取消，关闭操作必须能够
+    /// 找到并关闭此句柄。
     async fn register_pending_session(
         &self,
         session: Arc<Session<GlobalShortcuts>>,
@@ -200,9 +217,9 @@ impl AshpdPortalClient {
         Ok(())
     }
 
-    /// Takes a still-pending session only when it is the one being prepared.
-    /// This makes failure cleanup idempotent: after shutdown/replacement has
-    /// taken it, this returns `None` rather than issuing a second Close.
+    /// 仅当待处理会话正是正在准备的那一个时才取出它。
+    /// 这使得失败清理具有幂等性：在关闭/替换已将其取走之后，本方法返回 `None`，
+    /// 而不是发出第二次 Close。
     async fn take_matching_pending_session(
         &self,
         session: &Arc<Session<GlobalShortcuts>>,
@@ -230,10 +247,9 @@ impl AshpdPortalClient {
         true
     }
 
-    /// Transitions a registered pending session into active listener ownership.
-    /// The streams are already subscribed by the caller; forwarding remains
-    /// gated until the adapter acknowledges publication with
-    /// `activate_session_events`.
+    /// 将已注册的待处理会话转换为活跃的监听器所有权。
+    /// 流已由调用方订阅；在适配器通过 `activate_session_events` 确认发布之前，
+    /// 转发仍处于门控状态。
     async fn install_listeners(
         &self,
         portal: GlobalShortcuts,
@@ -345,6 +361,7 @@ impl PortalClient for AshpdPortalClient {
     async fn open_session_and_list(&self) -> Result<PortalSession, ShortcutError> {
         let _operation = self.operation_lock.lock().await;
         self.close_registered_sessions().await;
+        self.ensure_app_id_registered().await;
 
         let portal = GlobalShortcuts::new()
             .await
@@ -363,8 +380,8 @@ impl PortalClient for AshpdPortalClient {
         let preparation = async {
             let session_handle = session_handle(session.as_ref())?;
 
-            // Both signals are registered before any listener task is spawned
-            // and before ListShortcuts makes this session visible to Flick.
+            // 在生成任何监听器任务之前，以及在 ListShortcuts 使此会话对 Flick
+            // 可见之前，两个信号都已完成注册。
             let activated_stream =
                 session_error("ReceiveActivated", portal.receive_activated().await)?;
             let closed_stream = session_closed_stream(&portal, &session_handle).await?;
@@ -473,10 +490,9 @@ async fn session_closed_stream(
     portal: &GlobalShortcuts,
     session_handle: &str,
 ) -> Result<ClosedStream, ShortcutError> {
-    // ashpd 0.13.13's `Session::receive_closed` conservatively captures its
-    // receiver lifetime. Use the same session object path and D-Bus connection
-    // to create a private listener proxy, while retaining the ashpd Session as
-    // the authoritative object used for bind and close operations.
+    // ashpd 0.13.13 的 `Session::receive_closed` 会保守地捕获其接收端生命周期。
+    // 这里使用相同的会话对象路径和 D-Bus 连接创建一个私有的监听器代理，
+    // 同时保留 ashpd Session 作为绑定和关闭操作所使用的权威对象。
     let session_proxy = zbus::Proxy::new_owned(
         portal.connection().clone(),
         "org.freedesktop.portal.Desktop",
@@ -504,7 +520,7 @@ async fn forward_activated(mut stream: ActivatedStream, listener: ListenerContex
                             PortalEvent::Activated {
                                 session_id: listener.session_id,
                                 shortcut_id: event.shortcut_id().to_owned(),
-                                // Portal activation tokens are intentionally not exposed.
+                                // Portal 激活令牌有意不对外暴露。
                                 activation_token: None,
                             },
                         ).await;
@@ -545,8 +561,7 @@ async fn forward_closed(
     }
 }
 
-/// Appends an event while the adapter has not yet published this session. Once
-/// the host acknowledgement is received, live events flow to the adapter.
+/// 在适配器尚未发布此会话期间追加事件。一旦收到宿主确认，实时事件便会流向适配器。
 async fn queue_or_forward_event(listener: &ListenerContext, event: PortalEvent) {
     if listener.cancellation.is_cancelled() {
         return;
@@ -634,9 +649,9 @@ fn shortcut_bindings(shortcuts: &[Shortcut]) -> Vec<ShortcutBinding> {
 }
 
 fn session_handle(session: &Session<GlobalShortcuts>) -> Result<String, ShortcutError> {
-    // ashpd 0.13.13 does not expose a public Session object-path accessor.
-    // This workaround relies on that locked version's `Serialize` representation;
-    // review it on every ashpd upgrade and prefer a future public path API.
+    // ashpd 0.13.13 未公开 Session 对象路径的访问器。
+    // 此变通方法依赖于该锁定版本的 `Serialize` 表示形式；
+    // 每次升级 ashpd 时都应重新审视它，并优先采用将来公开的 path API。
     serde_json::to_value(session)
         .ok()
         .and_then(|value| value.as_str().map(ToOwned::to_owned))
