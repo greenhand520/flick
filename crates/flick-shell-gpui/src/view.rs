@@ -1,10 +1,13 @@
 //! 渲染层：唯一接触 gpui/gpui-kit 的模块。
 //!
-//! 形态参考真实 gpui launcher（`gpui-shell` / `awari`）：窗口本体是**面板尺寸的
-//! 小窗**（约 666 宽，顶部居中，透明、可拖动），搜索面板就是绘制在窗口里的圆角卡片。
-//! 卡片高度随结果条数变化时，由 `AppView::dispatch` 调 `window.resize` 同步窗口尺寸。
-//! 早期曾用「全屏透明 overlay + 卡片」来绕开 GNOME/Mutter（无 wlr-layer-shell）下
-//! 小窗按内容 resize 不可靠的问题，现改为小窗 + 显式 resize。
+//! 窗口本体是**面板尺寸的小窗**（约 666 宽，顶部居中，透明、可拖动），搜索面板就是
+//! 绘制在窗口里的圆角卡片。卡片高度随结果条数变化时，由 `AppView::dispatch` 调
+//! `window.resize` 同步窗口尺寸。
+//!
+//! 生命周期由上层（`lib.rs` 的宿主事件泵）驱动：每次收到 `HostToUi::ShowSearchPanel`
+//! 才创建新窗口，收到 `HostToUi::HideSearchPanel` 或用户按 Esc / 失焦时 `remove_window`
+//! 销毁窗口。因此隐藏时没有窗口、不会在任务栏留图标；再次唤起是全新映射的窗口，GNOME
+//! 会把新窗口带到前台，从而规避「后台应用无法抢焦点」的问题。
 
 use std::time::Duration;
 
@@ -36,21 +39,27 @@ pub struct AppView {
     metrics: Metrics,
     input: Entity<InputState>,
     focus: FocusHandle,
+    /// 输入框自身的焦点句柄（打开即聚焦 / 失焦隐藏 / 重新显示时再聚焦）。
+    input_focus: FocusHandle,
     host_tx: mpsc::UnboundedSender<UiToHost>,
-    close_on_hide: bool,
+    /// 请求应用级宿主泵销毁本窗口（隐藏时用；避免在窗口自身的焦点/更新帧内直接
+    /// `remove_window`，否则会触发 "scheduling follow-up frame ... window not found"）。
+    hide_tx: mpsc::UnboundedSender<()>,
     _subscriptions: Vec<Subscription>,
-    _host_pump: Task<()>,
     _debounce: Option<Task<()>>,
     /// 上次已应用的窗口尺寸 (宽,高)；仅变化时才调用 window.resize，避免抖动。
     last_applied_size: Option<(f32, f32)>,
+    /// 上一轮 `panel.visible`，用于检测「可见 -> 隐藏」跃迁（只发一次销毁请求）。
+    was_visible: bool,
 }
 
 impl AppView {
+    /// 创建窗口内容。宿主事件不再由本视图订阅通道，而是由 `lib.rs` 的事件泵通过
+    /// [`AppView::on_host`] 转发（这样窗口销毁后事件泵仍存活，可再开新窗口）。
     pub fn new(
         host_tx: mpsc::UnboundedSender<UiToHost>,
-        mut host_rx: mpsc::UnboundedReceiver<HostToUi>,
+        hide_tx: mpsc::UnboundedSender<()>,
         initial: ThemeMode,
-        close_on_hide: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -73,20 +82,10 @@ impl AppView {
         });
 
         // 失焦隐藏挂在「输入框」的焦点句柄上（焦点实际在输入框），而非面板根句柄。
+        // 触发后会隐藏面板，并在 `apply` 里 `remove_window` 销毁窗口。
         let blur_sub = cx.on_focus_out(&input_focus, window, |this, _event, window, cx| {
             if this.state.panel.visible {
                 this.dispatch(UiEvent::WindowClosed, window, cx);
-            }
-        });
-
-        let pump = cx.spawn_in(window, async move |this, cx| {
-            while let Some(event) = host_rx.recv().await {
-                let ok = this.update_in(cx, |this, window, cx| {
-                    this.dispatch(UiEvent::Host(event), window, cx);
-                });
-                if ok.is_err() {
-                    break;
-                }
             }
         });
 
@@ -95,16 +94,15 @@ impl AppView {
             metrics: Metrics::default(),
             input,
             focus,
+            input_focus: input_focus.clone(),
             host_tx,
-            close_on_hide,
+            hide_tx,
             _subscriptions: vec![input_sub, blur_sub],
-            _host_pump: pump,
             _debounce: None,
             last_applied_size: None,
+            was_visible: false,
         };
-        // 打开即聚焦输入框，用户可直接输入（修复 iced 缺陷：打开后不自动聚焦）。
-        // 面板根节点仍 track_focus + key_context("FlickPanel")，键盘上下文沿祖先链生效，
-        // 故 Esc / ↑ / ↓ 的 action 依然能命中。
+        // 打开即聚焦输入框，用户可直接输入。
         window.focus(&input_focus, cx);
         // 演示/自检钩子：设置 FLICK_GPUI_DEMO_QUERY 时启动即模拟一次输入，便于截图结果态。
         if let Ok(q) = std::env::var("FLICK_GPUI_DEMO_QUERY") {
@@ -115,14 +113,28 @@ impl AppView {
         view
     }
 
+    /// 把焦点交给搜索输入框（被宿主事件泵在窗口显示后调用）。
+    pub fn focus_input(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        window.focus(&self.input_focus, cx);
+    }
+
+    /// 接收一条宿主事件（由 `lib.rs` 的事件泵转发），进入正常 dispatch 流程。
+    pub fn on_host(&mut self, event: HostToUi, window: &mut Window, cx: &mut Context<Self>) {
+        self.dispatch(UiEvent::Host(event), window, cx);
+    }
+
     fn dispatch(&mut self, event: UiEvent, window: &mut Window, cx: &mut Context<Self>) {
         let effects = self.state.update(event);
         self.apply(effects, window, cx);
-        self.sync_window_size(window);
-        cx.notify();
+        // 面板已隐藏时窗口即将被应用级泵销毁，不再为它 resize/调度下一帧，
+        // 避免对「已删除窗口」调度帧引发 "window not found"。
+        if self.state.panel.visible {
+            self.sync_window_size(window);
+            cx.notify();
+        }
     }
 
-    /// 面板尺寸的小窗口：结果增减时把窗口 resize 到「卡片高度 + 边框」，
+    /// 面板尺寸的小窗口：结果增减时把窗口 resize 到「卡片高度」，
     /// 避免整屏透明区域，也避免结果被裁。仅在尺寸变化时调用。
     fn sync_window_size(&mut self, window: &mut Window) {
         if !self.state.panel.visible {
@@ -158,10 +170,15 @@ impl AppView {
                 }
             }
         }
-        // 全屏 overlay 不做窗口 resize：面板高度在 `render` 里按内容计算。
-        if !self.state.panel.visible && self.close_on_hide {
-            window.remove_window();
+        // 「隐藏即销毁窗口」模型：但销毁动作不能在本窗口的更新帧里同步执行——失焦等场景下
+        // 同步 `remove_window` 会让 gpui 继续为已删除窗口调度下一帧，报
+        // "scheduling follow-up frame ... window not found"。因此这里只发一次“请销毁”信号，
+        // 由应用级宿主泵在窗口更新之外统一销毁（与快捷键/esc 隐藏走同一条路径）。
+        let now_visible = self.state.panel.visible;
+        if self.was_visible && !now_visible {
+            let _ = self.hide_tx.send(());
         }
+        self.was_visible = now_visible;
     }
 
     fn on_hide_panel(&mut self, _: &HidePanel, window: &mut Window, cx: &mut Context<Self>) {
@@ -195,14 +212,17 @@ impl AppView {
             theme.window_radius = px(26.0);
             theme.colors.window_border.a = 0.0;
         });
-        // Theme::change 会重置 tokens/window_radius，这里恢复全屏透明根 surface。
         persist_theme(self.state.theme);
     }
 }
 
 impl Render for AppView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        // 可见透明 overlay 根：无背景，桌面透出；面板按需挂载。
+        // 隐藏态：不渲染任何东西（此时窗口通常已被 remove_window 销毁）。
+        if !self.state.panel.visible {
+            return div().id("flick-root").size_full().into_any_element();
+        }
+        // 可见透明窗口根：无背景，桌面透出；面板按需挂载。
         let mut root = div()
             .id("flick-root")
             .size_full()

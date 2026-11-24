@@ -12,12 +12,13 @@ pub use view::AppView;
 use flick_domain::{HostToUi, UiToHost};
 use gpui_kit::*;
 use tokio::sync::mpsc;
-use view::{HidePanel, SelectNext, SelectPrev, ToggleThemeAction};
 
 /// 面板逻辑宽度（与 `theme::Metrics::default().width` 一致）。
 const PANEL_WIDTH: f32 = 666.0;
 /// 空态（仅搜索行）高度，与 `theme::Metrics.input_height` 一致。
 const PANEL_INPUT_HEIGHT: f32 = 64.0;
+/// 面板距主显示器顶部的偏移。
+const PANEL_TOP_MARGIN: f32 = 120.0;
 
 /// 主题持久化配置路径：`$XDG_CONFIG_HOME/flick/shell-gpui.toml`
 /// （未设置时回退 `$HOME/.config/flick/shell-gpui.toml`）。
@@ -103,7 +104,58 @@ pub fn run(host_tx: mpsc::UnboundedSender<UiToHost>, host_rx: mpsc::UnboundedRec
     run_with_theme(host_tx, host_rx, detect_initial_theme());
 }
 
+/// 打开一个面板尺寸的小窗口，返回其类型擦除句柄。
+///
+/// 窗口与面板卡片等大（透明、无边框、可拖动），位置在主显示器顶部居中。
+/// `app_id` 必须与 portal 写出的 `.desktop` 文件名一致，否则 GNOME 会显示 "null"。
+fn open_panel_window(
+    app: &mut App,
+    host_tx: mpsc::UnboundedSender<UiToHost>,
+    hide_tx: mpsc::UnboundedSender<()>,
+    initial: ThemeMode,
+) -> Result<AnyWindowHandle, String> {
+    let (x, y) = match app.primary_display() {
+        Some(display) => {
+            let db = display.bounds();
+            let screen_w = f32::from(db.size.width);
+            let ox = f32::from(db.origin.x);
+            let oy = f32::from(db.origin.y);
+            (ox + (screen_w - PANEL_WIDTH) / 2.0, oy + PANEL_TOP_MARGIN)
+        }
+        None => (0.0, PANEL_TOP_MARGIN),
+    };
+    let bounds = Bounds::new(
+        point(px(x), px(y)),
+        size(px(PANEL_WIDTH), px(PANEL_INPUT_HEIGHT)),
+    );
+    let options = WindowOptions {
+        titlebar: None,
+        is_resizable: false,
+        is_movable: true,
+        kind: WindowKind::Normal,
+        window_bounds: Some(WindowBounds::Windowed(bounds)),
+        // 透明窗口：整窗不画底色，桌面透出；面板自身画圆角底色。
+        window_background: WindowBackgroundAppearance::Transparent,
+        // 客户端装饰：不请求窗口管理器画标题栏/边框，得到干净的无边框浮卡。
+        window_decorations: Some(WindowDecorations::Client),
+        focus: true,
+        app_id: Some("io.github.flick.Flick".into()),
+        ..Default::default()
+    };
+
+    let handle = app
+        .open_window(options, move |window, cx| {
+            cx.new(|cx| AppView::new(host_tx, hide_tx, initial, window, cx))
+        })
+        .map_err(|err| err.to_string())?;
+    Ok(handle.into())
+}
+
 /// 用指定主题运行 GPUI 面板（阻塞直到应用退出）。
+///
+/// 应用级事件泵负责窗口生命周期：收到 `ShowSearchPanel` 就创建（或复用）窗口，收到
+/// `HideSearchPanel` 就销毁窗口。采用「隐藏即销毁、唤起即新建」模型，使隐藏态不在任务栏
+/// 留图标，且新映射的窗口更容易被合成器带到前台（规避后台应用抢焦点问题）。
 pub fn run_with_theme(
     host_tx: mpsc::UnboundedSender<UiToHost>,
     host_rx: mpsc::UnboundedReceiver<HostToUi>,
@@ -111,6 +163,8 @@ pub fn run_with_theme(
 ) {
     application()
         .with_assets(gpui_kit::assets::Assets)
+        // 隐藏时会销毁唯一的窗口；用 Explicit 防止「最后一个窗口关闭 -> 进程退出」。
+        .with_quit_mode(QuitMode::Explicit)
         .run(move |cx| {
             init(cx);
             // 让 gpui-kit 组件（Input/Label 等）使用与面板一致的暗/亮主题。
@@ -123,68 +177,117 @@ pub fn run_with_theme(
                 cx,
             );
             // gpui-kit 的「窗口级」圆角来自 theme.window_radius，且它按物理像素应用
-            // （≈ UI 逻辑像素的 2 倍）。因此窗口保持 26，而搜索框卡片用一半 13
-            // （见 theme::Metrics::radius_panel），两者视觉才一致；否则四角会露出一圈
-            // 半径不匹配的窗口底/边框，看起来就是「搜索框外面的透明边框」。这里同时把
-            // 1px 窗口边框设为透明。
+            // （≈ UI 逻辑像素的 2 倍）。窗口保持 26，搜索框卡片用一半 13
+            // （见 theme::Metrics::radius_panel），两者视觉才一致；同时把 1px 窗口边框设为透明。
             gpui_kit::component::Theme::update(cx, |theme| {
                 theme.window_radius = px(26.0);
                 theme.colors.window_border.a = 0.0;
             });
-            // 小窗口（面板尺寸）：根 surface 不画底色，桌面透出；
-            // 圆角与底色由我们自己的面板卡片（view.rs）绘制。
             cx.bind_keys([
-                KeyBinding::new("escape", HidePanel, Some("FlickPanel")),
-                KeyBinding::new("up", SelectPrev, Some("FlickPanel")),
-                KeyBinding::new("down", SelectNext, Some("FlickPanel")),
-                KeyBinding::new("ctrl-shift-l", ToggleThemeAction, Some("FlickPanel")),
+                KeyBinding::new("escape", view::HidePanel, Some("FlickPanel")),
+                KeyBinding::new("up", view::SelectPrev, Some("FlickPanel")),
+                KeyBinding::new("down", view::SelectNext, Some("FlickPanel")),
+                KeyBinding::new("ctrl-shift-l", view::ToggleThemeAction, Some("FlickPanel")),
             ]);
-            cx.on_window_closed(|cx, _id| {
-                if cx.windows().is_empty() {
-                    cx.quit();
+
+            let host_tx_open = host_tx.clone();
+            let initial_for_open = initial;
+            // 视图失焦自发隐藏时，通过该通道请求应用级泵销毁窗口（在窗口更新帧之外执行）。
+            let (hide_tx, mut hide_rx) = mpsc::unbounded_channel::<()>();
+            let hide_tx_open = hide_tx.clone();
+
+            // 应用级宿主事件泵（与窗口解耦）：窗口销毁后它仍存活，可再创建新窗口。
+            cx.spawn(async move |cx: &mut AsyncApp| {
+                let mut rx = host_rx;
+                // 当前面板窗口句柄（窗口被销毁后会失效，用前需校验）。
+                let mut handle: Option<AnyWindowHandle> = None;
+
+                loop {
+                    tokio::select! {
+                        maybe = rx.recv() => {
+                            let Some(event) = maybe else { break; };
+                            match event {
+                                HostToUi::Shutdown => {
+                                    cx.update(|app| app.quit());
+                                    break;
+                                }
+                                HostToUi::ShowSearchPanel { activation_token } => {
+                                    let alive = cx.update(|app| {
+                                        handle.map_or(false, |h| h.update(app, |_, _, _| {}).is_ok())
+                                    });
+                                    if !alive {
+                                        match cx.update(|app| {
+                                            open_panel_window(
+                                                app,
+                                                host_tx_open.clone(),
+                                                hide_tx_open.clone(),
+                                                initial_for_open,
+                                            )
+                                        }) {
+                                            Ok(h) => handle = Some(h),
+                                            Err(err) => {
+                                                eprintln!("flick: failed to open GPUI panel window: {err}");
+                                                continue;
+                                            }
+                                        }
+                                    }
+                                    if let Some(h) = handle {
+                                        let show = HostToUi::ShowSearchPanel { activation_token };
+                                        let _ = cx.update(|app| {
+                                            let _ = h.update(app, |anyview, window, app2| {
+                                                // 新窗口映射后请求激活并聚焦输入框。
+                                                window.activate_window();
+                                                if let Ok(view) = anyview.downcast::<AppView>() {
+                                                    view.update(app2, |v, cx2| {
+                                                        v.on_host(show, window, cx2);
+                                                        v.focus_input(window, cx2);
+                                                    });
+                                                }
+                                            });
+                                        });
+                                    }
+                                }
+                                HostToUi::HideSearchPanel => {
+                                    if let Some(h) = handle.take() {
+                                        let _ = cx.update(|app| {
+                                            let _ = h.update(app, |_, window, _| {
+                                                window.remove_window();
+                                            });
+                                        });
+                                    }
+                                }
+                                other => {
+                                    if let Some(h) = handle {
+                                        cx.update(|app| {
+                                            let _ = h.update(app, |anyview, window, app2| {
+                                                if let Ok(view) = anyview.downcast::<AppView>() {
+                                                    view.update(app2, |v, cx2| {
+                                                        v.on_host(other.clone(), window, cx2);
+                                                    });
+                                                }
+                                            });
+                                        });
+                                    }
+                                }
+                            }
+                        }
+                        _ = hide_rx.recv() => {
+                            // 失焦等视图自发隐藏：在窗口更新帧之外统一销毁窗口。
+                            if let Some(h) = handle.take() {
+                                let _ = cx.update(|app| {
+                                    let _ = h.update(app, |_, window, _| {
+                                        window.remove_window();
+                                    });
+                                });
+                            }
+                        }
+                    }
                 }
+
+                // 通道关闭（daemon 退出）：结束应用事件循环。
+                cx.update(|app| app.quit());
             })
             .detach();
-
-            let rx = host_rx;
-
-            // 面板尺寸的小窗口（Normal、透明、可拖动）：窗口与面板卡片等大，
-            // 从根上避免出现整屏半透明底/边框；按住面板边缘可 window.start_window_move 拖动。
-            // 位置：主显示器顶部居中，y = 120。结果变化时由 AppView::dispatch 调 window.resize。
-            let (x, y) = match cx.primary_display() {
-                Some(display) => {
-                    let db = display.bounds();
-                    let screen_w = f32::from(db.size.width);
-                    let ox = f32::from(db.origin.x);
-                    let oy = f32::from(db.origin.y);
-                    (ox + (screen_w - PANEL_WIDTH) / 2.0, oy + 120.0)
-                }
-                None => (0.0, 120.0),
-            };
-            let bounds = Bounds::new(
-                point(px(x), px(y)),
-                size(px(PANEL_WIDTH), px(PANEL_INPUT_HEIGHT)),
-            );
-            let options = WindowOptions {
-                titlebar: None,
-                is_resizable: false,
-                is_movable: true,
-                kind: WindowKind::Normal,
-                window_bounds: Some(WindowBounds::Windowed(bounds)),
-                // 透明窗口：整窗不画底色，桌面透出；面板自身画圆角底色。
-                window_background: WindowBackgroundAppearance::Transparent,
-                // 客户端装饰：不请求窗口管理器画标题栏/边框，得到干净的无边框浮卡。
-                window_decorations: Some(WindowDecorations::Client),
-                focus: true,
-                app_id: Some("flick".into()),
-                ..Default::default()
-            };
-
-            cx.open_window(options, move |window, cx| {
-                window.activate_window();
-                cx.new(|cx| AppView::new(host_tx, rx, initial, false, window, cx))
-            })
-            .expect("failed to open Flick GPUI panel window");
         });
 }
 
