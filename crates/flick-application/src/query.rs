@@ -1,46 +1,45 @@
-//! Query generation tracking.
+//! 查询代次跟踪。
 //!
-//! `QueryTracker` ensures that stale routing results are discarded when a
-//! newer query has been submitted before the older one completed.
+//! `QueryTracker` 确保在较旧的查询完成之前提交了较新的查询时，
+//! 陈旧的路由结果会被丢弃。
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use flick_domain::QueryGeneration;
 
-/// Tracks the current query generation to discard out-of-order results.
+/// 跟踪当前查询代次，以丢弃乱序到达的结果。
 ///
-/// The UI assigns a monotonically increasing `QueryGeneration` to each
-/// `QueryChanged` message. The coordinator records the latest generation
-/// before calling `runtime.route()`, and checks afterwards whether it is
-/// still current. If a newer query arrived in the meantime the stale
-/// results are silently dropped.
+/// UI 为每条 `QueryChanged` 消息分配一个单调递增的 `QueryGeneration`。
+/// 协调器在调用 `runtime.route()` 之前记录最新的代次，随后检查
+/// 它是否仍为最新。如果在此期间有较新的查询到达，陈旧的结果
+/// 将被静默丢弃。
 ///
-/// This type is `Send + Sync` and safe to share across async tasks.
+/// 此类型为 `Send + Sync`，可安全地在异步任务之间共享。
 pub struct QueryTracker {
-    /// Stores the `u64` value of the current `QueryGeneration`.
-    /// `0` means "no query has been submitted yet".
+    /// 存储当前 `QueryGeneration` 的 `u64` 值。
+    /// `0` 表示"尚未提交任何查询"。
     current: AtomicU64,
 }
 
 impl QueryTracker {
-    /// Create a tracker with no active generation.
+    /// 创建一个没有活动代次的跟踪器。
     pub const fn new() -> Self {
         Self {
             current: AtomicU64::new(0),
         }
     }
 
-    /// Record `generation` as the current (latest) generation.
+    /// 将 `generation` 记录为当前（最新）代次。
     pub fn set_current(&self, generation: QueryGeneration) {
         self.current.store(generation.value(), Ordering::SeqCst);
     }
 
-    /// Returns `true` if `generation` is still the most recent generation.
+    /// 如果 `generation` 仍是最新代次，则返回 `true`。
     pub fn is_current(&self, generation: QueryGeneration) -> bool {
         self.current.load(Ordering::SeqCst) == generation.value()
     }
 
-    /// Returns the raw value of the current generation (0 = none).
+    /// 返回当前代次的原始值（0 表示无）。
     pub fn current_value(&self) -> u64 {
         self.current.load(Ordering::SeqCst)
     }

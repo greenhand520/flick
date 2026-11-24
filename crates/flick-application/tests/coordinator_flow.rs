@@ -1,7 +1,7 @@
-//! Integration tests for `ApplicationCoordinator`.
+//! `ApplicationCoordinator` 的集成测试。
 //!
-//! Each test builds a coordinator with fake Runtime and Sink implementations
-//! and verifies the message flow end-to-end.
+//! 每个测试都用伪造的 Runtime 和 Sink 实现构建协调器，
+//! 并端到端验证消息流程。
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -12,17 +12,17 @@ use async_trait::async_trait;
 use flick_application::{ApplicationCoordinator, HostEventSink, RuntimePort};
 use flick_domain::*;
 
-// ─── Fakes ───────────────────────────────────────────────────────────────────
+// ─── 伪造实现 ───────────────────────────────────────────────────────────────────
 
-/// Fake `RuntimePort` with configurable responses.
+/// 具有可配置响应的伪造 `RuntimePort`。
 struct FakeRuntime {
-    /// Map from query text → (routes, simulated latency).
+    /// 从查询文本到（路由、模拟延迟）的映射。
     route_responses: tokio::sync::Mutex<HashMap<String, (Vec<RouteItem>, Duration)>>,
-    /// The outcome to return from `invoke`.
+    /// `invoke` 返回的结果。
     invoke_outcome: Mutex<ActionOutcome>,
-    /// Records every `invoke` call for assertion.
+    /// 记录每一次 `invoke` 调用以供断言。
     invocations: Arc<Mutex<Vec<ActionRequest>>>,
-    /// Records every `cancel` call for assertion.
+    /// 记录每一次 `cancel` 调用以供断言。
     cancellations: Arc<Mutex<Vec<InvocationId>>>,
 }
 
@@ -40,8 +40,8 @@ impl FakeRuntime {
 
     fn with_routes(routes: HashMap<String, (Vec<RouteItem>, Duration)>) -> Self {
         let s = Self::new();
-        // Store routes into a temporary that we swap in
-        // Use try_lock since we just created the struct
+        // 将路由存入一个临时变量，随后换入
+        // 由于刚刚创建了该结构体，使用 try_lock
         *s.route_responses.try_lock().unwrap() = routes;
         s
     }
@@ -56,7 +56,7 @@ impl FakeRuntime {
 #[async_trait]
 impl RuntimePort for FakeRuntime {
     async fn route(&self, query: &str, _input_kind: InputKind) -> Vec<RouteItem> {
-        // Clone data out of the lock before sleeping.
+        // 在休眠前将数据从锁中克隆出来。
         let result = {
             let map = self.route_responses.lock().await;
             map.get(query).cloned()
@@ -83,7 +83,7 @@ impl RuntimePort for FakeRuntime {
     }
 }
 
-/// Fake `HostEventSink` that collects emitted events.
+/// 收集所发出事件的伪造 `HostEventSink`。
 struct FakeSink {
     events: Arc<Mutex<Vec<HostToUi>>>,
 }
@@ -106,7 +106,7 @@ impl HostEventSink for FakeSink {
     }
 }
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
+// ─── 辅助函数 ─────────────────────────────────────────────────────────────────
 
 fn make_route_item(id: &str, title: &str, score: f64) -> RouteItem {
     RouteItem {
@@ -116,10 +116,10 @@ fn make_route_item(id: &str, title: &str, score: f64) -> RouteItem {
     }
 }
 
-// ─── Tests ───────────────────────────────────────────────────────────────────
+// ─── 测试 ───────────────────────────────────────────────────────────────────
 
-/// Two queries are sent concurrently. The first (slow) query's results
-/// must be discarded because the second (fast) query supersedes it.
+/// 两个查询被并发发送。第一个（较慢）查询的结果必须被丢弃，
+/// 因为第二个（较快）查询取代了它。
 #[tokio::test]
 async fn newer_query_generation_wins_when_results_complete_out_of_order() {
     let gen1 = QueryGeneration::INITIAL;
@@ -142,7 +142,7 @@ async fn newer_query_generation_wins_when_results_complete_out_of_order() {
     let (sink, events) = FakeSink::new();
     let coord = Arc::new(ApplicationCoordinator::new(runtime, Arc::new(sink)));
 
-    // Spawn the slow query first.
+    // 先生成较慢的查询任务。
     let c1 = coord.clone();
     let h1 = tokio::spawn(async move {
         c1.handle_ui(UiToHost::QueryChanged {
@@ -152,10 +152,10 @@ async fn newer_query_generation_wins_when_results_complete_out_of_order() {
         .await;
     });
 
-    // Give gen1 time to set_current and start its slow route.
+    // 给 gen1 时间执行 set_current 并启动其慢速路由。
     tokio::time::sleep(Duration::from_millis(20)).await;
 
-    // Now spawn the fast query.
+    // 现在生成较快的查询任务。
     let c2 = coord.clone();
     let h2 = tokio::spawn(async move {
         c2.handle_ui(UiToHost::QueryChanged {
@@ -179,8 +179,8 @@ async fn newer_query_generation_wins_when_results_complete_out_of_order() {
     }
 }
 
-/// An `Invoke` from the UI must use `Caller::ui("search-panel")` and
-/// the `InvocationCompleted` event must be forwarded to the sink.
+/// 来自 UI 的 `Invoke` 必须使用 `Caller::ui("search-panel")`，并且
+/// `InvocationCompleted` 事件必须被转发到接收器。
 #[tokio::test]
 async fn invoke_from_ui_uses_ui_caller_and_forwards_completion() {
     let inv_id = InvocationId::new();
@@ -202,7 +202,7 @@ async fn invoke_from_ui_uses_ui_caller_and_forwards_completion() {
         })
         .await;
 
-    // Verify the runtime received the correct request.
+    // 验证运行时收到了正确的请求。
     {
         let invocs = invocations.lock().unwrap();
         assert_eq!(invocs.len(), 1);
@@ -212,7 +212,7 @@ async fn invoke_from_ui_uses_ui_caller_and_forwards_completion() {
         assert_eq!(invocs[0].input.text, "hello");
     }
 
-    // Verify the completion event was forwarded.
+    // 验证完成事件已被转发。
     {
         let emitted = events.lock().unwrap();
         assert_eq!(emitted.len(), 1);
@@ -229,8 +229,8 @@ async fn invoke_from_ui_uses_ui_caller_and_forwards_completion() {
     }
 }
 
-/// A `ShowSearchPanel` intent from Portal must emit the corresponding
-/// `HostToUi` event **without** invoking the runtime.
+/// 来自 Portal 的 `ShowSearchPanel` 意图必须发出相应的
+/// `HostToUi` 事件，**而不**调用运行时。
 #[test]
 fn portal_show_search_emits_host_to_ui_without_invoking_runtime() {
     let runtime = Arc::new(FakeRuntime::new());
@@ -242,7 +242,7 @@ fn portal_show_search_emits_host_to_ui_without_invoking_runtime() {
         activation_token: Some("portal-token-42".into()),
     });
 
-    // The event should be emitted exactly as provided.
+    // 事件应按所提供的原样发出。
     {
         let emitted = events.lock().unwrap();
         assert_eq!(emitted.len(), 1);
@@ -254,12 +254,12 @@ fn portal_show_search_emits_host_to_ui_without_invoking_runtime() {
         }
     }
 
-    // The runtime must not have been touched.
+    // 运行时必须未被触碰。
     assert!(invocations.lock().unwrap().is_empty());
 }
 
-/// Two consecutive toggles must emit Show then Hide, and the runtime
-/// must remain untouched.
+/// 连续两次切换必须依次发出 Show 和 Hide，且运行时
+/// 必须保持未被触碰。
 #[test]
 fn toggle_emits_show_then_hide_without_stopping_runtime() {
     let runtime = Arc::new(FakeRuntime::new());
@@ -267,7 +267,7 @@ fn toggle_emits_show_then_hide_without_stopping_runtime() {
     let (sink, events) = FakeSink::new();
     let coord = ApplicationCoordinator::new(runtime, Arc::new(sink));
 
-    // First toggle: panel was hidden → show.
+    // 第一次切换：面板原本隐藏 → 显示。
     coord.toggle_search_panel();
     {
         let emitted = events.lock().unwrap();
@@ -283,7 +283,7 @@ fn toggle_emits_show_then_hide_without_stopping_runtime() {
         }
     }
 
-    // Second toggle: panel was shown → hide.
+    // 第二次切换：面板原本显示 → 隐藏。
     coord.toggle_search_panel();
     {
         let emitted = events.lock().unwrap();
@@ -294,6 +294,6 @@ fn toggle_emits_show_then_hide_without_stopping_runtime() {
         }
     }
 
-    // Runtime untouched.
+    // 运行时未被触碰。
     assert!(invocations.lock().unwrap().is_empty());
 }
