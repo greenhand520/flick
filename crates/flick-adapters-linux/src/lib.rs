@@ -2,6 +2,7 @@
 //! 快捷键状态管理。
 
 pub mod diagnostics;
+pub mod flick_icon;
 pub mod portal;
 pub mod portal_client;
 pub mod portal_identity;
