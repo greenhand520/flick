@@ -1,4 +1,4 @@
-//! Tests for the Echo built-in action.
+//! Echo 内置动作的测试。
 
 use flick_builtins::echo::{ECHO_ACTION_ID, EchoHandler};
 use flick_domain::{ActionContext, ActionOutcome, ActionRequest, Caller};

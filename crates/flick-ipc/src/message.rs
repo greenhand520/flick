@@ -1,17 +1,16 @@
-//! IPC protocol message types.
+//! IPC 协议消息类型。
 //!
-//! The Flick IPC protocol uses a simple request/response model over Unix
-//! domain sockets.  Each message is a length-prefixed JSON frame (see
-//! [`crate::codec`]).
+//! Flick IPC 协议在 Unix 域套接字上使用简单的请求/响应模型。
+//! 每条消息都是一个长度前缀的 JSON 帧（参见 [`crate::codec`]）。
 
 use serde::{Deserialize, Serialize};
 
-/// Current protocol version.  Bump when the wire format changes.
+/// 当前协议版本。线格式变更时递增。
 pub const IPC_PROTOCOL_VERSION: u16 = 1;
 
-// ─── Envelopes ────────────────────────────────────────────────────────────────
+// ─── 信封 ─────────────────────────────────────────────────────────────────────
 
-/// A request envelope sent from client → server.
+/// 从客户端 → 服务端发送的请求信封。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IpcRequestEnvelope {
     pub protocol_version: u16,
@@ -19,7 +18,7 @@ pub struct IpcRequestEnvelope {
     pub command: IpcCommand,
 }
 
-/// A response envelope sent from server → client.
+/// 从服务端 → 客户端发送的响应信封。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IpcResponseEnvelope {
     pub protocol_version: u16,
@@ -27,36 +26,36 @@ pub struct IpcResponseEnvelope {
     pub result: IpcResult,
 }
 
-// ─── Commands ─────────────────────────────────────────────────────────────────
+// ─── 命令 ─────────────────────────────────────────────────────────────────────
 
-/// IPC commands that a client can issue.
+/// 客户端可以发出的 IPC 命令。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", content = "payload")]
 #[serde(rename_all = "snake_case")]
 pub enum IpcCommand {
-    /// Toggle the Flick UI visibility.
+    /// 切换 Flick UI 的可见性。
     Toggle,
-    /// Trigger a specific action by ID with optional text input.
+    /// 通过 ID 触发特定动作，并带有可选的文本输入。
     Trigger { action_id: String, text: String },
-    /// Query daemon status.
+    /// 查询守护进程状态。
     Status,
-    /// Run diagnostics.
+    /// 运行诊断。
     Doctor,
-    /// (Re)configure global shortcuts with a preferred key trigger.
+    /// 使用首选的按键触发器（重新）配置全局快捷键。
     ShortcutsConfigure { preferred_trigger: String },
-    /// Reconnect to the shortcut portal.
+    /// 重新连接到快捷键 Portal。
     ShortcutsReconnect,
-    /// Gracefully shut down the daemon.
+    /// 优雅地关闭守护进程。
     Shutdown,
-    /// Show the search panel directly (bypass Portal).
+    /// 直接显示搜索面板（绕过 Portal）。
     Show,
-    /// Hide the search panel directly.
+    /// 直接隐藏搜索面板。
     Hide,
 }
 
-// ─── Results ──────────────────────────────────────────────────────────────────
+// ─── 结果 ─────────────────────────────────────────────────────────────────────
 
-/// The result of dispatching an IPC command.
+/// 分派一条 IPC 命令的结果。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "result", rename_all = "snake_case")]
 pub enum IpcResult {
@@ -65,12 +64,12 @@ pub enum IpcResult {
 }
 
 impl IpcResult {
-    /// Convenience constructor for successful results.
+    /// 用于构造成功结果的便捷构造函数。
     pub fn ok(value: serde_json::Value) -> Self {
         Self::Ok(value)
     }
 
-    /// Convenience constructor for error results.
+    /// 用于构造错误结果的便捷构造函数。
     pub fn error(code: IpcErrorCode, message: impl Into<String>) -> Self {
         Self::Error {
             code,
@@ -79,32 +78,32 @@ impl IpcResult {
     }
 }
 
-// ─── Error codes ──────────────────────────────────────────────────────────────
+// ─── 错误码 ───────────────────────────────────────────────────────────────────
 
-/// Machine-readable error codes for IPC errors.
+/// IPC 错误的机器可读错误码。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum IpcErrorCode {
-    /// The daemon is not running or the socket is unreachable.
+    /// 守护进程未运行，或套接字不可达。
     DaemonUnavailable,
-    /// The client's protocol version does not match the server's.
+    /// 客户端的协议版本与服务端的不匹配。
     ProtocolVersionMismatch,
-    /// The command is not recognised.
+    /// 该命令无法识别。
     UnknownCommand,
-    /// The requested action ID was not found in the registry.
+    /// 在注册表中未找到请求的动作 ID。
     ActionNotFound,
-    /// The command payload failed validation.
+    /// 命令负载未通过校验。
     InvalidInput,
-    /// The required graphical desktop session or Portal is unavailable.
+    /// 所需的图形桌面会话或 Portal 不可用。
     DesktopUnavailable,
-    /// An unexpected internal error occurred.
+    /// 发生了意外的内部错误。
     Internal,
-    /// The invocation was cancelled.
+    /// 该调用被取消。
     Cancelled,
 }
 
 impl IpcErrorCode {
-    /// Machine-readable error code string.
+    /// 机器可读的错误码字符串。
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::DaemonUnavailable => "daemon_unavailable",

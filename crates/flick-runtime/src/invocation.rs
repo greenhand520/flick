@@ -1,26 +1,26 @@
-//! InvocationHandle — tracks a running Action invocation.
+//! InvocationHandle — 跟踪正在运行的 Action 调用。
 
 use flick_domain::InvocationId;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
-/// Handle to a running invocation.
+/// 指向正在运行的调用的句柄。
 ///
-/// Allows the runtime (or caller) to cancel an in-flight action.
-/// The inner task is expected to be spawned with
-/// [`tokio::spawn`] and produces an
-/// `Result<ActionOutcome, ActionError>`.
+/// 允许运行时（或调用方）取消正在执行中的动作。
+/// 内部任务预期使用 [`tokio::spawn`] 生成，
+/// 并产生一个
+/// `Result<ActionOutcome, ActionError>`。
 pub struct InvocationHandle {
-    /// Unique id for this invocation.
+    /// 此调用的唯一 id。
     pub id: InvocationId,
-    /// Token that is signalled when the invocation should stop.
+    /// 当调用应当停止时会收到信号的令牌。
     cancellation: CancellationToken,
-    /// The spawned task.
+    /// 生成的任务。
     handle: JoinHandle<Result<flick_domain::ActionOutcome, flick_domain::ActionError>>,
 }
 
 impl InvocationHandle {
-    /// Create a new handle.
+    /// 创建一个新的句柄。
     pub fn new(
         id: InvocationId,
         cancellation: CancellationToken,
@@ -33,11 +33,11 @@ impl InvocationHandle {
         }
     }
 
-    /// Request cooperative cancellation of this invocation.
+    /// 请求对此调用进行协作式取消。
     ///
-    /// Returns `true` if the token was newly cancelled (i.e. it was
-    /// not already cancelled). The handler must cooperatively observe
-    /// the token for this to take effect.
+    /// 如果令牌是首次被取消（即此前
+    /// 尚未取消），则返回 `true`。处理器必须协作式地观察
+    /// 该令牌，此操作才会生效。
     pub fn cancel(&self) -> bool {
         if self.cancellation.is_cancelled() {
             false
@@ -47,9 +47,9 @@ impl InvocationHandle {
         }
     }
 
-    /// Consume the handle and await the task result.
+    /// 消费该句柄并等待任务结果。
     ///
-    /// Returns `Err(JoinError)` if the task panicked.
+    /// 如果任务发生 panic，则返回 `Err(JoinError)`。
     pub async fn into_result(
         self,
     ) -> Result<
@@ -59,7 +59,7 @@ impl InvocationHandle {
         self.handle.await
     }
 
-    /// Abort the underlying task immediately.
+    /// 立即中止底层任务。
     pub fn abort(&self) {
         self.handle.abort();
     }

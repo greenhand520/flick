@@ -1,7 +1,7 @@
-//! `flick-cli` library: testable CLI logic.
+//! `flick-cli` 库：可测试的 CLI 逻辑。
 //!
-//! Separates argument parsing, IPC communication, and output formatting
-//! from the `main()` entry point so each can be tested independently.
+//! 将参数解析、IPC 通信和输出格式化
+//! 与 `main()` 入口点分离，以便各自独立测试。
 
 use flick_ipc::message::*;
 use flick_ipc::unix::UnixSocketClient;
@@ -13,10 +13,10 @@ pub enum SocketPathError {
     #[error("XDG_RUNTIME_DIR is required; pass --socket for an explicit path")]
     MissingRuntimeDir,
 }
-/// Resolve Flick's default socket from an injected environment lookup.
+/// 从注入的环境查询中解析 Flick 的默认套接字。
 ///
-/// This intentionally matches the daemon's policy: without an explicit
-/// `--socket`, `XDG_RUNTIME_DIR` must be present and nonempty.
+/// 这有意与守护进程的策略保持一致：未显式指定
+/// `--socket` 时，`XDG_RUNTIME_DIR` 必须存在且非空。
 pub fn resolve_default_socket_path<F>(get_env: F) -> Result<PathBuf, SocketPathError>
 where
     F: FnOnce(&str) -> Option<String>,
@@ -27,12 +27,12 @@ where
     Ok(PathBuf::from(runtime_dir).join("flick").join("flick.sock"))
 }
 
-/// Default socket path if none is specified.
+/// 未指定时的默认套接字路径。
 pub fn default_socket_path() -> Result<PathBuf, SocketPathError> {
     resolve_default_socket_path(|key| std::env::var(key).ok())
 }
 
-/// Build an IPC request envelope for a given command.
+/// 为给定命令构建 IPC 请求信封。
 pub fn build_request(command: IpcCommand) -> IpcRequestEnvelope {
     use std::sync::atomic::{AtomicU64, Ordering};
     static COUNTER: AtomicU64 = AtomicU64::new(1);
@@ -43,9 +43,9 @@ pub fn build_request(command: IpcCommand) -> IpcRequestEnvelope {
     }
 }
 
-/// Format an IPC result for output.
+/// 格式化 IPC 结果以供输出。
 ///
-/// Returns `(output_string, is_stderr, exit_code)`.
+/// 返回 `(output_string, is_stderr, exit_code)`。
 pub fn format_result(result: &IpcResult, json_output: bool) -> (String, bool, i32) {
     match result {
         IpcResult::Ok(value) => {
@@ -76,18 +76,18 @@ pub fn format_result(result: &IpcResult, json_output: bool) -> (String, bool, i3
     }
 }
 
-/// Result of a single IPC connection attempt.
+/// 单次 IPC 连接尝试的结果。
 #[derive(Debug)]
 pub enum ConnectResult {
-    /// Successfully received a response.
+    /// 成功收到响应。
     Response(IpcResponseEnvelope),
-    /// Failed to connect to the daemon socket.
+    /// 连接守护进程套接字失败。
     ConnectError(String),
-    /// Connected but failed during request/response.
+    /// 已连接但请求/响应期间失败。
     TransportError(String),
 }
 
-/// Attempt to connect to the daemon and send a request.
+/// 尝试连接守护进程并发送请求。
 pub async fn try_connect_and_send(path: &Path, request: &IpcRequestEnvelope) -> ConnectResult {
     match UnixSocketClient::connect(path).await {
         Ok(mut client) => match client.request(request).await {
@@ -98,7 +98,7 @@ pub async fn try_connect_and_send(path: &Path, request: &IpcRequestEnvelope) -> 
     }
 }
 
-/// Format a connection/transport error for output.
+/// 格式化连接/传输错误以供输出。
 pub fn format_connection_error(err_msg: &str, json_output: bool) -> (String, bool) {
     if json_output {
         (
@@ -113,7 +113,7 @@ pub fn format_connection_error(err_msg: &str, json_output: bool) -> (String, boo
     }
 }
 
-/// Format a transport error for output.
+/// 格式化传输错误以供输出。
 pub fn format_transport_error(err_msg: &str, json_output: bool) -> (String, bool) {
     if json_output {
         (

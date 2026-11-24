@@ -1,48 +1,48 @@
-//! Fake `HostEventSink` for testing.
+//! 用于测试的伪 `HostEventSink`。
 //!
-//! `FakeHostEventSink` collects all `HostToUi` events emitted by the
-//! coordinator, making them available for assertions.
+//! `FakeHostEventSink` 收集协调器发出的所有 `HostToUi` 事件，
+//! 以便用于断言。
 
 use std::sync::{Arc, Mutex};
 
 use flick_application::HostEventSink;
 use flick_domain::HostToUi;
 
-/// A test double for `HostEventSink` that records every event.
+/// 用于 `HostEventSink` 的测试替身，记录每一个事件。
 ///
-/// # Usage
+/// # 用法
 ///
 /// ```ignore
 /// let sink = FakeHostEventSink::new();
 /// let coord = ApplicationCoordinator::new(runtime, Arc::new(sink));
-/// // … drive the coordinator …
-/// let events = sink.events();   // snapshot
-/// let last  = sink.last();      // peek without removing
-/// let all   = sink.drain();     // drain all events
+/// // … 驱动协调器 …
+/// let events = sink.events();   // 快照
+/// let last  = sink.last();      // 窥视但不移除
+/// let all   = sink.drain();     // 排空所有事件
 /// ```
 pub struct FakeHostEventSink {
     events: Arc<Mutex<Vec<HostToUi>>>,
 }
 
 impl FakeHostEventSink {
-    /// Create a new, empty sink.
+    /// 创建一个新的空接收端。
     pub fn new() -> Self {
         Self {
             events: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
-    /// Return a clone of all collected events (does **not** drain).
+    /// 返回所有已收集事件的克隆（**不会**排空）。
     pub fn events(&self) -> Vec<HostToUi> {
         self.events.lock().unwrap().clone()
     }
 
-    /// Drain all collected events, leaving the internal buffer empty.
+    /// 排空所有已收集的事件，使内部缓冲区为空。
     pub fn drain(&self) -> Vec<HostToUi> {
         self.events.lock().unwrap().drain(..).collect()
     }
 
-    /// Peek at the most recently emitted event (without removing it).
+    /// 窥视最近发出的事件（不将其移除）。
     pub fn last(&self) -> Option<HostToUi> {
         self.events.lock().unwrap().last().cloned()
     }

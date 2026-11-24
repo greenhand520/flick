@@ -1,26 +1,26 @@
-//! `flick-ipc` — Inter-process communication for Flick.
+//! `flick-ipc` — Flick 的进程间通信。
 //!
-//! Provides the IPC protocol types, a length-prefixed JSON frame codec,
-//! a Unix domain socket transport, and a request dispatcher framework.
+//! 提供 IPC 协议类型、长度前缀的 JSON 帧编解码器、
+//! Unix 域套接字传输，以及请求分派框架。
 //!
-//! # Wire format
+//! # 线格式
 //!
-//! Each IPC message is a single JSON frame prefixed by a 4-byte
-//! big-endian length header.  Maximum frame size: 64 KiB.
+//! 每条 IPC 消息都是一个单独的 JSON 帧，前面带有一个 4 字节的
+//! 大端长度头。最大帧大小：64 KiB。
 //!
-//! # Protocol
+//! # 协议
 //!
-//! 1. Client connects to the daemon's Unix socket.
-//! 2. Client sends one [`message::IpcRequestEnvelope`].
-//! 3. Server replies with one [`message::IpcResponseEnvelope`].
-//! 4. Connection is closed (Phase 0).
+//! 1. 客户端连接到守护进程的 Unix 套接字。
+//! 2. 客户端发送一个 [`message::IpcRequestEnvelope`]。
+//! 3. 服务端回复一个 [`message::IpcResponseEnvelope`]。
+//! 4. 连接关闭（Phase 0）。
 
 pub mod codec;
 pub mod message;
 pub mod server;
 pub mod unix;
 
-// ─── Re-exports ───────────────────────────────────────────────────────────────
+// ─── 重新导出 ─────────────────────────────────────────────────────────────────
 
 pub use codec::{CodecError, MAX_FRAME_SIZE};
 pub use message::{

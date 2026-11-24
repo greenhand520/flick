@@ -1,6 +1,6 @@
-//! Length-prefixed JSON frame codec.
+//! 长度前缀的 JSON 帧编解码器。
 //!
-//! Wire format per frame:
+//! 每帧的线格式：
 //!
 //! ```text
 //! ┌────────────────┬──────────────────┐
@@ -9,15 +9,15 @@
 //! └────────────────┴──────────────────┘
 //! ```
 //!
-//! Maximum frame size: 64 KiB (65 536 bytes).
+//! 最大帧大小：64 KiB（65 536 字节）。
 
 use serde::{Deserialize, Serialize};
 use std::io::{self, Read, Write};
 
-/// Maximum payload size in bytes (64 KiB).
+/// 以字节为单位的最大负载大小（64 KiB）。
 pub const MAX_FRAME_SIZE: u32 = 64 * 1024;
 
-/// Error type for codec operations.
+/// 编解码器操作的错误类型。
 #[derive(Debug, thiserror::Error)]
 pub enum CodecError {
     #[error("frame too large: {size} bytes (max 65536)")]
@@ -30,11 +30,11 @@ pub enum CodecError {
     Json(#[from] serde_json::Error),
 }
 
-// ─── Encode / Decode (in-memory) ──────────────────────────────────────────────
+// ─── 编码 / 解码（内存中） ────────────────────────────────────────────────────
 
-/// Serialize a value into a length-prefixed JSON frame.
+/// 将一个值序列化为长度前缀的 JSON 帧。
 ///
-/// Returns `Err` if the encoded JSON exceeds [`MAX_FRAME_SIZE`].
+/// 如果编码后的 JSON 超过 [`MAX_FRAME_SIZE`]，则返回 `Err`。
 pub fn encode<T: Serialize>(value: &T) -> Result<Vec<u8>, CodecError> {
     let json_bytes = serde_json::to_vec(value)?;
     let len = json_bytes.len() as u32;
@@ -47,21 +47,21 @@ pub fn encode<T: Serialize>(value: &T) -> Result<Vec<u8>, CodecError> {
     Ok(frame)
 }
 
-/// Decode a JSON value from raw payload bytes (without the length prefix).
+/// 从原始负载字节中解码 JSON 值（不含长度前缀）。
 pub fn decode<T: for<'de> Deserialize<'de>>(data: &[u8]) -> Result<T, CodecError> {
     Ok(serde_json::from_slice(data)?)
 }
 
-// ─── Stream helpers ───────────────────────────────────────────────────────────
+// ─── 流辅助函数 ───────────────────────────────────────────────────────────────
 
-/// Read exactly `n` bytes from a reader, returning an error on short reads.
+/// 从读取器中读取恰好 `n` 个字节，读取不足时返回错误。
 fn read_exact_bytes<const N: usize>(reader: &mut impl Read) -> io::Result<[u8; N]> {
     let mut buf = [0u8; N];
     reader.read_exact(&mut buf)?;
     Ok(buf)
 }
 
-/// Write a complete frame (length prefix + JSON) to a writer.
+/// 将一个完整的帧（长度前缀 + JSON）写入写入器。
 pub fn write_frame<T: Serialize>(writer: &mut impl Write, value: &T) -> Result<(), CodecError> {
     let frame = encode(value)?;
     writer.write_all(&frame)?;
@@ -69,9 +69,9 @@ pub fn write_frame<T: Serialize>(writer: &mut impl Write, value: &T) -> Result<(
     Ok(())
 }
 
-/// Read a complete frame from a reader and decode the JSON payload.
+/// 从读取器读取一个完整的帧并解码 JSON 负载。
 ///
-/// Returns `Err` if the frame exceeds [`MAX_FRAME_SIZE`].
+/// 如果帧超过 [`MAX_FRAME_SIZE`]，则返回 `Err`。
 pub fn read_frame<T: for<'de> Deserialize<'de>>(reader: &mut impl Read) -> Result<T, CodecError> {
     let len_bytes = read_exact_bytes::<4>(reader).map_err(CodecError::Io)?;
     let len = u32::from_be_bytes(len_bytes);

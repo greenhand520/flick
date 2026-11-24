@@ -11,11 +11,11 @@ use std::process;
     long_about = "Control the Flick daemon. The 'toggle' command is intended as an IPC fallback for desktop environment custom shortcut binding."
 )]
 struct Cli {
-    /// Path to daemon socket (default: $XDG_RUNTIME_DIR/flick/flick.sock)
+    /// 守护进程套接字路径（默认：$XDG_RUNTIME_DIR/flick/flick.sock）
     #[arg(long)]
     socket: Option<PathBuf>,
 
-    /// Output JSON instead of human-readable text
+    /// 输出 JSON 而非人类可读文本
     #[arg(long)]
     json: bool,
 
@@ -25,43 +25,43 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Toggle the search panel visibility (IPC fallback for desktop shortcut binding)
+    /// 切换搜索面板的可见性（桌面快捷键绑定的 IPC 回退方案）
     Toggle,
-    /// Trigger a specific action by ID
+    /// 按标识符触发特定动作
     Trigger {
-        /// Action ID to invoke
+        /// 要调用的动作标识符
         action_id: String,
-        /// Text input for the action
+        /// 动作的文本输入
         #[arg(long)]
         text: String,
     },
-    /// Show daemon status
+    /// 显示守护进程状态
     Status,
-    /// Show diagnostic information about the session and Portal
+    /// 显示有关会话和 Portal 的诊断信息
     Doctor,
-    /// Shortcut management
+    /// 快捷键管理
     Shortcuts {
         #[command(subcommand)]
         action: ShortcutsAction,
     },
-    /// Gracefully shut down the daemon
+    /// 正常关闭守护进程
     Shutdown,
-    /// Show the search panel (bypass Portal shortcut)
+    /// 显示搜索面板（绕过 Portal 快捷键）
     Show,
-    /// Hide the search panel
+    /// 隐藏搜索面板
     Hide,
 }
 
 #[derive(Subcommand)]
 enum ShortcutsAction {
-    /// Configure the search shortcut via Portal (opens Portal binding UI).
-    /// Default preferred trigger: Super+Space.
+    /// 通过 Portal 配置搜索快捷键（打开 Portal 绑定界面）。
+    /// 默认首选触发器：Super+Space。
     Configure {
-        /// Preferred key trigger for show-search (e.g. "Super+Space", "Ctrl+Space")
+        /// show-search 的首选按键触发器（例如 "Super+Space"、"Ctrl+Space"）
         #[arg(long = "show-search", default_value = "Super+Space")]
         preferred_trigger: String,
     },
-    /// Reconnect to the Portal session (recovery only, no binding UI)
+    /// 重新连接到 Portal 会话（仅用于恢复，无绑定界面）
     Reconnect,
 }
 
@@ -98,7 +98,7 @@ async fn main() {
 
     let request = build_request(command);
 
-    // First attempt
+    // 首次尝试
     let exit_code = match try_connect_and_send(&path, &request).await {
         ConnectResult::Response(response) => {
             let (output, is_stderr, code) = format_result(&response.result, json_output);
@@ -110,7 +110,7 @@ async fn main() {
             code
         }
         ConnectResult::ConnectError(_e) => {
-            2 // will be handled below for toggle retry
+            2 // 将在下方处理以进行 toggle 重试
         }
         ConnectResult::TransportError(e) => {
             let (output, is_stderr) = format_transport_error(&e, json_output);
@@ -123,7 +123,7 @@ async fn main() {
         }
     };
 
-    // If daemon unavailable for Toggle, try starting the service once
+    // 如果 Toggle 时守护进程不可用，尝试启动一次服务
     if exit_code == 2 {
         if matches!(request.command, IpcCommand::Toggle) {
             if !json_output {
@@ -136,7 +136,7 @@ async fn main() {
 
             tokio::time::sleep(std::time::Duration::from_millis(500)).await;
 
-            // Retry once
+            // 重试一次
             let retry_code = match try_connect_and_send(&path, &request).await {
                 ConnectResult::Response(response) => {
                     let (output, is_stderr, code) = format_result(&response.result, json_output);
@@ -169,7 +169,7 @@ async fn main() {
             process::exit(retry_code);
         }
 
-        // Non-toggle: print the connect error
+        // 非 Toggle：打印连接错误
         let (output, is_stderr) = format_connection_error("daemon not reachable", json_output);
         if is_stderr {
             eprintln!("{output}");

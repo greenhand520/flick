@@ -1,4 +1,4 @@
-//! Integration tests for the Unix socket IPC transport.
+//! Unix 套接字 IPC 传输的集成测试。
 
 use async_trait::async_trait;
 use flick_ipc::message::{
@@ -10,10 +10,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tempfile::TempDir;
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
+// ─── 辅助函数 ─────────────────────────────────────────────────────────────────
 
-/// A trivial dispatcher that echoes trigger payloads and returns Ok for
-/// everything else.
+/// 一个简单的分派器，它回显触发负载，并对其他所有命令返回 Ok。
 struct EchoDispatcher;
 
 #[async_trait]
@@ -29,13 +28,13 @@ impl IpcDispatcher for EchoDispatcher {
     }
 }
 
-/// Spawn an IPC server in the background and return the socket path.
+/// 在后台启动一个 IPC 服务端并返回套接字路径。
 fn spawn_server(tmpdir: &TempDir) -> PathBuf {
     let path = tmpdir.path().join("flick.sock");
     let server = unix::bind(&path).expect("bind failed");
     let ipc_server = IpcServer::new(server, Arc::new(EchoDispatcher));
     tokio::spawn(async move {
-        // run() loops forever; the test will drop the socket path when done.
+        // run() 会一直循环；测试结束时会丢弃套接字路径。
         let _ = ipc_server
             .run(tokio_util::sync::CancellationToken::new())
             .await;
@@ -51,14 +50,14 @@ fn make_request(request_id: &str, command: IpcCommand, version: u16) -> IpcReque
     }
 }
 
-// ─── Tests ────────────────────────────────────────────────────────────────────
+// ─── 测试 ─────────────────────────────────────────────────────────────────────
 
 #[tokio::test]
 async fn response_keeps_request_id_for_trigger() {
     let tmpdir = TempDir::new().unwrap();
     let path = spawn_server(&tmpdir);
 
-    // Give the server a moment to start listening.
+    // 给服务端一点时间开始监听。
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
     let mut client = unix::connect(&path).await.expect("connect failed");
@@ -91,21 +90,21 @@ async fn stale_socket_is_removed_only_after_single_instance_probe_fails() {
     let tmpdir = TempDir::new().unwrap();
     let path = tmpdir.path().join("flick.sock");
 
-    // Create a "stale" socket: bind a listener then drop it.
-    // The socket file remains on disk, but nothing is listening.
+    // 创建一个"陈旧"的套接字：绑定一个监听器然后丢弃它。
+    // 套接字文件仍留在磁盘上，但没有任何东西在监听。
     {
         let _listener = std::os::unix::net::UnixListener::bind(&path).unwrap();
-        // listener is dropped here — socket file is now stale.
+        // listener 在此处被丢弃——套接字文件现已陈旧。
     }
 
-    // The socket file should exist (stale).
+    // 套接字文件应该存在（陈旧）。
     assert!(path.exists(), "stale socket file should exist");
 
-    // bind() should detect no listener, remove the stale file, and succeed.
+    // bind() 应检测不到监听者，删除陈旧文件并成功。
     let server = unix::bind(&path).expect("bind should succeed after removing stale socket");
     assert!(path.exists(), "fresh socket file should exist after bind");
 
-    // Verify the server actually works.
+    // 验证服务端确实能正常工作。
     let ipc_server = IpcServer::new(server, Arc::new(EchoDispatcher));
     tokio::spawn(async move {
         let _ = ipc_server
@@ -129,11 +128,11 @@ async fn server_rejects_unknown_protocol_version() {
 
     let mut client = unix::connect(&path).await.expect("connect failed");
 
-    // Send a request with a wrong protocol version.
+    // 发送一个协议版本错误的请求。
     let request = make_request(
         "req-bad-ver",
         IpcCommand::Status,
-        99, // wrong version
+        99, // 错误的版本
     );
 
     let response = client.request(&request).await.expect("request failed");

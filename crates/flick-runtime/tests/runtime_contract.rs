@@ -1,6 +1,6 @@
-//! Contract tests for `flick-runtime`.
+//! `flick-runtime` 的契约测试。
 //!
-//! Each `#[test]` corresponds to a named contract scenario.
+//! 每个 `#[test]` 对应一个具名的契约场景。
 
 use flick_domain::{
     ActionContext, ActionDescriptor, ActionError, ActionId, ActionOutcome, ActionRequest, Caller,
@@ -10,9 +10,9 @@ use flick_runtime::{ActionHandler, ActionRuntime};
 use std::sync::Arc;
 use std::time::Duration;
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
+// ─── 辅助函数 ─────────────────────────────────────────────────────────────────
 
-/// Echo handler: returns the raw input text as `ActionOutcome::Data`.
+/// Echo 处理器：将原始输入文本作为 `ActionOutcome::Data` 返回。
 struct EchoHandler;
 
 #[async_trait::async_trait]
@@ -22,15 +22,15 @@ impl ActionHandler for EchoHandler {
         request: ActionRequest,
         _ctx: ActionContext,
     ) -> Result<ActionOutcome, ActionError> {
-        // Strip "echo " prefix if present, otherwise return raw text.
+        // 如果存在 "echo " 前缀则将其去掉，否则返回原始文本。
         let text = request.input.text;
         let stripped = text.strip_prefix("echo ").unwrap_or(&text).to_string();
         Ok(ActionOutcome::Data(serde_json::json!({ "echo": stripped })))
     }
 }
 
-/// A slow handler that sleeps and cooperatively checks cancellation.
-/// Used to test deadline / cancel paths.
+/// 一个会休眠并协作式检查取消的慢速处理器。
+/// 用于测试截止时间 / 取消路径。
 struct SlowHandler {
     delay: Duration,
 }
@@ -73,22 +73,22 @@ fn echo_request(text: &str, caller: Caller) -> ActionRequest {
     }
 }
 
-/// Build a runtime with the echo action pre-registered.
+/// 构建一个预注册了 echo 动作的运行时。
 async fn runtime_with_echo() -> ActionRuntime {
     let rt = ActionRuntime::new();
     rt.register(echo_descriptor(), Arc::new(EchoHandler)).await;
     rt
 }
 
-// ─── Contract Tests ──────────────────────────────────────────────────────────
+// ─── 契约测试 ─────────────────────────────────────────────────────────────────
 
-/// Scenario: routing "echo hello" returns the echo action, and invoking
-/// it from both UI and CLI callers yields the expected data.
+/// 场景：路由 "echo hello" 会返回 echo 动作，并且从
+/// UI 和 CLI 调用方调用它都会得到预期的数据。
 #[tokio::test]
 async fn runtime_routes_echo_for_plain_text_and_executes_for_ui_and_cli() {
     let rt = runtime_with_echo().await;
 
-    // ── Routing ──
+    // ── 路由 ──
     let routes = rt.route("echo hello", InputKind::PlainText).await;
     assert!(!routes.is_empty(), "echo should be routed for 'echo hello'");
     assert_eq!(
@@ -96,7 +96,7 @@ async fn runtime_routes_echo_for_plain_text_and_executes_for_ui_and_cli() {
         ActionId::from_static("flick.builtin.echo.v1.echo")
     );
 
-    // ── Invoke from UI caller ──
+    // ── 从 UI 调用方调用 ──
     let ui_req = echo_request("echo hello from ui", Caller::ui("search-panel"));
     let outcome = rt.invoke(ui_req).await;
     match outcome {
@@ -106,7 +106,7 @@ async fn runtime_routes_echo_for_plain_text_and_executes_for_ui_and_cli() {
         other => panic!("expected Data, got {other:?}"),
     }
 
-    // ── Invoke from CLI caller ──
+    // ── 从 CLI 调用方调用 ──
     let cli_req = echo_request("echo hello from cli", Caller::cli("flick-cli"));
     let outcome = rt.invoke(cli_req).await;
     match outcome {
@@ -117,14 +117,14 @@ async fn runtime_routes_echo_for_plain_text_and_executes_for_ui_and_cli() {
     }
 }
 
-/// Scenario: "echo hello" matches via prefix-command (strips "echo "
-/// prefix → "hello"), while "echohello" does NOT match because there
-/// is no word boundary after "echo".
+/// 场景："echo hello" 通过前缀命令匹配（去掉 "echo "
+/// 前缀 → "hello"），而 "echohello" 不匹配，因为
+/// "echo" 之后没有词边界。
 #[tokio::test]
 async fn exact_echo_prefix_binds_remaining_text_without_special_ui_path() {
     let rt = runtime_with_echo().await;
 
-    // "echo hello" → matches, remainder is "hello"
+    // "echo hello" → 匹配，剩余部分为 "hello"
     let routes = rt.route("echo hello", InputKind::PlainText).await;
     assert_eq!(
         routes.len(),
@@ -136,7 +136,7 @@ async fn exact_echo_prefix_binds_remaining_text_without_special_ui_path() {
         ActionId::from_static("flick.builtin.echo.v1.echo")
     );
 
-    // Invoke to confirm the text is correctly stripped
+    // 调用以确认文本被正确去掉前缀
     let req = echo_request("echo hello", Caller::cli("test"));
     let outcome = rt.invoke(req).await;
     match outcome {
@@ -146,7 +146,7 @@ async fn exact_echo_prefix_binds_remaining_text_without_special_ui_path() {
         other => panic!("expected Data with 'hello', got {other:?}"),
     }
 
-    // "echohello" → must NOT match (no word boundary)
+    // "echohello" → 必须不匹配（无词边界）
     let routes = rt.route("echohello", InputKind::PlainText).await;
     assert!(
         routes.is_empty(),
@@ -154,13 +154,13 @@ async fn exact_echo_prefix_binds_remaining_text_without_special_ui_path() {
     );
 }
 
-/// Scenario: cancelling an in-flight invocation returns a Cancelled
-/// outcome (or the handler stops early).
+/// 场景：取消正在执行中的调用会返回 Cancelled
+/// 结果（或者处理器提前停止）。
 #[tokio::test]
 async fn cancelling_an_invocation_returns_cancelled_outcome_or_stops_work() {
     let rt = ActionRuntime::new();
 
-    // Register a slow handler that takes 10s but checks cancellation.
+    // 注册一个耗时 10 秒但会检查取消的慢速处理器。
     let slow_id = ActionId::from_static("flick.builtin.slow.v1.run");
     rt.register(
         ActionDescriptor {
@@ -182,15 +182,15 @@ async fn cancelling_an_invocation_returns_cancelled_outcome_or_stops_work() {
         action_id: slow_id,
         input: flick_domain::ActionInput::plain_text("slow"),
         caller: Caller::cli("test"),
-        deadline: Deadline::from_secs(60), // long deadline so we cancel first
+        deadline: Deadline::from_secs(60), // 较长的截止时间，以便我们先取消
     };
 
-    // Spawn invoke in background, cancel after a short delay.
+    // 在后台生成调用任务，短暂延迟后取消。
     let rt_arc = Arc::new(rt);
     let rt_clone = Arc::clone(&rt_arc);
     let invoke_handle = tokio::spawn(async move { rt_clone.invoke(req).await });
 
-    // Give the handler a moment to start, then cancel.
+    // 给处理器一点启动时间，然后取消。
     tokio::time::sleep(Duration::from_millis(50)).await;
     let cancelled = rt_arc.cancel(invocation_id).await;
     assert!(
@@ -205,8 +205,8 @@ async fn cancelling_an_invocation_returns_cancelled_outcome_or_stops_work() {
     );
 }
 
-/// Scenario: invoking an action that is NOT in the registry returns a
-/// structured `UnknownAction` error — never a panic.
+/// 场景：调用不在注册表中的动作会返回结构化的
+/// `UnknownAction` 错误 — 而不会发生 panic。
 #[tokio::test]
 async fn unknown_action_is_structured_not_a_panic() {
     let rt = ActionRuntime::new();
@@ -223,7 +223,7 @@ async fn unknown_action_is_structured_not_a_panic() {
     match outcome {
         ActionOutcome::Error(ActionError::UnknownAction { action_id }) => {
             assert_eq!(action_id, "does.not.exist");
-            // Verify it has a stable error code
+            // 验证它具有稳定的错误码
             let err = ActionError::UnknownAction {
                 action_id: action_id.clone(),
             };

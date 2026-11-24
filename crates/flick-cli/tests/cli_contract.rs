@@ -1,10 +1,10 @@
-//! CLI contract tests.
+//! CLI 契约测试。
 //!
-//! Verifies that the CLI:
-//! - Builds correct `IpcCommand` variants for each subcommand
-//! - Formats results properly (JSON and human-readable)
-//! - Handles daemon unavailable correctly
-//! - Sends expected commands to a real IPC server (round-trip)
+//! 验证 CLI 是否：
+//! - 为每个子命令构建正确的 `IpcCommand` 变体
+//! - 正确格式化结果（JSON 和人类可读格式）
+//! - 正确处理守护进程不可用的情况
+//! - 向真实 IPC 服务器发送预期命令（往返）
 
 use flick_cli::*;
 use flick_ipc::message::*;
@@ -13,14 +13,14 @@ use flick_ipc::unix;
 use std::sync::Arc;
 use tempfile::TempDir;
 
-// ─── Test dispatcher ─────────────────────────────────────────────────────────
+// ─── 测试调度器 ─────────────────────────────────────────────────────────
 
-/// A test dispatcher that records received commands and returns configurable
-/// results.
+/// 记录收到的命令并返回可配置
+/// 结果的测试调度器。
 struct TestDispatcher {
-    /// Record of commands received.
+    /// 收到的命令记录。
     received: std::sync::Mutex<Vec<IpcCommand>>,
-    /// Pre-configured result to return.
+    /// 预先配置的结果。
     result: IpcResult,
 }
 
@@ -45,9 +45,9 @@ impl IpcDispatcher for TestDispatcher {
     }
 }
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
+// ─── 辅助函数 ─────────────────────────────────────────────────────────────────
 
-/// Spawn a test IPC server and return the socket path + dispatcher handle.
+/// 启动测试 IPC 服务器并返回套接字路径 + 调度器句柄。
 async fn spawn_test_server(
     tmpdir: &TempDir,
     result: IpcResult,
@@ -64,7 +64,7 @@ async fn spawn_test_server(
     (path, dispatcher)
 }
 
-// ─── Unit tests: socket resolution ──────────────────────────────────────────
+// ─── 单元测试：套接字解析 ──────────────────────────────────────────
 
 #[test]
 fn default_socket_policy_requires_runtime_directory() {
@@ -85,7 +85,7 @@ fn default_socket_policy_uses_runtime_directory() {
     );
 }
 
-// ─── Unit tests: build_request ───────────────────────────────────────────────
+// ─── 单元测试：build_request ───────────────────────────────────────────────
 
 #[test]
 fn build_request_toggle_has_correct_command() {
@@ -155,7 +155,7 @@ fn build_request_ids_are_unique() {
     assert_ne!(a.request_id, b.request_id);
 }
 
-// ─── Unit tests: format_result ───────────────────────────────────────────────
+// ─── 单元测试：format_result ───────────────────────────────────────────────
 
 #[test]
 fn format_result_ok_human_readable() {
@@ -172,7 +172,7 @@ fn format_result_ok_json() {
     let (output, is_stderr, exit_code) = format_result(&result, true);
     assert!(!is_stderr);
     assert_eq!(exit_code, 0);
-    // Should be valid JSON
+    // 应为有效 JSON
     let parsed: serde_json::Value = serde_json::from_str(&output).unwrap();
     assert_eq!(parsed["ok"]["echo"], "hello");
 }
@@ -236,7 +236,7 @@ fn format_result_desktop_unavailable_is_a_nonzero_error() {
     assert_eq!(parsed["error"]["code"], "desktop_unavailable");
 }
 
-// ─── Unit tests: connection error formatting ─────────────────────────────────
+// ─── 单元测试：连接错误格式化 ─────────────────────────────────
 
 #[test]
 fn format_connection_error_human_readable() {
@@ -269,7 +269,7 @@ fn format_transport_error_json() {
     assert_eq!(parsed["error"]["code"], "INTERNAL");
 }
 
-// ─── Integration tests: round-trip with test IPC server ──────────────────────
+// ─── 集成测试：与测试 IPC 服务器的往返 ──────────────────────
 
 #[tokio::test]
 async fn toggle_sends_correct_command_to_server() {
@@ -293,7 +293,7 @@ async fn toggle_sends_correct_command_to_server() {
         other => panic!("expected Response, got {other:?}"),
     }
 
-    // Verify the server received the correct command
+    // 验证服务器收到了正确的命令
     let cmds = dispatcher.received_commands();
     assert_eq!(cmds.len(), 1);
     assert!(matches!(cmds[0], IpcCommand::Toggle));

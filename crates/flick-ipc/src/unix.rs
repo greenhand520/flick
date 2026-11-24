@@ -1,4 +1,4 @@
-//! Unix domain socket transport for Flick IPC.
+//! Flick IPC 的 Unix 域套接字传输。
 
 use crate::codec::{self, CodecError};
 use crate::message::{IpcRequestEnvelope, IpcResponseEnvelope};
@@ -8,18 +8,18 @@ use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{UnixListener, UnixStream};
 
-/// Maximum payload size in bytes (mirrors [`codec::MAX_FRAME_SIZE`]).
+/// 以字节为单位的最大负载大小（与 [`codec::MAX_FRAME_SIZE`] 一致）。
 const MAX_FRAME_SIZE: usize = codec::MAX_FRAME_SIZE as usize;
 
-/// Maximum time the CLI waits to establish a local IPC connection.
+/// CLI 等待建立本地 IPC 连接的最长时间。
 pub const IPC_CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
 
-/// Maximum time allowed for one complete IPC request operation.
+/// 一次完整 IPC 请求操作所允许的最长时间。
 pub const IPC_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 
-// ─── Errors ───────────────────────────────────────────────────────────────────
+// ─── 错误 ─────────────────────────────────────────────────────────────────────
 
-/// Errors specific to the Unix socket transport layer.
+/// Unix 套接字传输层特有的错误。
 #[derive(Debug, thiserror::Error)]
 pub enum TransportError {
     #[error("socket I/O error: {0}")]
@@ -35,42 +35,42 @@ pub enum TransportError {
     TimedOut { operation: &'static str },
 }
 
-// ─── Server ───────────────────────────────────────────────────────────────────
+// ─── 服务端 ───────────────────────────────────────────────────────────────────
 
-/// A Unix domain socket server that accepts a single IPC client at a time.
+/// 一次接受单个 IPC 客户端的 Unix 域套接字服务端。
 ///
-/// Use [`bind`] to create.  Binding performs a single-instance probe:
-/// if a connection to the path succeeds, another daemon is already running
-/// and [`TransportError::AlreadyRunning`] is returned.  If the connection
-/// fails the (stale) socket file is removed before binding.
+/// 使用 [`bind`] 创建。绑定时会执行单实例探测：
+/// 如果到该路径的连接成功，说明另一个守护进程已在运行，
+/// 将返回 [`TransportError::AlreadyRunning`]。如果连接失败，
+/// 则在绑定前删除（陈旧的）套接字文件。
 pub struct UnixSocketServer {
     listener: UnixListener,
 }
 
-/// Bind a new Unix socket server at `path`.
+/// 在 `path` 处绑定一个新的 Unix 套接字服务端。
 ///
-/// **Single-instance protocol:**
-/// 1. Try to connect to `path`.
-///    - Success → another instance is already listening → return `AlreadyRunning`.
-///    - Failure → the socket is stale (no listener) → proceed.
-/// 2. Remove the stale socket file.
-/// 3. Bind a fresh listener.
+/// **单实例协议：**
+/// 1. 尝试连接到 `path`。
+///    - 成功 → 另一个实例已在监听 → 返回 `AlreadyRunning`。
+///    - 失败 → 套接字已陈旧（无监听者）→ 继续。
+/// 2. 删除陈旧的套接字文件。
+/// 3. 绑定一个新的监听器。
 pub fn bind(path: &Path) -> Result<UnixSocketServer, TransportError> {
-    // Step 1: probe for existing instance.
+    // 第 1 步：探测已有实例。
     match std::os::unix::net::UnixStream::connect(path) {
         Ok(_stream) => {
-            // Another daemon is listening.
+            // 另一个守护进程正在监听。
             return Err(TransportError::AlreadyRunning);
         }
         Err(_) => {
-            // Connection failed — socket is stale or absent.
+            // 连接失败——套接字已陈旧或不存在。
         }
     }
 
-    // Step 2: remove stale socket file if present.
+    // 第 2 步：如果存在陈旧的套接字文件，则将其删除。
     let _ = std::fs::remove_file(path);
 
-    // Step 3: create parent directory with user-only permissions.
+    // 第 3 步：创建仅用户可访问的父目录。
     if let Some(parent) = path.parent() {
         use std::os::unix::fs::DirBuilderExt;
         std::fs::DirBuilder::new()
@@ -80,10 +80,10 @@ pub fn bind(path: &Path) -> Result<UnixSocketServer, TransportError> {
             .map_err(TransportError::Io)?;
     }
 
-    // Step 4: bind.
+    // 第 4 步：绑定。
     let listener = UnixListener::bind(path)?;
 
-    // Step 5: set socket permissions to 0600 (user read/write only).
+    // 第 5 步：将套接字权限设置为 0600（仅用户可读写）。
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -95,28 +95,28 @@ pub fn bind(path: &Path) -> Result<UnixSocketServer, TransportError> {
 }
 
 impl UnixSocketServer {
-    /// Bind a new Unix socket server at `path`.
+    /// 在 `path` 处绑定一个新的 Unix 套接字服务端。
     ///
-    /// Convenience wrapper around the free [`bind`] function.
+    /// 对自由函数 [`bind`] 的便捷封装。
     pub fn bind(path: &Path) -> Result<UnixSocketServer, TransportError> {
         bind(path)
     }
 
-    /// Accept the next client connection.
+    /// 接受下一个客户端连接。
     pub async fn accept(&self) -> Result<UnixStream, TransportError> {
         let (stream, _) = self.listener.accept().await?;
         Ok(stream)
     }
 }
 
-// ─── Client ───────────────────────────────────────────────────────────────────
+// ─── 客户端 ───────────────────────────────────────────────────────────────────
 
-/// A Unix domain socket client that sends requests and receives responses.
+/// 发送请求并接收响应的 Unix 域套接字客户端。
 pub struct UnixSocketClient {
     stream: UnixStream,
 }
 
-/// Connect to the IPC server at `path`.
+/// 连接到 `path` 处的 IPC 服务端。
 pub async fn connect(path: &Path) -> Result<UnixSocketClient, TransportError> {
     let stream = tokio::time::timeout(IPC_CONNECT_TIMEOUT, UnixStream::connect(path))
         .await
@@ -127,14 +127,14 @@ pub async fn connect(path: &Path) -> Result<UnixSocketClient, TransportError> {
 }
 
 impl UnixSocketClient {
-    /// Connect to the IPC server at `path`.
+    /// 连接到 `path` 处的 IPC 服务端。
     ///
-    /// Convenience wrapper around the free [`connect`] function.
+    /// 对自由函数 [`connect`] 的便捷封装。
     pub async fn connect(path: &Path) -> Result<UnixSocketClient, TransportError> {
         connect(path).await
     }
 
-    /// Send a request and wait for the response.
+    /// 发送请求并等待响应。
     pub async fn request(
         &mut self,
         request: &IpcRequestEnvelope,
@@ -150,9 +150,9 @@ impl UnixSocketClient {
     }
 }
 
-// ─── Frame helpers (async) ────────────────────────────────────────────────────
+// ─── 帧辅助函数（异步） ────────────────────────────────────────────────────────
 
-/// Write a length-prefixed JSON frame to an async writer.
+/// 将长度前缀的 JSON 帧写入异步写入器。
 async fn write_envelope<T: Serialize>(
     writer: &mut (impl AsyncWriteExt + Unpin),
     value: &T,
@@ -163,7 +163,7 @@ async fn write_envelope<T: Serialize>(
     Ok(())
 }
 
-/// Read a length-prefixed JSON frame from an async reader.
+/// 从异步读取器读取长度前缀的 JSON 帧。
 async fn read_envelope<T: for<'de> Deserialize<'de>>(
     reader: &mut (impl AsyncReadExt + Unpin),
 ) -> Result<T, TransportError> {
@@ -181,14 +181,14 @@ async fn read_envelope<T: for<'de> Deserialize<'de>>(
     Ok(value)
 }
 
-/// Read a request envelope from a stream (used by the server loop).
+/// 从流中读取请求信封（由服务端循环使用）。
 pub async fn read_request(
     reader: &mut (impl AsyncReadExt + Unpin),
 ) -> Result<IpcRequestEnvelope, TransportError> {
     read_envelope(reader).await
 }
 
-/// Write a response envelope to a stream (used by the server loop).
+/// 将响应信封写入流（由服务端循环使用）。
 pub async fn write_response(
     writer: &mut (impl AsyncWriteExt + Unpin),
     response: &IpcResponseEnvelope,

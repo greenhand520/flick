@@ -1,6 +1,6 @@
-//! `flick-builtins` — Built-in actions shipped with Flick.
+//! `flick-builtins` —— 随 Flick 一起提供的内置动作。
 //!
-//! Phase 0 contains a single action: **echo**.
+//! Phase 0 仅包含一个动作：**echo**。
 
 pub mod echo;
 
@@ -9,10 +9,10 @@ use flick_domain::{ActionDescriptor, ActionId, ConcurrencyPolicy, Matcher};
 use flick_runtime::ActionRuntime;
 use std::sync::Arc;
 
-/// Register all Phase 0 built-in actions into the given runtime.
+/// 将所有 Phase 0 内置动作注册到给定的运行时。
 ///
-/// This function is idempotent — calling it twice simply overwrites the
-/// previously registered handlers for the same action IDs.
+/// 此函数是幂等的 —— 调用两次只会覆盖先前针对相同动作 ID
+/// 注册的处理器。
 pub async fn register_phase0_builtins(runtime: &ActionRuntime) {
     let echo_descriptor = ActionDescriptor {
         id: ActionId::from_static(ECHO_ACTION_ID),

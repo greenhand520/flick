@@ -1,4 +1,4 @@
-//! ActionRuntime — orchestrates routing, invocation, and lifecycle.
+//! ActionRuntime — 编排路由、调用和生命周期。
 
 use crate::handler::ActionHandler;
 use crate::registry::ActionRegistry;
@@ -11,29 +11,29 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 
-/// Entry in the active-invocations map.
+/// 活动调用映射中的条目。
 ///
-/// Only the [`CancellationToken`] is stored so that external callers
-/// can request cancellation.  The [`tokio::task::JoinHandle`] stays
-/// local to `invoke()` where it is awaited inside `tokio::select!`.
+/// 仅存储 [`CancellationToken`]，以便外部调用方
+/// 能够请求取消。 [`tokio::task::JoinHandle`] 则保留在
+/// `invoke()` 局部，并在 `tokio::select!` 中等待。
 struct ActiveEntry {
     cancel_token: CancellationToken,
 }
 
-/// The Flick runtime.
+/// Flick 运行时。
 ///
-/// Holds the [`ActionRegistry`] behind `Arc<RwLock<_>>` so it can be
-/// shared across tasks and permit dynamic re-registration.
+/// 将 [`ActionRegistry`] 保存在 `Arc<RwLock<_>>` 之后，以便
+/// 在任务之间共享，并允许动态重新注册。
 ///
-/// Active invocations are tracked in a `tokio::sync::Mutex<HashMap>`
-/// so they can be cancelled from any task.
+/// 活动调用记录在 `tokio::sync::Mutex<HashMap>` 中，
+/// 因此可以从任意任务中取消它们。
 pub struct ActionRuntime {
     registry: Arc<RwLock<ActionRegistry>>,
     active: Arc<tokio::sync::Mutex<HashMap<InvocationId, ActiveEntry>>>,
 }
 
 impl ActionRuntime {
-    /// Create a new runtime with an empty registry.
+    /// 创建一个具有空注册表的新运行时。
     pub fn new() -> Self {
         Self {
             registry: Arc::new(RwLock::new(ActionRegistry::new())),
@@ -41,36 +41,36 @@ impl ActionRuntime {
         }
     }
 
-    /// Register a new action (delegates to the inner registry).
+    /// 注册一个新动作（委托给内部注册表）。
     ///
-    /// Acquires a write lock on the registry but does **not** hold it
-    /// across any `.await`.
+    /// 获取注册表上的写锁，但**不会**在
+    /// 任何 `.await` 期间持有它。
     pub async fn register(&self, descriptor: ActionDescriptor, handler: Arc<dyn ActionHandler>) {
         let mut reg = self.registry.write().await;
         reg.register(descriptor, handler);
     }
 
-    /// Return matching [`RouteItem`]s for a search query.
+    /// 为搜索查询返回匹配的 [`RouteItem`]s。
     ///
-    /// The registry lock is released before returning.
+    /// 返回前会释放注册表锁。
     pub async fn route(&self, query: &str, input_kind: InputKind) -> Vec<RouteItem> {
         let reg = self.registry.read().await;
         reg.search(query, input_kind)
     }
 
-    /// Invoke an action.
+    /// 调用一个动作。
     ///
-    /// 1. Looks up the handler in the registry (read lock, released
-    ///    immediately).
-    /// 2. Spawns the handler with a fresh [`CancellationToken`].
-    /// 3. Races handler completion against the request deadline and
-    ///    external cancellation.
-    /// 4. Cleans up the active entry when done.
+    /// 1. 在注册表中查找处理器（读锁，立即
+    ///    释放）。
+    /// 2. 使用新的 [`CancellationToken`] 生成处理器任务。
+    /// 3. 将处理器的完成与请求截止时间和
+    ///    外部取消进行竞速。
+    /// 4. 完成后清理活动条目。
     pub async fn invoke(&self, request: ActionRequest) -> ActionOutcome {
         let invocation_id = request.invocation_id;
         let deadline = request.deadline.timeout;
 
-        // ── 1. Look up handler (hold read lock only briefly) ────────
+        // ── 1. 查找处理器（仅短暂持有读锁） ────────
         let handler: Arc<dyn ActionHandler> = {
             let reg = self.registry.read().await;
             match reg.find_by_id(&request.action_id) {
@@ -82,15 +82,15 @@ impl ActionRuntime {
                 }
             }
         };
-        // registry read-lock dropped here
+        // 注册表的读锁在此处释放
 
-        // ── 2. Prepare cancellation token & spawn ───────────────────
+        // ── 2. 准备取消令牌并生成任务 ───────────────────
         let token = CancellationToken::new();
         let ctx = ActionContext {
             cancellation: token.clone(),
         };
 
-        // Store in active map so `cancel()` can find it.
+        // 存入活动映射，以便 `cancel()` 能找到它。
         {
             let mut active = self.active.lock().await;
             active.insert(
@@ -101,13 +101,13 @@ impl ActionRuntime {
             );
         }
 
-        // Spawn the handler task.
+        // 生成处理器任务。
         let req_for_task = request.clone();
         let join_handle = tokio::spawn(async move { handler.invoke(req_for_task, ctx).await });
 
-        // ── 3. Race: handler completion vs deadline vs external cancel
+        // ── 3. 竞速：处理器完成 vs 截止时间 vs 外部取消
         let outcome = tokio::select! {
-            // Branch A — handler finishes naturally
+            // 分支 A — 处理器自然完成
             result = join_handle => {
                 match result {
                     Ok(inner) => inner.unwrap_or_else(ActionOutcome::Error),
@@ -119,18 +119,18 @@ impl ActionRuntime {
                     }
                 }
             }
-            // Branch B — deadline exceeded
+            // 分支 B — 超过截止时间
             _ = tokio::time::sleep(deadline) => {
                 token.cancel();
                 ActionOutcome::Error(ActionError::DeadlineExceeded)
             }
-            // Branch C — external cancellation (someone called `cancel()`)
+            // 分支 C — 外部取消（有人调用了 `cancel()`）
             _ = token.cancelled() => {
                 ActionOutcome::Error(ActionError::Cancelled)
             }
         };
 
-        // ── 4. Clean up ────────────────────────────────────────────
+        // ── 4. 清理 ────────────────────────────────────────────
         {
             let mut active = self.active.lock().await;
             active.remove(&invocation_id);
@@ -139,10 +139,10 @@ impl ActionRuntime {
         outcome
     }
 
-    /// Cancel an in-flight invocation.
+    /// 取消正在执行中的调用。
     ///
-    /// Returns `true` if the invocation was found and its cancellation
-    /// token was newly signalled (i.e. it was not already cancelled).
+    /// 如果找到了该调用且其取消令牌是首次收到信号
+    /// （即此前尚未取消），则返回 `true`。
     pub async fn cancel(&self, invocation_id: InvocationId) -> bool {
         let active = self.active.lock().await;
         match active.get(&invocation_id) {
