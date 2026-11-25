@@ -38,10 +38,12 @@ pub enum CodecError {
 /// 将一个值序列化为长度前缀的 MessagePack 帧。
 pub fn encode<T: Serialize>(value: &T) -> Result<Vec<u8>, CodecError> {
     let payload = rmp_serde::to_vec_named(value)?;
-    let len = payload.len() as u32;
-    if len > MAX_FRAME_SIZE {
-        return Err(CodecError::FrameTooLarge { size: len });
+    // 先按 `usize` 判定上限，避免 `payload.len() as u32` 在 >4 GiB 时截断回绕。
+    if payload.len() > MAX_FRAME_SIZE as usize {
+        let size = u32::try_from(payload.len()).unwrap_or(u32::MAX);
+        return Err(CodecError::FrameTooLarge { size });
     }
+    let len = payload.len() as u32;
     let mut frame = Vec::with_capacity(4 + payload.len());
     frame.extend_from_slice(&len.to_be_bytes());
     frame.extend_from_slice(&payload);
@@ -49,7 +51,18 @@ pub fn encode<T: Serialize>(value: &T) -> Result<Vec<u8>, CodecError> {
 }
 
 /// 从原始负载字节中解码 MessagePack 值（不含长度前缀）。
+///
+/// # 前置约定
+///
+/// `data` 是**去掉长度前缀后的裸 MessagePack 负载**，调用方应已读取并信任前缀。
+/// 作为公开 API 的自我保护，本函数仍会按 [`MAX_FRAME_SIZE`] 校验 `data.len()`；
+/// 超过上限直接返回 [`CodecError::FrameTooLarge`]，不再交给解码器，
+/// 以免对超大输入做无谓解析。长度前缀的解帧逻辑见 [`read_frame`]。
 pub fn decode<T: for<'de> Deserialize<'de>>(data: &[u8]) -> Result<T, CodecError> {
+    if data.len() > MAX_FRAME_SIZE as usize {
+        let size = u32::try_from(data.len()).unwrap_or(u32::MAX);
+        return Err(CodecError::FrameTooLarge { size });
+    }
     Ok(rmp_serde::from_slice(data)?)
 }
 

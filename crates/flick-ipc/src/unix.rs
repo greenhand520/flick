@@ -152,7 +152,7 @@ impl UnixSocketClient {
 
 // ─── 帧辅助函数（异步） ────────────────────────────────────────────────────────
 
-/// 将长度前缀的 JSON 帧写入异步写入器。
+/// 将长度前缀的 MessagePack 帧写入异步写入器。
 async fn write_envelope<T: Serialize>(
     writer: &mut (impl AsyncWriteExt + Unpin),
     value: &T,
@@ -163,7 +163,7 @@ async fn write_envelope<T: Serialize>(
     Ok(())
 }
 
-/// 从异步读取器读取长度前缀的 JSON 帧。
+/// 从异步读取器读取长度前缀的 MessagePack 帧。
 async fn read_envelope<T: for<'de> Deserialize<'de>>(
     reader: &mut (impl AsyncReadExt + Unpin),
 ) -> Result<T, TransportError> {

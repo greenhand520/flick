@@ -289,22 +289,17 @@ impl Render for AppView {
                 ),
         );
 
+        // 仅覆盖主题颜色与行圆角；高度相关字段（pad/row_gap/line_height/
+        // section_gap）保持 `SurfaceStyle::default()`，与 `app.rs` 中
+        // `estimate_height(..., &SurfaceStyle::default())` 的估算口径一致。
         let surface_style = SurfaceStyle {
             panel_bg: ui.panel_bg,
             surface: ui.surface,
             text: ui.text,
             text_muted: ui.text_muted,
             border: ui.border,
-            badge_neutral: ui.text_muted,
-            badge_info: (120, 180, 255, 255),
-            badge_success: (120, 200, 140, 255),
-            badge_warning: (240, 190, 90, 255),
-            badge_danger: (240, 120, 120, 255),
             radius_row: self.metrics.radius_row,
-            pad: 10.0,
-            row_gap: 8.0,
-            line_height: 22.0,
-            section_gap: 10.0,
+            ..SurfaceStyle::default()
         };
 
         // 结果区 + 结果/通知行：整体限制在 results_max_height 内并可纵向滚动，
@@ -316,7 +311,7 @@ impl Render for AppView {
                     .w_full()
                     .max_h(px(self.metrics.results_max_height))
                     .overflow_y_scroll()
-                    .pt_2()
+                    .pt(px(self.metrics.content_gap))
                     .on_mouse_down(MouseButton::Left, cx.listener(|_, _, _, cx| {
                         cx.stop_propagation()
                     }))
@@ -361,27 +356,50 @@ impl Render for AppView {
                 }
 
                 if let Some(outcome) = &self.state.panel.last_outcome {
-                    let text = match outcome {
-                        ActionOutcome::Data(value) => format!("Result: {value}"),
-                        ActionOutcome::Notice { message } => format!("Notice: {message}"),
-                        ActionOutcome::Error(error) => format!("Error: {error}"),
-                        ActionOutcome::Text(text) => text.clone(),
-                        ActionOutcome::Url(url) => url.clone(),
-                        ActionOutcome::File(file) => file.display_name.clone(),
-                        ActionOutcome::OpenSurface { surface_id, .. } => {
-                            format!("Surface: {surface_id}")
+                    let row = div()
+                        .w_full()
+                        .px_3()
+                        .py_2()
+                        .rounded(px(self.metrics.radius_row))
+                        .bg(col(ui.surface))
+                        .text_color(col(ui.text_muted));
+                    match outcome {
+                        // 兜底：`OpenSurface` 但 body 为空（故未走 Surface 渲染）时，
+                        // 不再输出 "Surface: {id}" 纯文本；按 spec §4.4 用
+                        // Badge("Surface") + Text(title 或 surface_id) 组合渲染。
+                        ActionOutcome::OpenSurface { surface_id, content } => {
+                            let label = content.title.clone().unwrap_or_else(|| surface_id.clone());
+                            results = results.child(
+                                row.flex()
+                                    .items_center()
+                                    .gap(px(8.0))
+                                    .child(
+                                        div()
+                                            .rounded_full()
+                                            .px_2()
+                                            .py_1()
+                                            .bg(col(ui.text_muted))
+                                            .text_color(col(ui.panel_bg))
+                                            .child(Label::new("Surface")),
+                                    )
+                                    .child(div().child(Label::new(label))),
+                            );
                         }
-                    };
-                    results = results.child(
-                        div()
-                            .w_full()
-                            .px_3()
-                            .py_2()
-                            .rounded(px(self.metrics.radius_row))
-                            .bg(col(ui.surface))
-                            .text_color(col(ui.text_muted))
-                            .child(Label::new(text)),
-                    );
+                        other => {
+                            let text = match other {
+                                ActionOutcome::Data(value) => format!("Result: {value}"),
+                                ActionOutcome::Notice { message } => format!("Notice: {message}"),
+                                ActionOutcome::Error(error) => format!("Error: {error}"),
+                                ActionOutcome::Text(text) => text.clone(),
+                                ActionOutcome::Url(url) => url.clone(),
+                                ActionOutcome::File(file) => file.display_name.clone(),
+                                ActionOutcome::OpenSurface { .. } => {
+                                    unreachable!("OpenSurface handled above")
+                                }
+                            };
+                            results = results.child(row.child(Label::new(text)));
+                        }
+                    }
                 }
 
                 panel = panel.child(results);

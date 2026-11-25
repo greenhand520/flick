@@ -41,6 +41,14 @@ fn surface_content_roundtrips_json() {
 }
 
 #[test]
+fn surface_content_roundtrips_msgpack() {
+    let c = sample();
+    let bytes = rmp_serde::to_vec_named(&c).unwrap();
+    let back: SurfaceContent = rmp_serde::from_slice(&bytes).unwrap();
+    assert_eq!(c, back);
+}
+
+#[test]
 fn schema_version_defaults_when_missing() {
     let c: SurfaceContent = serde_json::from_str(r#"{"body":[]}"#).unwrap();
     assert_eq!(c.schema_version, 1);

@@ -107,7 +107,8 @@ impl AppState {
 pub fn active_surface(panel: &PanelState) -> Option<&SurfaceContent> {
     match &panel.last_outcome {
         Some(ActionOutcome::OpenSurface { content, .. }) => {
-            (!content.body.is_empty()).then_some(content)
+            // body 非空，或仅有标题（title-only）的 Surface 也可渲染。
+            (!content.body.is_empty() || content.title.is_some()).then_some(content)
         }
         _ => None,
     }
@@ -230,6 +231,21 @@ mod tests {
         assert!(active_surface(&s.panel).is_some());
         let (_w, h) = desired_size(&s.panel, &Metrics::default());
         assert!(h > 64.0 && h <= 480.0);
+    }
+
+    #[test]
+    fn active_surface_some_with_title_only() {
+        let mut s = state();
+        s.panel.last_outcome = Some(ActionOutcome::OpenSurface {
+            surface_id: "info".into(),
+            content: SurfaceContent {
+                schema_version: SURFACE_SCHEMA_VERSION,
+                title: Some("系统信息".into()),
+                body: vec![],
+            },
+        });
+        // 仅有标题、body 为空的 Surface 也应可渲染。
+        assert!(active_surface(&s.panel).is_some());
     }
 
     #[test]

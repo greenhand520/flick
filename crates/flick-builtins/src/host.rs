@@ -186,6 +186,25 @@ fn collect_extras() -> serde_json::Value {
     })
 }
 
+/// 操作系统的人类可读文案（避免暴露 `Debug` 派生的枚举名）。
+fn os_label(os: OperatingSystem) -> &'static str {
+    match os {
+        OperatingSystem::Linux => "Linux",
+        OperatingSystem::Windows => "Windows",
+        OperatingSystem::MacOs => "macOS",
+        OperatingSystem::Other => "其他",
+    }
+}
+
+/// 处理器架构的人类可读文案。
+fn arch_label(arch: Architecture) -> &'static str {
+    match arch {
+        Architecture::X86_64 => "x86_64",
+        Architecture::Aarch64 => "aarch64",
+        Architecture::Other => "其他",
+    }
+}
+
 /// 把 HostInfo + fastfetch 风格 extras 组织成数据驱动的 Surface。
 fn build_surface(
     info: &HostInfo,
@@ -193,8 +212,8 @@ fn build_surface(
 ) -> SurfaceContent {
     let mut body = vec![
         SurfaceNode::Heading { id: None, text: "系统信息".into() },
-        SurfaceNode::KeyValue { id: None, key: "系统".into(), value: format!("{:?}", info.os) },
-        SurfaceNode::KeyValue { id: None, key: "架构".into(), value: format!("{:?}", info.arch) },
+        SurfaceNode::KeyValue { id: None, key: "系统".into(), value: os_label(info.os).into() },
+        SurfaceNode::KeyValue { id: None, key: "架构".into(), value: arch_label(info.arch).into() },
         SurfaceNode::KeyValue { id: None, key: "内核".into(), value: info.kernel.clone() },
         SurfaceNode::KeyValue { id: None, key: "语言".into(), value: info.locale.clone() },
         SurfaceNode::KeyValue { id: None, key: "Shell".into(), value: info.shell.clone() },

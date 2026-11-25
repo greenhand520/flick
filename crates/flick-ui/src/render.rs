@@ -4,7 +4,12 @@ use flick_domain::{BadgeTone, SurfaceContent, SurfaceNode};
 use gpui_kit::component::label::Label;
 use gpui_kit::*;
 
-use crate::style::SurfaceStyle;
+use crate::style::{truncate_chars, SurfaceStyle};
+
+/// 普通文本（正文 / value / subtitle）的字符上限。
+const TEXT_MAX_CHARS: usize = 200;
+/// 标题 / 键 / 徽标等短文本的字符上限。
+const TITLE_MAX_CHARS: usize = 80;
 
 fn col((r, g, b, a): (u8, u8, u8, u8)) -> Rgba {
     Rgba {
@@ -43,7 +48,7 @@ fn render_badge(text: String, tone: BadgeTone, style: &SurfaceStyle) -> AnyEleme
                 .py_1()
                 .bg(col(tone_color(style, tone)))
                 .text_color(col(badge_fg(style, tone)))
-                .child(Label::new(text)),
+                .child(Label::new(truncate_chars(&text, TITLE_MAX_CHARS))),
         )
         .into_any_element()
 }
@@ -53,7 +58,10 @@ pub fn render_surface(content: &SurfaceContent, style: &SurfaceStyle) -> AnyElem
     let mut root = div().flex().flex_col().w_full().gap(px(style.section_gap));
     if let Some(title) = &content.title {
         root = root.child(
-            div().w_full().text_color(col(style.text)).child(Label::new(title.clone())),
+            div()
+                .w_full()
+                .text_color(col(style.text))
+                .child(Label::new(truncate_chars(title, TITLE_MAX_CHARS))),
         );
     }
     for node in &content.body {
@@ -67,14 +75,14 @@ fn render_node(node: &SurfaceNode, style: &SurfaceStyle) -> AnyElement {
         SurfaceNode::Heading { text, .. } => div()
             .w_full()
             .text_color(col(style.text))
-            .child(Label::new(text.clone()))
+            .child(Label::new(truncate_chars(text, TITLE_MAX_CHARS)))
             .into_any_element(),
         SurfaceNode::Text { text, muted, .. } => {
             let color = if *muted { style.text_muted } else { style.text };
             div()
                 .w_full()
                 .text_color(col(color))
-                .child(Label::new(text.clone()))
+                .child(Label::new(truncate_chars(text, TEXT_MAX_CHARS)))
                 .into_any_element()
         }
         SurfaceNode::KeyValue { key, value, .. } => div()
@@ -82,8 +90,16 @@ fn render_node(node: &SurfaceNode, style: &SurfaceStyle) -> AnyElement {
             .w_full()
             .justify_between()
             .gap(px(style.row_gap))
-            .child(div().text_color(col(style.text_muted)).child(Label::new(key.clone())))
-            .child(div().text_color(col(style.text)).child(Label::new(value.clone())))
+            .child(
+                div()
+                    .text_color(col(style.text_muted))
+                    .child(Label::new(truncate_chars(key, TITLE_MAX_CHARS))),
+            )
+            .child(
+                div()
+                    .text_color(col(style.text))
+                    .child(Label::new(truncate_chars(value, TEXT_MAX_CHARS))),
+            )
             .into_any_element(),
         SurfaceNode::Badge { text, tone, .. } => render_badge(text.clone(), *tone, style),
         SurfaceNode::List { items, .. } => {
@@ -94,9 +110,17 @@ fn render_node(node: &SurfaceNode, style: &SurfaceStyle) -> AnyElement {
                     .flex()
                     .w_full()
                     .justify_between()
-                    .child(div().text_color(col(style.text)).child(Label::new(item.title.clone())));
+                    .child(
+                        div()
+                            .text_color(col(style.text))
+                            .child(Label::new(truncate_chars(&item.title, TITLE_MAX_CHARS))),
+                    );
                 if let Some(v) = &item.value {
-                    top = top.child(div().text_color(col(style.text_muted)).child(Label::new(v.clone())));
+                    top = top.child(
+                        div()
+                            .text_color(col(style.text_muted))
+                            .child(Label::new(truncate_chars(v, TEXT_MAX_CHARS))),
+                    );
                 }
                 entry = entry.child(top);
                 if let Some(sub) = &item.subtitle {
@@ -104,7 +128,7 @@ fn render_node(node: &SurfaceNode, style: &SurfaceStyle) -> AnyElement {
                         div()
                             .text_sm()
                             .text_color(col(style.text_muted))
-                            .child(Label::new(sub.clone())),
+                            .child(Label::new(truncate_chars(sub, TEXT_MAX_CHARS))),
                     );
                 }
                 if let Some(badge) = &item.badge {
@@ -130,7 +154,11 @@ fn render_node(node: &SurfaceNode, style: &SurfaceStyle) -> AnyElement {
         SurfaceNode::Section { title, children, .. } => {
             let mut el = div().flex().flex_col().w_full().gap(px(style.section_gap));
             if let Some(t) = title {
-                el = el.child(div().text_color(col(style.text)).child(Label::new(t.clone())));
+                el = el.child(
+                    div()
+                        .text_color(col(style.text))
+                        .child(Label::new(truncate_chars(t, TITLE_MAX_CHARS))),
+                );
             }
             for c in children {
                 el = el.child(render_node(c, style));

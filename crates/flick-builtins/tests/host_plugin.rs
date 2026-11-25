@@ -41,6 +41,16 @@ async fn host_action_returns_open_surface() {
             assert_eq!(surface_id, "info");
             assert_eq!(content.schema_version, flick_domain::SURFACE_SCHEMA_VERSION);
             assert!(!content.body.is_empty());
+
+            // os / arch 必须是人类可读文案，而非 Debug 派生（如 "X86_64"）。
+            let kv = |key: &str| -> Option<String> {
+                content.body.iter().find_map(|n| match n {
+                    SurfaceNode::KeyValue { key: k, value, .. } if k == key => Some(value.clone()),
+                    _ => None,
+                })
+            };
+            assert_eq!(kv("系统").as_deref(), Some("Linux"));
+            assert_eq!(kv("架构").as_deref(), Some("x86_64"));
         }
         other => panic!("expected OpenSurface, got {other:?}"),
     }

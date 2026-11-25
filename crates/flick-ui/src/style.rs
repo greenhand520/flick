@@ -44,6 +44,23 @@ impl Default for SurfaceStyle {
     }
 }
 
+/// 按字符（而非字节）安全截断文本：超长时保留前 `max - 1` 个字符再追加 `…`，
+/// 使最终长度不超过 `max` 个字符。
+///
+/// 仅在 UTF-8 字符边界切分，绝不会从多字节字符中间切断，也不会 panic。
+/// 渲染层用它防止超长文本撑破布局。
+pub fn truncate_chars(text: &str, max: usize) -> String {
+    if text.chars().count() <= max {
+        return text.to_owned();
+    }
+    if max == 0 {
+        return String::new();
+    }
+    let mut out: String = text.chars().take(max - 1).collect();
+    out.push('…');
+    out
+}
+
 /// 估算 Surface 的原始高度（不做面板 max clamp；调用方再 clamp）。
 pub fn estimate_height(content: &SurfaceContent, style: &SurfaceStyle) -> f32 {
     let mut total = 0.0;
@@ -112,6 +129,38 @@ mod tests {
 
     fn content(body: Vec<SurfaceNode>) -> SurfaceContent {
         SurfaceContent { schema_version: 1, title: None, body }
+    }
+
+    #[test]
+    fn truncate_keeps_short_text_unchanged() {
+        assert_eq!(truncate_chars("hello", 10), "hello");
+        assert_eq!(truncate_chars("", 0), "");
+    }
+
+    #[test]
+    fn truncate_at_exact_limit_is_unchanged() {
+        let s = "a".repeat(10);
+        assert_eq!(truncate_chars(&s, 10), s);
+    }
+
+    #[test]
+    fn truncate_long_ascii_appends_ellipsis_within_limit() {
+        let s = "a".repeat(50);
+        let out = truncate_chars(&s, 10);
+        assert_eq!(out.chars().count(), 10);
+        assert!(out.ends_with('…'));
+        assert_eq!(out, format!("{}…", "a".repeat(9)));
+    }
+
+    #[test]
+    fn truncate_is_char_safe_for_multibyte() {
+        // 每个汉字 3 字节；按字节切会 panic / 产生乱码，这里必须按字符切。
+        let s = "系统信息".repeat(10); // 40 个字符
+        let out = truncate_chars(&s, 5);
+        assert_eq!(out.chars().count(), 5);
+        assert!(out.ends_with('…'));
+        // 输出仍是合法 UTF-8（String 本身保证），且没有替换字符。
+        assert!(!out.contains('\u{FFFD}'));
     }
 
     #[test]

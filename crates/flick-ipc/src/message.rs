@@ -1,7 +1,7 @@
 //! IPC 协议消息类型。
 //!
 //! Flick IPC 协议在 Unix 域套接字上使用简单的请求/响应模型。
-//! 每条消息都是一个长度前缀的 JSON 帧（参见 [`crate::codec`]）。
+//! 每条消息都是一个长度前缀的 MessagePack 帧（参见 [`crate::codec`]）。
 
 use serde::{Deserialize, Serialize};
 
