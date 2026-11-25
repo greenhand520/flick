@@ -26,6 +26,7 @@ async fn host_action_returns_open_surface() {
         kernel: "test".into(),
         locale: "en_US.UTF-8".into(),
         shell: "bash".into(),
+        window_manager: Some("Mutter".into()),
         lan_ip: None,
     };
     rt.set_host_info(std::sync::Arc::new(info));
@@ -51,6 +52,7 @@ async fn host_action_returns_open_surface() {
             };
             assert_eq!(kv("系统").as_deref(), Some("Linux"));
             assert_eq!(kv("架构").as_deref(), Some("x86_64"));
+            assert_eq!(kv("窗口管理器").as_deref(), Some("Mutter"));
         }
         other => panic!("expected OpenSurface, got {other:?}"),
     }

@@ -12,7 +12,7 @@
 use std::time::Duration;
 
 use flick_domain::{ActionOutcome, HostToUi, UiToHost};
-use flick_ui::render::render_surface;
+use flick_ui::render::{col, render_surface};
 use flick_ui::style::SurfaceStyle;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::label::Label;
@@ -24,16 +24,6 @@ use crate::app::{desired_size, AppState, Effect, UiEvent, DEBOUNCE_MILLIS};
 use crate::theme::{self, Metrics, ThemeMode};
 
 actions!(flick_shell, [HidePanel, SelectNext, SelectPrev, ToggleThemeAction]);
-
-/// 便于把 (r,g,b,a) 转成 gpui 颜色。
-fn col((r, g, b, a): (u8, u8, u8, u8)) -> Rgba {
-    Rgba {
-        r: r as f32 / 255.0,
-        g: g as f32 / 255.0,
-        b: b as f32 / 255.0,
-        a: a as f32 / 255.0,
-    }
-}
 
 /// 搜索面板视图，持有纯状态 + 输入实体 + 焦点 + 通道。
 pub struct AppView {

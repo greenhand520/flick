@@ -28,6 +28,7 @@ pub fn collect_host_info() -> flick_domain::HostInfo {
         s if s.ends_with("/bash") => "bash".to_string(),
         _ => "other".to_string(),
     };
+    let window_manager = detect_window_manager();
     let lan_ip = std::process::Command::new("hostname")
         .arg("-I")
         .output()
@@ -40,6 +41,32 @@ pub fn collect_host_info() -> flick_domain::HostInfo {
         kernel,
         locale,
         shell,
+        window_manager,
         lan_ip,
     }
+}
+
+/// 根据桌面环境变量推断窗口管理器 / 合成器名称。
+///
+/// Linux 上没有统一接口查询当前合成器；按常见桌面环境映射：
+/// GNOME（含 Ubuntu 的 `ubuntu:GNOME`）→ `Mutter`，KDE/Plasma → `KWin`，
+/// Sway → `Sway`，Hyprland → `Hyprland`，Weston → `Weston`。无法识别返回 `None`。
+fn detect_window_manager() -> Option<String> {
+    let desktop = std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default();
+    let session = std::env::var("XDG_SESSION_DESKTOP").unwrap_or_default();
+    let hay = format!("{desktop}:{session}").to_ascii_lowercase();
+    let wm = if hay.contains("gnome") {
+        "Mutter"
+    } else if hay.contains("kde") || hay.contains("plasma") {
+        "KWin"
+    } else if hay.contains("hyprland") {
+        "Hyprland"
+    } else if hay.contains("sway") {
+        "Sway"
+    } else if hay.contains("weston") {
+        "Weston"
+    } else {
+        return None;
+    };
+    Some(wm.to_string())
 }

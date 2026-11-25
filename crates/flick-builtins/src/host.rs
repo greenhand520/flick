@@ -218,6 +218,11 @@ fn build_surface(
         SurfaceNode::KeyValue { id: None, key: "语言".into(), value: info.locale.clone() },
         SurfaceNode::KeyValue { id: None, key: "Shell".into(), value: info.shell.clone() },
     ];
+    if let Some(wm) = &info.window_manager {
+        if !wm.is_empty() {
+            body.push(SurfaceNode::KeyValue { id: None, key: "窗口管理器".into(), value: wm.clone() });
+        }
+    }
     if let Some(ip) = &info.lan_ip {
         body.push(SurfaceNode::KeyValue { id: None, key: "IP".into(), value: ip.clone() });
     }

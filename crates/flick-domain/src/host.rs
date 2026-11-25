@@ -12,5 +12,7 @@ pub struct HostInfo {
     pub kernel: String,
     pub locale: String,
     pub shell: String,
+    /// 当前桌面环境的窗口管理器 / 合成器（如 `Mutter`、`KWin`）；无法识别时为 `None`。
+    pub window_manager: Option<String>,
     pub lan_ip: Option<String>,
 }

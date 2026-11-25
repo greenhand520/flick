@@ -11,7 +11,8 @@ const TEXT_MAX_CHARS: usize = 200;
 /// 标题 / 键 / 徽标等短文本的字符上限。
 const TITLE_MAX_CHARS: usize = 80;
 
-fn col((r, g, b, a): (u8, u8, u8, u8)) -> Rgba {
+/// 把 `(r,g,b,a)` 四元组转换为 gpui `Rgba`（供渲染层共用）。
+pub fn col((r, g, b, a): (u8, u8, u8, u8)) -> Rgba {
     Rgba {
         r: r as f32 / 255.0,
         g: g as f32 / 255.0,
