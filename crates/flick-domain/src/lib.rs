@@ -13,6 +13,7 @@ pub mod id;
 pub mod input;
 pub mod plugin;
 pub mod route;
+pub mod surface;
 pub mod ui;
 
 /// 应用在桌面环境中的反向 DNS 标识；同时用作 portal app id、`.desktop`
@@ -32,4 +33,7 @@ pub use id::{ActionId, InvocationId, QueryGeneration};
 pub use input::SearchQuery;
 pub use plugin::*;
 pub use route::RouteItem;
+pub use surface::{
+    BadgeTone, ListItem, SpacerSize, SurfaceContent, SurfaceNode, SURFACE_SCHEMA_VERSION,
+};
 pub use ui::{HostToUi, RuntimeStatus, UiIntent, UiToHost};
