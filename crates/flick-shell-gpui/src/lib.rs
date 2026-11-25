@@ -139,7 +139,7 @@ fn open_panel_window(
         // 客户端装饰：不请求窗口管理器画标题栏/边框，得到干净的无边框浮卡。
         window_decorations: Some(WindowDecorations::Client),
         focus: true,
-        app_id: Some("io.github.flick.Flick".into()),
+        app_id: Some(flick_domain::APP_ID.into()),
         ..Default::default()
     };
 

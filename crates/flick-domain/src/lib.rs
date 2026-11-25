@@ -13,6 +13,10 @@ pub mod input;
 pub mod route;
 pub mod ui;
 
+/// 应用在桌面环境中的反向 DNS 标识；同时用作 portal app id、`.desktop`
+/// 文件名与 GPUI 窗口的 `app_id`，三者必须一致，否则 GNOME 会显示 "null"。
+pub const APP_ID: &str = "io.github.greenhand520.Flick";
+
 // 为方便使用，在 crate 根目录重新导出关键类型。
 pub use action::{
     ActionContext, ActionDescriptor, ActionInput, ActionOutcome, ActionRequest, ConcurrencyPolicy,
