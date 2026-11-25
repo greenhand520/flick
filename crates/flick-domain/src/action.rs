@@ -235,10 +235,10 @@ pub enum ActionOutcome {
     Url(String),
     /// 文件结果。
     File(FileRef),
-    /// 请求打开一个 Surface。
+    /// 请求打开一个 Surface（内容为强类型的数据驱动节点树）。
     OpenSurface {
         surface_id: String,
-        args: serde_json::Value,
+        content: crate::surface::SurfaceContent,
     },
 }
 

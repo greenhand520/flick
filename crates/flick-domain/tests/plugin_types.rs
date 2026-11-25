@@ -77,7 +77,14 @@ fn action_outcome_new_variants_roundtrip() {
         ActionOutcome::Text("hello".into()),
         ActionOutcome::Url("https://example.com".into()),
         ActionOutcome::File(FileRef { uri: "file:///tmp/a.txt".into(), display_name: "a.txt".into(), mime: Some("text/plain".into()) }),
-        ActionOutcome::OpenSurface { surface_id: "info".into(), args: serde_json::json!({"k": 1}) },
+        ActionOutcome::OpenSurface {
+            surface_id: "info".into(),
+            content: flick_domain::SurfaceContent {
+                schema_version: flick_domain::SURFACE_SCHEMA_VERSION,
+                title: None,
+                body: vec![],
+            },
+        },
     ];
     for c in cases {
         let s = serde_json::to_string(&c).unwrap();

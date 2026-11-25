@@ -94,9 +94,10 @@ impl ActionHandler for HostHandler {
         };
         let info = (*host).clone();
         let extras = collect_extras();
+        let content = build_surface(&info, &extras);
         Ok(ActionOutcome::OpenSurface {
             surface_id: "info".into(),
-            args: serde_json::json!({ "info": info, "extras": extras }),
+            content,
         })
     }
 }
@@ -183,4 +184,51 @@ fn collect_extras() -> serde_json::Value {
         "theme": theme,
         "terminal": terminal,
     })
+}
+
+/// 把 HostInfo + fastfetch 风格 extras 组织成数据驱动的 Surface。
+fn build_surface(
+    info: &HostInfo,
+    extras: &serde_json::Value,
+) -> SurfaceContent {
+    let mut body = vec![
+        SurfaceNode::Heading { id: None, text: "系统信息".into() },
+        SurfaceNode::KeyValue { id: None, key: "系统".into(), value: format!("{:?}", info.os) },
+        SurfaceNode::KeyValue { id: None, key: "架构".into(), value: format!("{:?}", info.arch) },
+        SurfaceNode::KeyValue { id: None, key: "内核".into(), value: info.kernel.clone() },
+        SurfaceNode::KeyValue { id: None, key: "语言".into(), value: info.locale.clone() },
+        SurfaceNode::KeyValue { id: None, key: "Shell".into(), value: info.shell.clone() },
+    ];
+    if let Some(ip) = &info.lan_ip {
+        body.push(SurfaceNode::KeyValue { id: None, key: "IP".into(), value: ip.clone() });
+    }
+    body.push(SurfaceNode::Divider { id: None });
+    for (label, key) in [
+        ("运行时长", "uptime"),
+        ("CPU", "cpu"),
+        ("CPU 线程", "cpu_threads"),
+        ("内存总量(GiB)", "memory_total_gib"),
+        ("可用内存(GiB)", "memory_available_gib"),
+        ("交换总量(GiB)", "swap_total_gib"),
+        ("交换可用(GiB)", "swap_free_gib"),
+        ("桌面环境", "desktop_environment"),
+        ("会话类型", "session_type"),
+        ("主题", "theme"),
+        ("终端", "terminal"),
+    ] {
+        let value = match extras.get(key) {
+            Some(serde_json::Value::String(s)) => s.clone(),
+            Some(other) => other.to_string(),
+            None => continue,
+        };
+        if value.is_empty() {
+            continue;
+        }
+        body.push(SurfaceNode::KeyValue { id: None, key: label.into(), value });
+    }
+    SurfaceContent {
+        schema_version: SURFACE_SCHEMA_VERSION,
+        title: Some("系统信息".into()),
+        body,
+    }
 }
