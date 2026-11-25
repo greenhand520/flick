@@ -112,3 +112,18 @@ fn register_plugin_rejects_duplicate_setting_key() {
         e => panic!("expected duplicate setting key, got {e:?}"),
     }
 }
+
+#[tokio::test]
+async fn runtime_register_plugin_routes_and_invokes() {
+    let rt = flick_runtime::ActionRuntime::default();
+    let p = P { m: manifest("demo.plugin"), a: vec![spec("demo.plugin.run")] };
+    rt.register_plugin(&p).await.unwrap();
+    // 该测试插件 matcher 为 prefix "x"，用 "x" 触发
+    let routes = rt.route("x", InputKind::PlainText).await;
+    assert_eq!(routes.len(), 1);
+    // 用真实 id 构造请求（new_echo 返回 Self，非 async）
+    let mut req = ActionRequest::new_echo("x", Caller::cli("test"));
+    req.action_id = ActionId::from_static("demo.plugin.run");
+    let outcome = rt.invoke(req).await;
+    assert!(matches!(outcome, ActionOutcome::Data(_)));
+}

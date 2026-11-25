@@ -1,6 +1,7 @@
 //! ActionRuntime — 编排路由、调用和生命周期。
 
 use crate::handler::ActionHandler;
+use crate::plugin::{Plugin, PluginRegistrationError};
 use crate::registry::ActionRegistry;
 use flick_domain::{
     ActionContext, ActionDescriptor, ActionError, ActionOutcome, ActionRequest, InputKind,
@@ -48,6 +49,15 @@ impl ActionRuntime {
     pub async fn register(&self, descriptor: ActionDescriptor, handler: Arc<dyn ActionHandler>) {
         let mut reg = self.registry.write().await;
         reg.register(descriptor, handler);
+    }
+
+    /// 异步注册一个插件（委托给内部注册表）。
+    ///
+    /// 获取注册表上的写锁，在注册期间持有，注册完成后立即释放。
+    /// 返回注册过程中出现的任何 [`PluginRegistrationError`]。
+    pub async fn register_plugin(&self, plugin: &dyn Plugin) -> Result<(), PluginRegistrationError> {
+        let mut registry = self.registry.write().await;
+        registry.register_plugin(plugin)
     }
 
     /// 为搜索查询返回匹配的 [`RouteItem`]s。
