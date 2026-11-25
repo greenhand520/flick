@@ -7,6 +7,7 @@ edition.workspace = true
 flick-domain = { path = "../flick-domain" }
 serde = { workspace = true }
 serde_json = { workspace = true }
+rmp-serde = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true }

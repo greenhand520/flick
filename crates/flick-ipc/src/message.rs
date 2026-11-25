@@ -6,7 +6,7 @@
 use serde::{Deserialize, Serialize};
 
 /// 当前协议版本。线格式变更时递增。
-pub const IPC_PROTOCOL_VERSION: u16 = 1;
+pub const IPC_PROTOCOL_VERSION: u16 = 2;
 
 // ─── 信封 ─────────────────────────────────────────────────────────────────────
 
