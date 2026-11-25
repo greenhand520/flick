@@ -160,6 +160,8 @@ impl AppView {
                 Effect::Quit => {
                     cx.quit();
                 }
+                // 占位：Task 3 会替换为真正的 detach 接线。
+                Effect::Detach(_) => {}
             }
         }
         // 「隐藏即销毁窗口」模型：但销毁动作不能在本窗口的更新帧里同步执行——失焦等场景下

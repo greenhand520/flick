@@ -22,6 +22,7 @@ pub enum UiEvent {
     Host(HostToUi),
     WindowClosed,
     ToggleTheme,
+    DetachRequested,
 }
 
 /// app 层要求视图层执行的效果。
@@ -30,6 +31,7 @@ pub enum Effect {
     Send(UiToHost),
     StartDebounce { revision: u64 },
     Quit,
+    Detach(SurfaceContent),
 }
 
 /// 面板状态 + 主题。
@@ -86,6 +88,10 @@ impl AppState {
                 self.apply_panel_event(PanelEvent::DebounceFlush { revision })
             }
             UiEvent::WindowClosed => self.apply_panel_event(PanelEvent::WindowClosed),
+            UiEvent::DetachRequested => active_surface(&self.panel)
+                .cloned()
+                .map(|content| vec![Effect::Detach(content)])
+                .unwrap_or_default(),
         }
     }
 
@@ -246,6 +252,34 @@ mod tests {
         });
         // 仅有标题、body 为空的 Surface 也应可渲染。
         assert!(active_surface(&s.panel).is_some());
+    }
+
+    #[test]
+    fn detach_effect_only_with_surface() {
+        let mut s = state();
+        // 无 Surface：不产出 Detach。
+        let none = s.update(UiEvent::DetachRequested);
+        assert!(!none.iter().any(|e| matches!(e, Effect::Detach(_))));
+
+        // 有 Surface：产出一个 Detach，内容一致。
+        let content = SurfaceContent {
+            schema_version: SURFACE_SCHEMA_VERSION,
+            title: Some("系统信息".into()),
+            body: vec![SurfaceNode::Heading { id: None, text: "系统信息".into() }],
+        };
+        s.panel.last_outcome = Some(ActionOutcome::OpenSurface {
+            surface_id: "info".into(),
+            content: content.clone(),
+        });
+        let effects = s.update(UiEvent::DetachRequested);
+        let detach = effects
+            .iter()
+            .find_map(|e| match e {
+                Effect::Detach(c) => Some(c),
+                _ => None,
+            })
+            .expect("should produce Effect::Detach");
+        assert_eq!(detach, &content);
     }
 
     #[test]
