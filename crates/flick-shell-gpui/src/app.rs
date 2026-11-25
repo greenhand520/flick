@@ -3,7 +3,8 @@
 
 use flick_application::presenter::{PanelAction, PanelEvent, PanelState};
 use crate::theme::{Metrics, ThemeMode};
-use flick_domain::{HostToUi, UiToHost};
+use flick_domain::{ActionOutcome, HostToUi, SurfaceContent, UiToHost};
+use flick_ui::style::{estimate_height, SurfaceStyle};
 use std::time::Instant;
 
 /// 输入防抖窗口（毫秒）。仅决定何时发协议，不决定显示。
@@ -102,8 +103,22 @@ impl AppState {
     }
 }
 
+/// 若最近一次调用打开了 Surface，返回其内容。
+pub fn active_surface(panel: &PanelState) -> Option<&SurfaceContent> {
+    match &panel.last_outcome {
+        Some(ActionOutcome::OpenSurface { content, .. }) => Some(content),
+        _ => None,
+    }
+}
+
 /// 由内容计算逻辑窗口尺寸（宽, 高）。修复 iced 缺陷 #2/#4 的核心公式。
 pub fn desired_size(panel: &PanelState, m: &Metrics) -> (f32, f32) {
+    // Surface 优先：内容即当前动作的输出视图，替换结果列表。
+    if let Some(surface) = active_surface(panel) {
+        let content_h = estimate_height(surface, &SurfaceStyle::default());
+        let height = (m.input_height + m.content_gap + content_h).min(m.panel_max_height);
+        return (m.width, height.max(m.input_height));
+    }
     let has_results = !(panel.routes.is_empty() && panel.last_outcome.is_none());
     let results_h = if has_results {
         let rows = panel.routes.len().max(1) as f32;
@@ -121,6 +136,7 @@ pub fn desired_size(panel: &PanelState, m: &Metrics) -> (f32, f32) {
 mod tests {
     use super::*;
     use flick_domain::{ActionId, RouteItem};
+    use flick_domain::{ActionOutcome, SurfaceContent, SurfaceNode};
 
     fn state() -> AppState {
         AppState::new(ThemeMode::Dark)
@@ -190,5 +206,27 @@ mod tests {
             e,
             Effect::Send(UiToHost::QueryChanged { text, .. }) if text == "echo"
         )));
+    }
+
+    #[test]
+    fn active_surface_none_without_outcome() {
+        let s = state();
+        assert!(active_surface(&s.panel).is_none());
+    }
+
+    #[test]
+    fn desired_size_uses_surface_estimate() {
+        let mut s = state();
+        s.panel.last_outcome = Some(ActionOutcome::OpenSurface {
+            surface_id: "info".into(),
+            content: SurfaceContent {
+                schema_version: 1,
+                title: None,
+                body: vec![SurfaceNode::Heading { id: None, text: "系统信息".into() }],
+            },
+        });
+        assert!(active_surface(&s.panel).is_some());
+        let (_w, h) = desired_size(&s.panel, &Metrics::default());
+        assert!(h > 64.0 && h <= 480.0);
     }
 }
