@@ -488,8 +488,8 @@ mod tests {
         assert_eq!(h, DETACHED_MIN_HEIGHT); // 小内容被夹到最小高度
         // 水平居中：(1366 - 666) / 2 = 350。
         assert_eq!(x, (1366.0 - DETACHED_WIDTH) / 2.0);
-        // y = 0 + 120 + 64 + 24 = 208，未越界，保留基准。
-        assert_eq!(y, 208.0);
+        // y = 0 + PANEL_TOP_MARGIN + PANEL_INPUT_HEIGHT + 24，未越界，保留基准。
+        assert_eq!(y, crate::PANEL_TOP_MARGIN + crate::PANEL_INPUT_HEIGHT + 24.0);
     }
 
     /// 超高内容在 1366x768 上：高度与 y 被夹取，窗口整体落在屏内（y + h <= 屏高）。

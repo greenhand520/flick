@@ -370,6 +370,9 @@ impl Render for AppView {
         let (_, target_h) = desired_size(&self.state.panel, &self.metrics);
         // 窗口与面板等大（不再留 1px 透明边），避免出现一圈「透明边框」。
         let panel_h = target_h;
+        let has_body = crate::app::active_surface(&self.state.panel).is_some()
+            || !self.state.panel.routes.is_empty()
+            || self.state.panel.last_outcome.is_some();
 
         let mut panel = div()
             .id("flick-panel")
@@ -402,6 +405,9 @@ impl Render for AppView {
             .text_color(col(ui.text))
             .rounded(px(self.metrics.radius_panel))
             .px(px(self.metrics.padding_h));
+        if has_body {
+            panel = panel.pb(px(self.metrics.padding_bottom));
+        }
 
         // 搜索行：占满条高、垂直居中，大号字号（参考 gpui-shell/awari 的 query row）。
         panel = panel.child(
@@ -423,6 +429,9 @@ impl Render for AppView {
                                 .cleanable(true)
                                 .with_size(gpui_kit::component::Size::Large)
                                 .w_full()
+                                // 覆盖 gpui Input Large 默认的 12px 左右内边距，
+                                // 保留字号，只把图标/文字拉近卡片边缘。
+                                .px(px(self.metrics.input_padding_h))
                                 .prefix(Icon::new(IconName::Search)),
                         ),
                 ),
@@ -501,7 +510,7 @@ impl Render for AppView {
                     .w_full()
                     .max_h(px(self.metrics.results_max_height))
                     .overflow_y_scroll()
-                    .pt_2()
+                    .pt(px(self.metrics.content_gap))
                     .on_mouse_down(MouseButton::Left, cx.listener(|_, _, _, cx| {
                         cx.stop_propagation()
                     }));

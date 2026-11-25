@@ -21,8 +21,9 @@ use tokio::sync::mpsc;
 
 /// 空态（仅搜索行）高度，与 `theme::Metrics.input_height` 一致。
 pub(crate) const PANEL_INPUT_HEIGHT: f32 = 64.0;
-/// 面板距主显示器顶部的偏移。
-pub(crate) const PANEL_TOP_MARGIN: f32 = 120.0;
+/// 面板卡片顶部距屏幕顶部的基准偏移（逻辑像素）。
+/// 增大此值 = 搜索框整体下移；它不影响搜索行高度 `theme::Metrics::input_height`。
+pub(crate) const PANEL_TOP_MARGIN: f32 = 300.0;
 
 /// 解析一个 fontconfig 族的首选名称（`fc-match` 输出的第一个族名）。
 fn fc_family(query: &str) -> Option<String> {

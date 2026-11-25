@@ -176,7 +176,8 @@ pub fn desired_size(panel: &PanelState, m: &Metrics) -> (f32, f32) {
     // Surface 优先：内容即当前动作的输出视图，替换结果列表。
     if let Some(surface) = active_surface(panel) {
         let content_h = estimate_height(surface, &SurfaceStyle::default());
-        let height = (m.input_height + m.content_gap + content_h).min(m.panel_max_height);
+        let height = (m.input_height + m.content_gap + content_h + m.padding_bottom)
+            .min(m.panel_max_height);
         return (m.width, height.max(m.input_height));
     }
     let has_results = !(panel.routes.is_empty() && panel.last_outcome.is_none());
@@ -188,7 +189,8 @@ pub fn desired_size(panel: &PanelState, m: &Metrics) -> (f32, f32) {
         0.0
     };
     let gap = if results_h > 0.0 { m.content_gap } else { 0.0 };
-    let height = (m.input_height + gap + results_h).min(m.panel_max_height);
+    let bottom = if results_h > 0.0 { m.padding_bottom } else { 0.0 };
+    let height = (m.input_height + gap + results_h + bottom).min(m.panel_max_height);
     (m.width, height)
 }
 
