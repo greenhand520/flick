@@ -21,7 +21,8 @@ async fn host_action_returns_open_surface() {
         .await
         .unwrap();
     let info = flick_domain::HostInfo {
-        os: "linux".into(),
+        os: flick_domain::OperatingSystem::Linux,
+        arch: flick_domain::Architecture::X86_64,
         kernel: "test".into(),
         locale: "en_US.UTF-8".into(),
         shell: "bash".into(),

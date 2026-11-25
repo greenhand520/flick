@@ -8,7 +8,17 @@ fn read_trim(path: &str) -> String {
 
 /// 采集宿主基础信息。
 pub fn collect_host_info() -> flick_domain::HostInfo {
-    let os = std::env::consts::OS.to_string();
+    let os = match std::env::consts::OS {
+        "linux" => flick_domain::OperatingSystem::Linux,
+        "windows" => flick_domain::OperatingSystem::Windows,
+        "macos" => flick_domain::OperatingSystem::MacOs,
+        _ => flick_domain::OperatingSystem::Other,
+    };
+    let arch = match std::env::consts::ARCH {
+        "x86_64" => flick_domain::Architecture::X86_64,
+        "aarch64" => flick_domain::Architecture::Aarch64,
+        _ => flick_domain::Architecture::Other,
+    };
     let kernel = read_trim("/proc/sys/kernel/osrelease");
     let locale = std::env::var("LC_ALL")
         .or_else(|_| std::env::var("LANG"))
@@ -26,6 +36,7 @@ pub fn collect_host_info() -> flick_domain::HostInfo {
         .and_then(|s| s.split_whitespace().next().map(|s| s.to_string()));
     flick_domain::HostInfo {
         os,
+        arch,
         kernel,
         locale,
         shell,

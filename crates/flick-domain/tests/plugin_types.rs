@@ -35,6 +35,8 @@ fn plugin_manifest_roundtrips_via_json() {
             kind: SurfaceKind::Panel,
             default_placement: SurfacePlacement::BelowSearchBox,
         }],
+        supported_os: vec![OperatingSystem::Linux, OperatingSystem::Windows],
+        supported_architectures: vec![Architecture::X86_64],
     };
     let json = serde_json::to_string(&manifest).unwrap();
     let back: PluginManifest = serde_json::from_str(&json).unwrap();
@@ -82,4 +84,38 @@ fn action_outcome_new_variants_roundtrip() {
         let back: ActionOutcome = serde_json::from_str(&s).unwrap();
         assert_eq!(c, back);
     }
+}
+
+#[test]
+fn manifest_supports_platform_treats_empty_as_wildcard() {
+    let m = PluginManifest {
+        id: "demo.plugin".into(),
+        name: "Demo".into(),
+        version: "1.0.0".into(),
+        kind: PluginKind::BuiltInRust,
+        keywords: vec![],
+        profile: PluginProfile::default(),
+        capabilities: vec![],
+        plugin_dependencies: vec![],
+        settings: vec![],
+        surfaces: vec![],
+        supported_os: vec![OperatingSystem::Linux],
+        supported_architectures: vec![],
+    };
+    // 架构为空 = 全部架构。
+    assert!(m.supports_platform(OperatingSystem::Linux, Architecture::X86_64));
+    assert!(m.supports_platform(OperatingSystem::Linux, Architecture::Aarch64));
+    // 明确的 OS 列表之外不支持。
+    assert!(!m.supports_platform(OperatingSystem::Windows, Architecture::X86_64));
+
+    let all = PluginManifest { supported_os: vec![], ..m };
+    assert!(all.supports_platform(OperatingSystem::MacOs, Architecture::Other));
+}
+
+#[test]
+fn operating_system_and_architecture_serde_names() {
+    assert_eq!(serde_json::to_string(&OperatingSystem::MacOs).unwrap(), "\"macos\"");
+    assert_eq!(serde_json::to_string(&OperatingSystem::Linux).unwrap(), "\"Linux\"");
+    assert_eq!(serde_json::to_string(&Architecture::X86_64).unwrap(), "\"x86_64\"");
+    assert_eq!(serde_json::to_string(&Architecture::Aarch64).unwrap(), "\"aarch64\"");
 }

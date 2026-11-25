@@ -38,6 +38,7 @@ fn manifest(id: &str) -> PluginManifest {
         id: id.into(), name: "P".into(), version: "1.0.0".into(),
         kind: PluginKind::BuiltInRust, keywords: vec![], profile: PluginProfile::default(),
         capabilities: vec![], plugin_dependencies: vec![], settings: vec![], surfaces: vec![],
+        supported_os: vec![], supported_architectures: vec![],
     }
 }
 

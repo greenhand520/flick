@@ -2,10 +2,13 @@
 
 use serde::{Deserialize, Serialize};
 
-/// 宿主环境的基础信息。
+use crate::plugin::{Architecture, OperatingSystem};
+
+/// 宿主环境的基础信息（OS 与架构为强类型，便于与插件 manifest 做平台匹配）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct HostInfo {
-    pub os: String,
+    pub os: OperatingSystem,
+    pub arch: Architecture,
     pub kernel: String,
     pub locale: String,
     pub shell: String,

@@ -9,6 +9,30 @@ pub enum PluginKind {
     Wasm,
 }
 
+/// 插件可运行的操作系统。
+///
+/// 固定为四个值：Linux / Windows / macOS / Other（其他系统统一归入 `Other`）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+pub enum OperatingSystem {
+    Linux,
+    Windows,
+    #[serde(rename = "macos")]
+    MacOs,
+    #[default]
+    Other,
+}
+
+/// 处理器架构。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+pub enum Architecture {
+    #[serde(rename = "x86_64")]
+    X86_64,
+    #[serde(rename = "aarch64")]
+    Aarch64,
+    #[default]
+    Other,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Category {
     System, Apps, Files, Developer, Productivity, Media, Network,
@@ -98,4 +122,20 @@ pub struct PluginManifest {
     pub plugin_dependencies: Vec<PluginDependency>,
     pub settings: Vec<SettingDecl>,
     pub surfaces: Vec<UiSurfaceDecl>,
+    /// 支持的操作系统；空列表表示"全部平台"（如纯逻辑插件）。
+    pub supported_os: Vec<OperatingSystem>,
+    /// 支持的处理器架构；空列表表示"全部架构"。
+    pub supported_architectures: Vec<Architecture>,
+}
+
+impl PluginManifest {
+    /// 该插件是否声明支持给定平台。
+    ///
+    /// 语义与 `file_extensions` 一致：**空列表 = 不限**。
+    pub fn supports_platform(&self, os: OperatingSystem, arch: Architecture) -> bool {
+        let os_ok = self.supported_os.is_empty() || self.supported_os.contains(&os);
+        let arch_ok = self.supported_architectures.is_empty()
+            || self.supported_architectures.contains(&arch);
+        os_ok && arch_ok
+    }
 }

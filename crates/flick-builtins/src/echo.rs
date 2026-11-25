@@ -69,6 +69,9 @@ impl Plugin for EchoPlugin {
             plugin_dependencies: vec![],
             settings: vec![],
             surfaces: vec![],
+            // 纯逻辑插件：不限平台与架构。
+            supported_os: vec![],
+            supported_architectures: vec![],
         }
     }
 

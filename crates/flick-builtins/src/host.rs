@@ -54,6 +54,9 @@ impl Plugin for HostPlugin {
                 kind: SurfaceKind::Panel,
                 default_placement: SurfacePlacement::BelowSearchBox,
             }],
+            // 依赖 /proc、hostname 等 Linux 工具，仅声明支持 Linux。
+            supported_os: vec![OperatingSystem::Linux],
+            supported_architectures: vec![],
         }
     }
     fn actions(&self) -> Vec<ActionSpec> {
