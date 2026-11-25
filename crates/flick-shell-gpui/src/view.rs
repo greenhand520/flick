@@ -284,7 +284,8 @@ impl Render for AppView {
             .on_action(cx.listener(Self::on_select_next))
             .on_action(cx.listener(Self::on_select_prev))
             .on_action(cx.listener(Self::on_toggle_theme))
-            .on_action(cx.listener(Self::on_detach_surface))
+            // ctrl-d 用捕获阶段绑定：先于聚焦的 Input 处理，避免输入框吞掉该快捷键。
+            .capture_action(cx.listener(Self::on_detach_surface))
             // 按住面板空白/边缘即可拖动整个窗口（gpui Wayland 的 start_window_move）。
             // 输入区与结果区会 stop_propagation，避免在它们上面误触发拖动。
             .on_mouse_down(MouseButton::Left, |_ev, window, _cx| {

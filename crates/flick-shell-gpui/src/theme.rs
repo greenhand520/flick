@@ -1,5 +1,11 @@
 //! 主题与尺寸 token（纯数据，不依赖 gpui）。
 
+/// 面板与独立 Surface 窗口共用的逻辑宽度（单一来源）。
+///
+/// `Metrics::default().width`、`detached::DETACHED_WIDTH` 与 `lib.rs` 的 `PANEL_WIDTH`
+/// 全部派生自这里，避免三处字面量各写一份 666.0 而漂移。
+pub const PANEL_WIDTH: f32 = 666.0;
+
 /// 暗/亮主题。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ThemeMode {
@@ -36,7 +42,7 @@ pub struct Metrics {
 impl Default for Metrics {
     fn default() -> Self {
         Self {
-            width: 666.0,
+            width: PANEL_WIDTH,
             input_height: 64.0,
             row_height: 56.0,
             row_gap: 12.0,

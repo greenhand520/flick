@@ -15,12 +15,12 @@ use flick_domain::{HostToUi, SurfaceContent, UiToHost};
 use gpui_kit::*;
 use tokio::sync::mpsc;
 
-/// 面板逻辑宽度（与 `theme::Metrics::default().width` 一致）。
-const PANEL_WIDTH: f32 = 666.0;
+/// 面板逻辑宽度（单一来源：`theme::PANEL_WIDTH`）。
+const PANEL_WIDTH: f32 = theme::PANEL_WIDTH;
 /// 空态（仅搜索行）高度，与 `theme::Metrics.input_height` 一致。
-const PANEL_INPUT_HEIGHT: f32 = 64.0;
+pub(crate) const PANEL_INPUT_HEIGHT: f32 = 64.0;
 /// 面板距主显示器顶部的偏移。
-const PANEL_TOP_MARGIN: f32 = 120.0;
+pub(crate) const PANEL_TOP_MARGIN: f32 = 120.0;
 
 /// 解析一个 fontconfig 族的首选名称（`fc-match` 输出的第一个族名）。
 fn fc_family(query: &str) -> Option<String> {
@@ -228,25 +228,31 @@ fn open_detached_window(
     close_tx: mpsc::UnboundedSender<AnyWindowHandle>,
     index: usize,
 ) -> Result<AnyWindowHandle, String> {
-    let (w, h) = detached::detached_size(&content);
-    let (dx, dy) = detached::cascade_offset(index);
-    let (base_x, base_y) = match app.primary_display() {
+    // 位置与尺寸统一由纯函数 `detached_bounds` 计算：基准居中 + 级联，并夹进显示器
+    // （越界时回落到规范位置），避免高窗口底边/级联把窗推到屏幕外。
+    let (x, y, w, h) = match app.primary_display() {
         Some(display) => {
             let db = display.bounds();
-            let screen_w = f32::from(db.size.width);
-            let ox = f32::from(db.origin.x);
-            let oy = f32::from(db.origin.y);
-            (
-                ox + (screen_w - w) / 2.0,
-                oy + PANEL_TOP_MARGIN + PANEL_INPUT_HEIGHT + 24.0,
+            detached::detached_bounds(
+                &content,
+                theme,
+                (
+                    f32::from(db.origin.x),
+                    f32::from(db.origin.y),
+                    f32::from(db.size.width),
+                    f32::from(db.size.height),
+                ),
+                index,
             )
         }
-        None => (0.0, PANEL_TOP_MARGIN + PANEL_INPUT_HEIGHT + 24.0),
+        None => {
+            // 无显示器信息：退化为默认位置 + 内容尺寸（不做 clamp）。
+            let style = detached::surface_style(theme);
+            let (w, h) = detached::detached_size(&content, &style);
+            (0.0, PANEL_TOP_MARGIN + PANEL_INPUT_HEIGHT + 24.0, w, h)
+        }
     };
-    let bounds = Bounds::new(
-        point(px(base_x + dx), px(base_y + dy)),
-        size(px(w), px(h)),
-    );
+    let bounds = Bounds::new(point(px(x), px(y)), size(px(w), px(h)));
     let options = WindowOptions {
         titlebar: None,
         is_resizable: true,
