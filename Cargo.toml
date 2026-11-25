@@ -11,6 +11,7 @@ members = [
     "crates/flick-cli",
     "crates/flick-testkit",
     "crates/flick-shell-gpui",
+    "crates/flick-ui",
 ]
 
 [workspace.package]
