@@ -106,7 +106,9 @@ impl AppState {
 /// 若最近一次调用打开了 Surface，返回其内容。
 pub fn active_surface(panel: &PanelState) -> Option<&SurfaceContent> {
     match &panel.last_outcome {
-        Some(ActionOutcome::OpenSurface { content, .. }) => Some(content),
+        Some(ActionOutcome::OpenSurface { content, .. }) => {
+            (!content.body.is_empty()).then_some(content)
+        }
         _ => None,
     }
 }
@@ -136,7 +138,7 @@ pub fn desired_size(panel: &PanelState, m: &Metrics) -> (f32, f32) {
 mod tests {
     use super::*;
     use flick_domain::{ActionId, RouteItem};
-    use flick_domain::{ActionOutcome, SurfaceContent, SurfaceNode};
+    use flick_domain::{ActionOutcome, SurfaceContent, SurfaceNode, SURFACE_SCHEMA_VERSION};
 
     fn state() -> AppState {
         AppState::new(ThemeMode::Dark)
@@ -228,5 +230,19 @@ mod tests {
         assert!(active_surface(&s.panel).is_some());
         let (_w, h) = desired_size(&s.panel, &Metrics::default());
         assert!(h > 64.0 && h <= 480.0);
+    }
+
+    #[test]
+    fn active_surface_none_with_empty_body() {
+        let mut s = state();
+        s.panel.last_outcome = Some(ActionOutcome::OpenSurface {
+            surface_id: "info".into(),
+            content: SurfaceContent {
+                schema_version: SURFACE_SCHEMA_VERSION,
+                title: None,
+                body: vec![],
+            },
+        });
+        assert!(active_surface(&s.panel).is_none());
     }
 }
