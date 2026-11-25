@@ -23,7 +23,14 @@ use tokio::sync::mpsc;
 use crate::app::{desired_size, AppState, Effect, UiEvent, DEBOUNCE_MILLIS};
 use crate::theme::{self, Metrics, ThemeMode};
 
-actions!(flick_shell, [HidePanel, SelectNext, SelectPrev, ToggleThemeAction]);
+actions!(flick_shell, [
+    HidePanel,
+    SelectNext,
+    SelectPrev,
+    ToggleThemeAction,
+    DetachSurface,
+    CloseDetached
+]);
 
 /// 搜索面板视图，持有纯状态 + 输入实体 + 焦点 + 通道。
 pub struct AppView {

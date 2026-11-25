@@ -1,10 +1,12 @@
 //! `flick-shell-gpui` — 基于 gpui-kit 的 Flick 搜索面板外壳。
 
 pub mod app;
+pub mod detached;
 pub mod theme;
 pub mod view;
 
 pub use app::{desired_size, AppState, Effect, UiEvent};
+pub use detached::DetachedSurfaceView;
 pub use flick_application::presenter::{PanelAction, PanelEvent, PanelState, SelectionState};
 pub use theme::{Metrics, ThemeMode, UiTheme};
 pub use view::AppView;
