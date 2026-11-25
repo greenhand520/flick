@@ -4,7 +4,7 @@
 
 use flick_domain::{
     ActionContext, ActionDescriptor, ActionError, ActionId, ActionOutcome, ActionRequest, Caller,
-    ConcurrencyPolicy, Deadline, InputKind, Matcher,
+    ConcurrencyPolicy, Deadline, InputType, Matcher,
 };
 use flick_runtime::{ActionHandler, ActionRuntime};
 use std::sync::Arc;
@@ -89,7 +89,7 @@ async fn runtime_routes_echo_for_plain_text_and_executes_for_ui_and_cli() {
     let rt = runtime_with_echo().await;
 
     // ── 路由 ──
-    let routes = rt.route("echo hello", InputKind::PlainText).await;
+    let routes = rt.route("echo hello", InputType::PlainText).await;
     assert!(!routes.is_empty(), "echo should be routed for 'echo hello'");
     assert_eq!(
         routes[0].action_id,
@@ -125,7 +125,7 @@ async fn exact_echo_prefix_binds_remaining_text_without_special_ui_path() {
     let rt = runtime_with_echo().await;
 
     // "echo hello" → 匹配，剩余部分为 "hello"
-    let routes = rt.route("echo hello", InputKind::PlainText).await;
+    let routes = rt.route("echo hello", InputType::PlainText).await;
     assert_eq!(
         routes.len(),
         1,
@@ -147,7 +147,7 @@ async fn exact_echo_prefix_binds_remaining_text_without_special_ui_path() {
     }
 
     // "echohello" → 必须不匹配（无词边界）
-    let routes = rt.route("echohello", InputKind::PlainText).await;
+    let routes = rt.route("echohello", InputType::PlainText).await;
     assert!(
         routes.is_empty(),
         "'echohello' must not match echo prefix — no word boundary"

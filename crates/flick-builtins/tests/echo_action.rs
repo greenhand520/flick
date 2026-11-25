@@ -8,6 +8,7 @@ use tokio_util::sync::CancellationToken;
 fn test_ctx() -> ActionContext {
     ActionContext {
         cancellation: CancellationToken::new(),
+        host_info: None,
     }
 }
 
@@ -71,7 +72,7 @@ async fn echo_plugin_registers_and_routes() {
     let rt = ActionRuntime::default();
     rt.register_plugin(&flick_builtins::EchoPlugin).await.unwrap();
     let routes = rt
-        .route("echo hello", flick_domain::InputKind::PlainText)
+        .route("echo hello", flick_domain::InputType::PlainText)
         .await;
     assert_eq!(
         routes[0].action_id.as_str(),
@@ -96,7 +97,7 @@ async fn echo_registered_in_runtime_is_findable() {
 
     let id = ActionId::from_static(ECHO_ACTION_ID);
     let results = runtime
-        .route("echo hello", flick_domain::InputKind::PlainText)
+        .route("echo hello", flick_domain::InputType::PlainText)
         .await;
     assert!(!results.is_empty(), "echo should be routable");
     assert_eq!(results[0].action_id, id);

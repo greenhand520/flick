@@ -16,6 +16,7 @@ impl HeadlessRuntime {
     pub async fn new() -> Self {
         let runtime = Arc::new(ActionRuntime::new());
         flick_builtins::register_phase0_builtins(&runtime).await;
+        runtime.set_host_info(Arc::new(flick_adapters_linux::host_info::collect_host_info()));
         Self { runtime }
     }
 }

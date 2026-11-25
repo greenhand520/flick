@@ -3,6 +3,7 @@
 
 pub mod diagnostics;
 pub mod flick_icon;
+pub mod host_info;
 pub mod portal;
 pub mod portal_client;
 pub mod portal_identity;

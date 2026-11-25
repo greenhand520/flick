@@ -8,26 +8,19 @@ use flick_runtime::{ActionHandler, ActionSpec, Plugin, PluginLifecycle, PluginRu
 
 pub const HOST_ACTION_ID: &str = "flick.builtin.host.show_info";
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
-pub struct HostInfo {
-    pub os: String,
-    pub kernel: String,
-    pub locale: String,
-    pub shell: String, // "zsh" | "bash" | "other"
-    pub lan_ip: Option<String>,
-}
-
 pub struct HostPlugin;
 
 impl HostPlugin {
     fn descriptor() -> ActionDescriptor {
-        ActionDescriptor::new(
+        let mut d = ActionDescriptor::new(
             ActionId::from_static(HOST_ACTION_ID),
             "系统信息",
             vec!["host".into(), "系统".into(), "info".into()],
             Matcher::prefix_command("host"),
             ConcurrencyPolicy::Parallel,
-        )
+        );
+        d.output_types = vec![OutputType::Surface];
+        d
     }
 }
 
@@ -81,14 +74,22 @@ impl ActionHandler for HostHandler {
     async fn invoke(
         &self,
         request: ActionRequest,
-        _ctx: ActionContext,
+        ctx: ActionContext,
     ) -> Result<ActionOutcome, ActionError> {
-        if request.input.kind != InputKind::PlainText {
+        if request.input.kind != InputType::PlainText {
             return Err(ActionError::InvalidInput {
                 message: "host 仅支持纯文本输入".into(),
             });
         }
-        let info = collect_host_info();
+        let host = match ctx.host_info {
+            Some(host) => host,
+            None => {
+                return Err(ActionError::Unavailable {
+                    reason: "host info 未在启动时注入".into(),
+                });
+            }
+        };
+        let info = (*host).clone();
         let extras = collect_extras();
         Ok(ActionOutcome::OpenSurface {
             surface_id: "info".into(),
@@ -113,56 +114,70 @@ impl PluginLifecycle for HostLifecycle {
     }
 }
 
-fn read_trim(path: &str) -> String {
-    std::fs::read_to_string(path)
-        .map(|s| s.trim().to_string())
-        .unwrap_or_default()
-}
-
-pub fn collect_host_info() -> HostInfo {
-    let os = std::env::consts::OS.to_string();
-    let kernel = read_trim("/proc/sys/kernel/osrelease");
-    let locale = std::env::var("LC_ALL")
-        .or_else(|_| std::env::var("LANG"))
-        .unwrap_or_else(|_| "en_US.UTF-8".into());
-    let shell = match std::env::var("SHELL").unwrap_or_default() {
-        s if s.ends_with("/zsh") => "zsh".to_string(),
-        s if s.ends_with("/bash") => "bash".to_string(),
-        _ => "other".to_string(),
-    };
-    let lan_ip = std::process::Command::new("hostname")
-        .arg("-I")
-        .output()
-        .ok()
-        .and_then(|o| String::from_utf8(o.stdout).ok())
-        .and_then(|s| s.split_whitespace().next().map(|s| s.to_string()));
-    HostInfo {
-        os,
-        kernel,
-        locale,
-        shell,
-        lan_ip,
-    }
-}
-
+/// 尽力采集 fastfetch 风格的“其他信息”。
+///
+/// 仅做廉价、非阻塞的本地读取；locale 已由 [`flick_domain::HostInfo`] 提供。
+///
+/// TODO: 以下字段尚未实现 —— GPU / Displays / Disk(s) / Packages count /
+/// Battery / Icons / Font / Cursor（涉及外部进程或较慢探测，暂不实现）。
 fn collect_extras() -> serde_json::Value {
-    let uptime = read_trim("/proc/uptime");
-    let cpu = std::thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(0);
-    let mem_total_kb = std::fs::read_to_string("/proc/meminfo")
+    // uptime: /proc/uptime 第一列是开机秒数。
+    let uptime = std::fs::read_to_string("/proc/uptime")
+        .ok()
+        .and_then(|s| s.split_whitespace().next().map(str::to_string))
+        .and_then(|s| s.parse::<f64>().ok())
+        .map(|secs| {
+            let total = secs as u64;
+            format!("{}h {}m", total / 3600, (total % 3600) / 60)
+        })
+        .unwrap_or_default();
+
+    // cpu: /proc/cpuinfo 中第一个 "model name"，线程数用 available_parallelism。
+    let cpu = std::fs::read_to_string("/proc/cpuinfo")
         .ok()
         .and_then(|s| {
             s.lines()
-                .find(|l| l.starts_with("MemTotal:"))
-                .map(|l| l.to_string())
+                .find(|l| l.starts_with("model name"))
+                .and_then(|l| l.split_once(':').map(|(_, v)| v.trim().to_string()))
         })
         .unwrap_or_default();
-    let desktop = std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default();
+    let cpu_threads = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(0);
+
+    // memory / swap: /proc/meminfo（kB → GiB）。
+    let meminfo = std::fs::read_to_string("/proc/meminfo").unwrap_or_default();
+    let mem_kb = |key: &str| -> Option<f64> {
+        meminfo
+            .lines()
+            .find(|l| l.starts_with(key))
+            .and_then(|l| l.split_whitespace().nth(1))
+            .and_then(|v| v.parse::<f64>().ok())
+    };
+    let gib = |kb: f64| (kb / 1024.0 / 1024.0 * 100.0).round() / 100.0;
+    let memory_total_gib = mem_kb("MemTotal:").map(gib).unwrap_or(0.0);
+    let memory_available_gib = mem_kb("MemAvailable:").map(gib).unwrap_or(0.0);
+    let swap_total_gib = mem_kb("SwapTotal:").map(gib).unwrap_or(0.0);
+    let swap_free_gib = mem_kb("SwapFree:").map(gib).unwrap_or(0.0);
+
+    let desktop_environment = std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default();
+    let session_type = std::env::var("XDG_SESSION_TYPE").unwrap_or_default();
+    let theme = std::env::var("GTK_THEME").unwrap_or_default();
+    let terminal = std::env::var("TERM_PROGRAM")
+        .or_else(|_| std::env::var("TERM"))
+        .unwrap_or_default();
+
     serde_json::json!({
-        "uptime_raw": uptime,
-        "cpu_threads": cpu,
-        "mem_total_line": mem_total_kb,
-        "desktop": desktop,
+        "uptime": uptime,
+        "cpu": cpu,
+        "cpu_threads": cpu_threads,
+        "memory_total_gib": memory_total_gib,
+        "memory_available_gib": memory_available_gib,
+        "swap_total_gib": swap_total_gib,
+        "swap_free_gib": swap_free_gib,
+        "desktop_environment": desktop_environment,
+        "session_type": session_type,
+        "theme": theme,
+        "terminal": terminal,
     })
 }

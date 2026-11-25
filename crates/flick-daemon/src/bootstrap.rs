@@ -28,7 +28,7 @@ pub struct RuntimeAdapter {
 
 #[async_trait::async_trait]
 impl RuntimePort for RuntimeAdapter {
-    async fn route(&self, query: &str, input_kind: InputKind) -> Vec<RouteItem> {
+    async fn route(&self, query: &str, input_kind: InputType) -> Vec<RouteItem> {
         self.runtime.route(query, input_kind).await
     }
     async fn invoke(&self, request: ActionRequest) -> ActionOutcome {

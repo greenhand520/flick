@@ -7,7 +7,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use flick_domain::{ActionRequest, Caller, Deadline, HostToUi, InputKind, UiIntent, UiToHost};
+use flick_domain::{ActionRequest, Caller, Deadline, HostToUi, InputType, UiIntent, UiToHost};
 
 use crate::ports::{HostEventSink, RuntimePort};
 use crate::query::QueryTracker;
@@ -48,7 +48,7 @@ impl ApplicationCoordinator {
                 // 在调用运行时之前记录最新的代次。
                 self.query_tracker.set_current(generation);
 
-                let items = self.runtime.route(&text, InputKind::PlainText).await;
+                let items = self.runtime.route(&text, InputType::PlainText).await;
 
                 // 仅当此代次仍为最新时才发出结果。
                 if self.query_tracker.is_current(generation) {

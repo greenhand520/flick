@@ -20,6 +20,14 @@ async fn host_action_returns_open_surface() {
     rt.register_plugin(&flick_builtins::host::HostPlugin)
         .await
         .unwrap();
+    let info = flick_domain::HostInfo {
+        os: "linux".into(),
+        kernel: "test".into(),
+        locale: "en_US.UTF-8".into(),
+        shell: "bash".into(),
+        lan_ip: None,
+    };
+    rt.set_host_info(std::sync::Arc::new(info));
     let req = ActionRequest {
         invocation_id: InvocationId::new(),
         action_id: ActionId::from_static(flick_builtins::host::HOST_ACTION_ID),

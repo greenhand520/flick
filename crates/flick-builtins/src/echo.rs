@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use flick_domain::{
     ActionContext, ActionDescriptor, ActionError, ActionId, ActionOutcome, ActionRequest, Category,
-    ConcurrencyPolicy, InputKind, Matcher, PluginKind, PluginManifest, PluginProfile,
+    ConcurrencyPolicy, InputType, Matcher, PluginKind, PluginManifest, PluginProfile,
 };
 use flick_runtime::{ActionHandler, ActionSpec, Plugin};
 
@@ -26,7 +26,7 @@ impl ActionHandler for EchoHandler {
         _ctx: ActionContext,
     ) -> Result<ActionOutcome, ActionError> {
         // Phase 0：仅接受纯文本输入。
-        if request.input.kind != InputKind::PlainText {
+        if request.input.kind != InputType::PlainText {
             return Err(ActionError::InvalidInput {
                 message: "Echo only accepts plain-text input".into(),
             });

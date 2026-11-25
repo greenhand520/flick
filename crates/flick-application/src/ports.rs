@@ -5,7 +5,7 @@
 //! 测试则提供伪造实现。
 
 use async_trait::async_trait;
-use flick_domain::{ActionOutcome, ActionRequest, HostToUi, InputKind, InvocationId, RouteItem};
+use flick_domain::{ActionOutcome, ActionRequest, HostToUi, InputType, InvocationId, RouteItem};
 
 /// 对 Flick Runtime 的路由与调用能力的抽象。
 ///
@@ -14,7 +14,7 @@ use flick_domain::{ActionOutcome, ActionRequest, HostToUi, InputKind, Invocation
 #[async_trait]
 pub trait RuntimePort: Send + Sync {
     /// 将用户查询路由到候选动作。
-    async fn route(&self, query: &str, input_kind: InputKind) -> Vec<RouteItem>;
+    async fn route(&self, query: &str, input_kind: InputType) -> Vec<RouteItem>;
 
     /// 执行动作请求并返回结果。
     async fn invoke(&self, request: ActionRequest) -> ActionOutcome;

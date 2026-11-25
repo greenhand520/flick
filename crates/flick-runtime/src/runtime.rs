@@ -4,7 +4,7 @@ use crate::handler::ActionHandler;
 use crate::plugin::{Plugin, PluginRegistrationError};
 use crate::registry::ActionRegistry;
 use flick_domain::{
-    ActionContext, ActionDescriptor, ActionError, ActionOutcome, ActionRequest, InputKind,
+    ActionContext, ActionDescriptor, ActionError, ActionOutcome, ActionRequest, InputType,
     InvocationId, RouteItem,
 };
 use std::collections::HashMap;
@@ -31,6 +31,7 @@ struct ActiveEntry {
 pub struct ActionRuntime {
     registry: Arc<RwLock<ActionRegistry>>,
     active: Arc<tokio::sync::Mutex<HashMap<InvocationId, ActiveEntry>>>,
+    host_info: std::sync::RwLock<Option<Arc<flick_domain::HostInfo>>>,
 }
 
 impl ActionRuntime {
@@ -39,7 +40,13 @@ impl ActionRuntime {
         Self {
             registry: Arc::new(RwLock::new(ActionRegistry::new())),
             active: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            host_info: std::sync::RwLock::new(None),
         }
+    }
+
+    /// 注入启动时采集的宿主信息。
+    pub fn set_host_info(&self, info: Arc<flick_domain::HostInfo>) {
+        *self.host_info.write().unwrap() = Some(info);
     }
 
     /// 注册一个新动作（委托给内部注册表）。
@@ -63,7 +70,7 @@ impl ActionRuntime {
     /// 为搜索查询返回匹配的 [`RouteItem`]s。
     ///
     /// 返回前会释放注册表锁。
-    pub async fn route(&self, query: &str, input_kind: InputKind) -> Vec<RouteItem> {
+    pub async fn route(&self, query: &str, input_kind: InputType) -> Vec<RouteItem> {
         let reg = self.registry.read().await;
         reg.search(query, input_kind)
     }
@@ -98,6 +105,7 @@ impl ActionRuntime {
         let token = CancellationToken::new();
         let ctx = ActionContext {
             cancellation: token.clone(),
+            host_info: self.host_info.read().unwrap().clone(),
         };
 
         // 存入活动映射，以便 `cancel()` 能找到它。

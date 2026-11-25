@@ -139,6 +139,9 @@ fn run_graphical(socket_path: PathBuf) -> Result<(), String> {
                 let lifecycle = background_lifecycle;
                 let runtime = Arc::new(ActionRuntime::new());
                 flick_builtins::register_phase0_builtins(&runtime).await;
+                runtime.set_host_info(std::sync::Arc::new(
+                    flick_adapters_linux::host_info::collect_host_info(),
+                ));
 
                 let event_sink = Arc::new(bootstrap::ChannelEventSink {
                     tx: host_event_tx.clone(),

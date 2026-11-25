@@ -91,25 +91,17 @@ pub enum ConcurrencyPolicy {
 /// 动作调用的输入。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ActionInput {
-    pub kind: InputKind,
+    pub kind: InputType,
     pub text: String,
 }
 
 impl ActionInput {
     pub fn plain_text(text: impl Into<String>) -> Self {
         Self {
-            kind: InputKind::PlainText,
+            kind: InputType::PlainText,
             text: text.into(),
         }
     }
-}
-
-/// Phase 0 输入类型分类器。
-///
-/// Phase 1 将用更丰富的 InputFacet 模型替换/增强此实现。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum InputKind {
-    PlainText,
 }
 
 /// Phase 1 输入类型分类。
@@ -121,6 +113,8 @@ pub enum InputType {
     PathCandidate,
     MathExpression,
     File,
+    /// 没有输入类型（动作不接受输入）
+    None,
 }
 
 /// 动作产出的结果类型。
@@ -218,6 +212,8 @@ impl Deadline {
 /// 携带一个取消令牌，用于协作式取消。
 pub struct ActionContext {
     pub cancellation: tokio_util::sync::CancellationToken,
+    /// 启动时注入的宿主信息（由适配器采集）。
+    pub host_info: Option<std::sync::Arc<crate::host::HostInfo>>,
 }
 
 // ─── 结果 ──────────────────────────────────────────────────────────────────

@@ -55,7 +55,7 @@ impl FakeRuntime {
 
 #[async_trait]
 impl RuntimePort for FakeRuntime {
-    async fn route(&self, query: &str, _input_kind: InputKind) -> Vec<RouteItem> {
+    async fn route(&self, query: &str, _input_kind: InputType) -> Vec<RouteItem> {
         // 在休眠前将数据从锁中克隆出来。
         let result = {
             let map = self.route_responses.lock().await;

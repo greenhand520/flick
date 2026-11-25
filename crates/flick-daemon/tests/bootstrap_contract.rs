@@ -46,7 +46,7 @@ struct TestRuntimeAdapter {
 
 #[async_trait::async_trait]
 impl RuntimePort for TestRuntimeAdapter {
-    async fn route(&self, query: &str, input_kind: InputKind) -> Vec<RouteItem> {
+    async fn route(&self, query: &str, input_kind: InputType) -> Vec<RouteItem> {
         self.runtime.route(query, input_kind).await
     }
     async fn invoke(&self, request: ActionRequest) -> ActionOutcome {
@@ -208,7 +208,7 @@ async fn build_test_stack() -> (
 async fn headless_runtime_registers_echo() {
     let (_, runtime, _) = build_test_stack().await;
 
-    let routes = runtime.route("echo hello", InputKind::PlainText).await;
+    let routes = runtime.route("echo hello", InputType::PlainText).await;
     assert_eq!(routes.len(), 1);
     assert_eq!(routes[0].action_id.as_str(), "flick.builtin.echo.v1.echo");
 }
@@ -243,7 +243,7 @@ async fn coordinator_portal_intent_does_not_invoke_runtime() {
     let (coordinator, runtime, mut events) = build_test_stack().await;
 
     // 通过路由检查记录初始调用次数
-    let routes_before = runtime.route("echo", InputKind::PlainText).await;
+    let routes_before = runtime.route("echo", InputType::PlainText).await;
 
     coordinator.handle_intent(UiIntent::ShowSearchPanel {
         activation_token: Some("test-token".into()),
@@ -258,7 +258,7 @@ async fn coordinator_portal_intent_does_not_invoke_runtime() {
     }
 
     // Runtime 不应被触及
-    let routes_after = runtime.route("echo", InputKind::PlainText).await;
+    let routes_after = runtime.route("echo", InputType::PlainText).await;
     assert_eq!(routes_before.len(), routes_after.len());
 }
 

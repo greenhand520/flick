@@ -2,7 +2,7 @@
 
 use crate::handler::ActionHandler;
 use crate::plugin::{Plugin, PluginRegistrationError};
-use flick_domain::{ActionDescriptor, ActionId, InputKind, RouteItem};
+use flick_domain::{ActionDescriptor, ActionId, InputType, RouteItem};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -127,7 +127,7 @@ impl ActionRegistry {
     ///    进行不区分大小写的比较。
     ///
     /// 结果按分数降序排列。
-    pub fn search(&self, query: &str, _input_kind: InputKind) -> Vec<RouteItem> {
+    pub fn search(&self, query: &str, _input_kind: InputType) -> Vec<RouteItem> {
         let query_trimmed = query.trim();
         if query_trimmed.is_empty() {
             return Vec::new();
@@ -259,7 +259,7 @@ mod tests {
         reg.register(echo_descriptor(), Arc::new(NoopHandler));
 
         // "echo hello" 应当匹配
-        let results = reg.search("echo hello", InputKind::PlainText);
+        let results = reg.search("echo hello", InputType::PlainText);
         assert_eq!(results.len(), 1);
         assert_eq!(
             results[0].action_id,
@@ -267,7 +267,7 @@ mod tests {
         );
 
         // "echohello" 不应匹配（无词边界）
-        let results = reg.search("echohello", InputKind::PlainText);
+        let results = reg.search("echohello", InputType::PlainText);
         assert!(results.is_empty(), "echohello should not match echo prefix");
     }
 
@@ -276,7 +276,7 @@ mod tests {
         let mut reg = ActionRegistry::new();
         reg.register(notes_descriptor(), Arc::new(NoopHandler));
 
-        let results = reg.search("notes", InputKind::PlainText);
+        let results = reg.search("notes", InputType::PlainText);
         assert_eq!(results.len(), 1);
     }
 
@@ -284,7 +284,7 @@ mod tests {
     fn empty_query_returns_empty() {
         let mut reg = ActionRegistry::new();
         reg.register(echo_descriptor(), Arc::new(NoopHandler));
-        assert!(reg.search("", InputKind::PlainText).is_empty());
-        assert!(reg.search("   ", InputKind::PlainText).is_empty());
+        assert!(reg.search("", InputType::PlainText).is_empty());
+        assert!(reg.search("   ", InputType::PlainText).is_empty());
     }
 }
