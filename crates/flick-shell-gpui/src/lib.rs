@@ -180,6 +180,7 @@ fn open_panel_window(
     host_tx: mpsc::UnboundedSender<UiToHost>,
     hide_tx: mpsc::UnboundedSender<()>,
     detach_tx: mpsc::UnboundedSender<(SurfaceContent, ThemeMode)>,
+    theme_tx: mpsc::UnboundedSender<ThemeMode>,
     initial: ThemeMode,
 ) -> Result<AnyWindowHandle, String> {
     let (x, y) = match app.primary_display() {
@@ -213,7 +214,7 @@ fn open_panel_window(
 
     let handle = app
         .open_window(options, move |window, cx| {
-            cx.new(|cx| AppView::new(host_tx, hide_tx, detach_tx, initial, window, cx))
+            cx.new(|cx| AppView::new(host_tx, hide_tx, detach_tx, theme_tx, initial, window, cx))
         })
         .map_err(|err| err.to_string())?;
     Ok(handle.into())
@@ -313,7 +314,6 @@ pub fn run_with_theme(
             ]);
 
             let host_tx_open = host_tx.clone();
-            let initial_for_open = initial;
             // 视图失焦自发隐藏时，通过该通道请求应用级泵销毁窗口（在窗口更新帧之外执行）。
             let (hide_tx, mut hide_rx) = mpsc::unbounded_channel::<()>();
             let hide_tx_open = hide_tx.clone();
@@ -321,6 +321,10 @@ pub fn run_with_theme(
             let (close_tx, mut close_rx) = mpsc::unbounded_channel::<AnyWindowHandle>();
             let detach_tx_open = detach_tx.clone();
             let close_tx_open = close_tx.clone();
+            let (theme_tx, mut theme_rx) = mpsc::unbounded_channel::<ThemeMode>();
+            let theme_tx_open = theme_tx.clone();
+            // 新开窗口（面板/独立窗口）都用当前主题；面板内切换后更新。
+            let mut current_theme = initial;
 
             // 应用级宿主事件泵（与窗口解耦）：窗口销毁后它仍存活，可再创建新窗口。
             cx.spawn(async move |cx: &mut AsyncApp| {
@@ -333,6 +337,7 @@ pub fn run_with_theme(
                 // 保持发送端存活，避免通道关闭后 select 分支忙循环。
                 let _detach_tx_guard = detach_tx_open.clone();
                 let _close_tx_guard = close_tx_open.clone();
+                let _theme_tx_guard = theme_tx_open.clone();
 
                 loop {
                     tokio::select! {
@@ -359,7 +364,8 @@ pub fn run_with_theme(
                                                 host_tx_open.clone(),
                                                 hide_tx_open.clone(),
                                                 detach_tx_open.clone(),
-                                                initial_for_open,
+                                                theme_tx_open.clone(),
+                                                current_theme,
                                             )
                                         }) {
                                             Ok(h) => handle = Some(h),
@@ -411,6 +417,7 @@ pub fn run_with_theme(
                         }
                         maybe = detach_rx.recv() => {
                             if let Some((content, theme)) = maybe {
+                                current_theme = theme;
                                 match cx.update(|app| {
                                     open_detached_window(app, content, theme, close_tx.clone(), detach_seq)
                                 }) {
@@ -430,6 +437,39 @@ pub fn run_with_theme(
                                 let _ = cx.update(|app| {
                                     let _ = handle.update(app, |_, window, _| window.remove_window());
                                 });
+                            }
+                        }
+                        maybe = theme_rx.recv() => {
+                            if let Some(mode) = maybe {
+                                current_theme = mode;
+                                if let Some(h) = handle {
+                                    let _ = cx.update(|app| {
+                                        let _ = h.update(app, |anyview, _, app2| {
+                                            if let Ok(view) = anyview.downcast::<AppView>() {
+                                                view.update(app2, |v, cx2| v.set_theme(mode, cx2));
+                                            }
+                                        });
+                                    });
+                                }
+                                // 广播到所有独立窗口；顺带剪除已失效句柄（例如被 WM 以
+                                // Alt+F4 销毁的窗口），避免 `detached` 永久累积死句柄。
+                                let mut live = Vec::with_capacity(detached.len());
+                                for h in detached.drain(..) {
+                                    let ok = cx.update(|app| {
+                                        h.update(app, |anyview, _, app2| {
+                                            if let Ok(view) =
+                                                anyview.downcast::<detached::DetachedSurfaceView>()
+                                            {
+                                                view.update(app2, |v, cx2| v.set_theme(mode, cx2));
+                                            }
+                                        })
+                                        .is_ok()
+                                    });
+                                    if ok {
+                                        live.push(h);
+                                    }
+                                }
+                                detached = live;
                             }
                         }
                         _ = hide_rx.recv() => {

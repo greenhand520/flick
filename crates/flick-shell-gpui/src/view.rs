@@ -46,6 +46,8 @@ pub struct AppView {
     hide_tx: mpsc::UnboundedSender<()>,
     /// 请求应用级泵把 Surface 分离成独立窗口：携带内容快照与当前主题。
     detach_tx: mpsc::UnboundedSender<(SurfaceContent, ThemeMode)>,
+    /// 主题变更广播：通知应用级泵同步所有独立窗口。
+    theme_tx: mpsc::UnboundedSender<ThemeMode>,
     _subscriptions: Vec<Subscription>,
     _debounce: Option<Task<()>>,
     /// 上次已应用的窗口尺寸 (宽,高)；仅变化时才调用 window.resize，避免抖动。
@@ -61,6 +63,7 @@ impl AppView {
         host_tx: mpsc::UnboundedSender<UiToHost>,
         hide_tx: mpsc::UnboundedSender<()>,
         detach_tx: mpsc::UnboundedSender<(SurfaceContent, ThemeMode)>,
+        theme_tx: mpsc::UnboundedSender<ThemeMode>,
         initial: ThemeMode,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -100,6 +103,7 @@ impl AppView {
             host_tx,
             hide_tx,
             detach_tx,
+            theme_tx,
             _subscriptions: vec![input_sub, blur_sub],
             _debounce: None,
             last_applied_size: None,
@@ -119,6 +123,12 @@ impl AppView {
     /// 把焦点交给搜索输入框（被宿主事件泵在窗口显示后调用）。
     pub fn focus_input(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         window.focus(&self.input_focus, cx);
+    }
+
+    /// 主题广播入口：更新本地主题并重绘（由应用级泵调用）。
+    pub fn set_theme(&mut self, theme: ThemeMode, cx: &mut Context<Self>) {
+        self.state.theme = theme;
+        cx.notify();
     }
 
     /// 接收一条宿主事件（由 `lib.rs` 的事件泵转发），进入正常 dispatch 流程。
@@ -237,6 +247,7 @@ impl AppView {
             theme.mono_font_family = crate::ui_mono_font_family().into();
         });
         persist_theme(self.state.theme);
+        let _ = self.theme_tx.send(self.state.theme);
     }
 }
 
