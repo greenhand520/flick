@@ -13,11 +13,12 @@ pub use view::AppView;
 
 use crate::app::DetachPayload;
 use flick_domain::{HostToUi, SurfaceSessionId, UiToHost};
+use gpui_kit::layer_shell::{
+    Anchor, KeyboardInteractivity, Layer, LayerShellNotSupportedError, LayerShellOptions,
+};
 use gpui_kit::*;
 use tokio::sync::mpsc;
 
-/// 面板逻辑宽度（单一来源：`theme::PANEL_WIDTH`）。
-const PANEL_WIDTH: f32 = theme::PANEL_WIDTH;
 /// 空态（仅搜索行）高度，与 `theme::Metrics.input_height` 一致。
 pub(crate) const PANEL_INPUT_HEIGHT: f32 = 64.0;
 /// 面板距主显示器顶部的偏移。
@@ -172,10 +173,12 @@ pub fn run(host_tx: mpsc::UnboundedSender<UiToHost>, host_rx: mpsc::UnboundedRec
     run_with_theme(host_tx, host_rx, detect_initial_theme());
 }
 
-/// 打开一个面板尺寸的小窗口，返回其类型擦除句柄。
+/// 打开面板窗口：**固定全屏透明 overlay**，内部只绘制顶部面板卡片。
 ///
-/// 窗口与面板卡片等大（透明、无边框、可拖动），位置在主显示器顶部居中。
-/// `app_id` 必须与 portal 写出的 `.desktop` 文件名一致，否则 GNOME 会显示 "null"。
+/// 参考 `awari` 的做法：窗口尺寸固定为显示器大小，结果增减只改变内部卡片高度，
+/// 从不 `window.resize`（Wayland 下 resize 会引发输入法/键盘焦点抖动，表现为
+/// Delete/Backspace 误隐藏）。Wayland 优先用 layer-shell overlay；不支持时回退
+/// 普通全屏透明窗口（仅 Wayland/X11 后端，不做特殊平台补丁）。
 fn open_panel_window(
     app: &mut App,
     host_tx: mpsc::UnboundedSender<UiToHost>,
@@ -184,41 +187,83 @@ fn open_panel_window(
     theme_tx: mpsc::UnboundedSender<ThemeMode>,
     initial: ThemeMode,
 ) -> Result<AnyWindowHandle, String> {
-    let (x, y) = match app.primary_display() {
-        Some(display) => {
-            let db = display.bounds();
-            let screen_w = f32::from(db.size.width);
-            let ox = f32::from(db.origin.x);
-            let oy = f32::from(db.origin.y);
-            (ox + (screen_w - PANEL_WIDTH) / 2.0, oy + PANEL_TOP_MARGIN)
-        }
-        None => (0.0, PANEL_TOP_MARGIN),
+    // GNOME/Wayland 下 `primary_display()` 在窗口创建前可能返回 None；此时退回
+    // `displays()` 的第一块显示器，否则窗口会退化成 1280×800，四周露出一大片
+    // 透明区域（用户看到的“大的透明背景/边框”）。
+    let display = app
+        .primary_display()
+        .or_else(|| app.displays().into_iter().next());
+    let bounds = match display {
+        Some(display) => display.bounds(),
+        None => Bounds::new(point(px(0.0), px(0.0)), size(px(1280.0), px(800.0))),
     };
-    let bounds = Bounds::new(
-        point(px(x), px(y)),
-        size(px(PANEL_WIDTH), px(PANEL_INPUT_HEIGHT)),
-    );
+
+    let layer_options = LayerShellOptions {
+        namespace: "flick:launcher".into(),
+        layer: Layer::Overlay,
+        anchor: Anchor::TOP | Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT,
+        exclusive_zone: Some(px(0.0)),
+        exclusive_edge: None,
+        margin: None,
+        keyboard_interactivity: KeyboardInteractivity::Exclusive,
+    };
     let options = WindowOptions {
         titlebar: None,
         is_resizable: false,
-        is_movable: true,
-        kind: WindowKind::Normal,
+        is_movable: false,
+        kind: WindowKind::LayerShell(layer_options),
         window_bounds: Some(WindowBounds::Windowed(bounds)),
-        // 透明窗口：整窗不画底色，桌面透出；面板自身画圆角底色。
+        // 整窗透明：只有面板卡片绘制底色；无窗口装饰/边框/阴影。
         window_background: WindowBackgroundAppearance::Transparent,
-        // 客户端装饰：不请求窗口管理器画标题栏/边框，得到干净的无边框浮卡。
         window_decorations: Some(WindowDecorations::Client),
         focus: true,
         app_id: Some(flick_domain::APP_ID.into()),
         ..Default::default()
     };
 
-    let handle = app
-        .open_window(options, move |window, cx| {
-            cx.new(|cx| AppView::new(host_tx, hide_tx, detach_tx, theme_tx, initial, window, cx))
+    let host_tx1 = host_tx.clone();
+    let hide_tx1 = hide_tx.clone();
+    let detach_tx1 = detach_tx.clone();
+    let theme_tx1 = theme_tx.clone();
+    let result = app.open_window(options, move |window, cx| {
+        cx.new(|cx| {
+            AppView::new(
+                host_tx1,
+                hide_tx1,
+                detach_tx1,
+                theme_tx1,
+                initial,
+                window,
+                cx,
+            )
         })
-        .map_err(|err| err.to_string())?;
-    Ok(handle.into())
+    });
+
+    // GNOME/Mutter 等无 `wlr-layer-shell` 的合成器：回退到普通全屏透明窗口。
+    let result = match result {
+        Ok(handle) => Ok(handle),
+        Err(err) if err.downcast_ref::<LayerShellNotSupportedError>().is_some() => {
+            let fallback = WindowOptions {
+                titlebar: None,
+                is_resizable: false,
+                is_movable: false,
+                kind: WindowKind::Normal,
+                window_bounds: Some(WindowBounds::Windowed(bounds)),
+                window_background: WindowBackgroundAppearance::Transparent,
+                window_decorations: Some(WindowDecorations::Client),
+                focus: true,
+                app_id: Some(flick_domain::APP_ID.into()),
+                ..Default::default()
+            };
+            app.open_window(fallback, move |window, cx| {
+                cx.new(|cx| {
+                    AppView::new(host_tx, hide_tx, detach_tx, theme_tx, initial, window, cx)
+                })
+            })
+        }
+        Err(err) => Err(err),
+    };
+    result.map(|handle| handle.into()).map_err(|err| err.to_string())
 }
 
 /// 打开一个独立 Surface 窗口（快照渲染 + 会话交互）。

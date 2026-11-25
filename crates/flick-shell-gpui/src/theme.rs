@@ -2,7 +2,7 @@
 
 /// 面板与独立 Surface 窗口共用的逻辑宽度（单一来源）。
 ///
-/// `Metrics::default().width`、`detached::DETACHED_WIDTH` 与 `lib.rs` 的 `PANEL_WIDTH`
+/// `Metrics::default().width` 与 `detached::DETACHED_WIDTH`
 /// 全部派生自这里，避免三处字面量各写一份 666.0 而漂移。
 pub const PANEL_WIDTH: f32 = 666.0;
 

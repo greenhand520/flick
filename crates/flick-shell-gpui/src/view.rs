@@ -1,12 +1,12 @@
 //! 渲染层：唯一接触 gpui/gpui-kit 的模块。
 //!
-//! 窗口本体是**面板尺寸的小窗**（约 666 宽，顶部居中，透明、可拖动），搜索面板就是
-//! 绘制在窗口里的圆角卡片。卡片高度随结果条数变化时，由 `AppView::dispatch` 调
-//! `window.resize` 同步窗口尺寸。
+//! 窗口本体是**全屏透明 overlay**（参考 `awari`），搜索面板只是绘制在顶部的圆角卡片。
+//! 窗口尺寸固定为显示器大小，结果增减只改变卡片高度、不触发 `window.resize`，
+//! 从而避免 Wayland 下 resize 引发的键盘/输入法焦点抖动。卡片可在 overlay 内拖动。
 //!
 //! 生命周期由上层（`lib.rs` 的宿主事件泵）驱动：每次收到 `HostToUi::ShowSearchPanel`
-//! 才创建新窗口，收到 `HostToUi::HideSearchPanel` 或用户按 Esc / 失焦时 `remove_window`
-//! 销毁窗口。因此隐藏时没有窗口、不会在任务栏留图标；再次唤起是全新映射的窗口，GNOME
+//! 才创建新窗口，收到 `HostToUi::HideSearchPanel` 或用户按 Esc / 点击面板外时
+//! `remove_window` 销毁窗口。因此隐藏时没有窗口、不会在任务栏留图标；再次唤起是全新映射的窗口，GNOME
 //! 会把新窗口带到前台，从而规避「后台应用无法抢焦点」的问题。
 
 use std::collections::HashMap;
@@ -58,16 +58,15 @@ pub struct AppView {
     /// 各控件订阅的句柄，随视图存活。
     _widget_subs: Vec<Subscription>,
     _debounce: Option<Task<()>>,
-    /// 失焦隐藏的延迟确认任务：避免控件内部焦点转移（如 Delete/Backspace 触发的
-    /// 编辑内部焦点变化）被误判为窗口失焦而隐藏面板。
-    _blur_task: Option<Task<()>>,
-    /// 上次已应用的窗口尺寸 (宽,高)；仅变化时才调用 window.resize，避免抖动。
-    last_applied_size: Option<(f32, f32)>,
     /// 上一轮 `panel.visible`，用于检测「可见 -> 隐藏」跃迁（只发一次销毁请求）。
     was_visible: bool,
     /// 分离窗口进行中：抑制面板隐藏时发给宿主的 `SurfaceClosed`
     /// （会话已转交给独立窗口，不能被当作已关闭）。
     suppress_surface_closed: bool,
+    /// 面板拖动起点（overlay 内坐标）。
+    drag_origin: Option<(f32, f32)>,
+    /// 面板相对默认位置的偏移（overlay 内拖动）。
+    panel_offset: (f32, f32),
 }
 
 impl AppView {
@@ -100,46 +99,6 @@ impl AppView {
             }
         });
 
-        // 隐藏策略：**不再用「输入框失焦」触发隐藏**。
-        // gpui-kit 的 Input 在 Delete/Backspace 等编辑操作时可能发生控件内部焦点变化，
-        // 误判为失焦会直接隐藏面板。改为监听**窗口激活状态**：只有整个窗口真正失去激活
-        // （用户切到别的应用/桌面）才隐藏，并延迟确认以过滤瞬时抖动。
-        let activation_sub = cx.observe_window_activation(window, |this, window, cx| {
-            let active = window.is_window_active();
-            if debug_focus() {
-                eprintln!(
-                    "[flick-focus] window_activation active={active} visible={}",
-                    this.state.panel.visible
-                );
-            }
-            if active {
-                // 重新激活：取消待执行的隐藏。
-                this._blur_task = None;
-                return;
-            }
-            if !this.state.panel.visible {
-                return;
-            }
-            let task = cx.spawn_in(window, async move |this, cx| {
-                cx.background_executor()
-                    .timer(Duration::from_millis(150))
-                    .await;
-                let _ = this.update_in(cx, |this, window, cx| {
-                    if debug_focus() {
-                        eprintln!(
-                            "[flick-focus] deactivate-check active={} visible={}",
-                            window.is_window_active(),
-                            this.state.panel.visible
-                        );
-                    }
-                    if this.state.panel.visible && !window.is_window_active() {
-                        this.dispatch(UiEvent::WindowClosed, window, cx);
-                    }
-                });
-            });
-            this._blur_task = Some(task);
-        });
-
         let mut view = Self {
             state: AppState::new(initial),
             metrics: Metrics::default(),
@@ -150,14 +109,14 @@ impl AppView {
             hide_tx,
             detach_tx,
             theme_tx,
-            _subscriptions: vec![input_sub, activation_sub],
+            _subscriptions: vec![input_sub],
             widgets: HashMap::new(),
             _widget_subs: Vec::new(),
             _debounce: None,
-            _blur_task: None,
-            last_applied_size: None,
             was_visible: false,
             suppress_surface_closed: false,
+            drag_origin: None,
+            panel_offset: (0.0, 0.0),
         };
         // 打开即聚焦输入框，用户可直接输入。
         window.focus(&input_focus, cx);
@@ -187,12 +146,6 @@ impl AppView {
     }
 
     fn dispatch(&mut self, event: UiEvent, window: &mut Window, cx: &mut Context<Self>) {
-        if debug_focus() {
-            eprintln!(
-                "[flick-focus] ui_event={:?} visible_before={}",
-                event, self.state.panel.visible
-            );
-        }
         let effects = self.state.update(event);
         self.apply(effects, window, cx);
         // 面板已隐藏时窗口即将被应用级泵销毁，不再为它 resize/调度下一帧，
@@ -200,15 +153,6 @@ impl AppView {
         if self.state.panel.visible {
             self.sync_surface_widgets(window, cx);
             cx.notify();
-            // 窗口 resize 不能在输入控件自身的按键/文本变更回调里同步执行：
-            // Wayland 下在事件处理中改窗口尺寸会影响焦点，导致 Delete/Backspace 误触发
-            // 失焦隐藏。延迟到本帧事件结束后再调整尺寸。
-            cx.defer_in(window, |this, window, cx| {
-                if this.state.panel.visible {
-                    this.sync_window_size(window);
-                    cx.notify();
-                }
-            });
         }
     }
 
@@ -277,20 +221,6 @@ impl AppView {
         }
     }
 
-    /// 面板尺寸的小窗口：结果增减时把窗口 resize 到「卡片高度」，
-    /// 避免整屏透明区域，也避免结果被裁。仅在尺寸变化时调用。
-    fn sync_window_size(&mut self, window: &mut Window) {
-        if !self.state.panel.visible {
-            return;
-        }
-        let (w, h) = desired_size(&self.state.panel, &self.metrics);
-        let target = (w, h);
-        if self.last_applied_size != Some(target) {
-            window.resize(Size::new(px(target.0), px(target.1)));
-            self.last_applied_size = Some(target);
-        }
-    }
-
     fn apply(&mut self, effects: Vec<Effect>, window: &mut Window, cx: &mut Context<Self>) {
         for effect in effects {
             match effect {
@@ -336,6 +266,23 @@ impl AppView {
 
     fn on_hide_panel(&mut self, _: &HidePanel, window: &mut Window, cx: &mut Context<Self>) {
         self.dispatch(UiEvent::EscapePressed, window, cx);
+    }
+
+    fn on_overlay_mouse_move(
+        &mut self,
+        ev: &MouseMoveEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some((ox, oy)) = self.drag_origin else {
+            return;
+        };
+        let x: f32 = ev.position.x.into();
+        let y: f32 = ev.position.y.into();
+        self.panel_offset.0 += x - ox;
+        self.panel_offset.1 += y - oy;
+        self.drag_origin = Some((x, y));
+        cx.notify();
     }
 
     fn on_select_next(&mut self, _: &SelectNext, window: &mut Window, cx: &mut Context<Self>) {
@@ -403,7 +350,21 @@ impl Render for AppView {
             .size_full()
             .flex()
             .flex_col()
-            .items_center();
+            .items_center()
+            // 点击面板外的透明区域 = 关闭面板（layer-shell 全屏 overlay 需要自己处理点击外部）。
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _ev: &MouseDownEvent, window, cx| {
+                    this.dispatch(UiEvent::WindowClosed, window, cx);
+                }),
+            )
+            .on_mouse_move(cx.listener(Self::on_overlay_mouse_move))
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, _ev: &MouseUpEvent, _window, _cx| {
+                    this.drag_origin = None;
+                }),
+            );
 
         let (ui, _metrics) = theme::resolve(self.state.theme);
         let (_, target_h) = desired_size(&self.state.panel, &self.metrics);
@@ -416,6 +377,8 @@ impl Render for AppView {
             .flex_col()
             .w(px(self.metrics.width))
             .h(px(panel_h))
+            .mt(px(crate::PANEL_TOP_MARGIN + self.panel_offset.1))
+            .ml(px(self.panel_offset.0))
             .flex_none()
             .overflow_hidden()
             .track_focus(&self.focus)
@@ -426,11 +389,15 @@ impl Render for AppView {
             .on_action(cx.listener(Self::on_toggle_theme))
             // ctrl-d 用捕获阶段绑定：先于聚焦的 Input 处理，避免输入框吞掉该快捷键。
             .capture_action(cx.listener(Self::on_detach_surface))
-            // 按住面板空白/边缘即可拖动整个窗口（gpui Wayland 的 start_window_move）。
+            // overlay 内拖动面板（layer-shell 全屏窗口不能移动，记录偏移即可）。
             // 输入区与结果区会 stop_propagation，避免在它们上面误触发拖动。
-            .on_mouse_down(MouseButton::Left, |_ev, window, _cx| {
-                window.start_window_move()
-            })
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, ev: &MouseDownEvent, _window, cx| {
+                    this.drag_origin = Some((ev.position.x.into(), ev.position.y.into()));
+                    cx.stop_propagation();
+                }),
+            )
             .bg(col(ui.panel_bg))
             .text_color(col(ui.text))
             .rounded(px(self.metrics.radius_panel))
@@ -652,11 +619,6 @@ pub(crate) fn collect_inputs(nodes: &[SurfaceNode], out: &mut Vec<InputSpec>) {
             _ => {}
         }
     }
-}
-
-/// 焦点/隐藏相关调试日志开关。
-fn debug_focus() -> bool {
-    std::env::var_os("FLICK_GPUI_DEBUG_FOCUS").is_some()
 }
 
 /// 尽力持久化主题覆盖；失败静默（$HOME 只读时预期失败）。
