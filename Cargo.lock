@@ -1786,8 +1786,11 @@ dependencies = [
 name = "flick-shell-gpui"
 version = "0.2.0"
 dependencies = [
+ "flick-adapters-linux",
  "flick-application",
+ "flick-builtins",
  "flick-domain",
+ "flick-runtime",
  "flick-ui",
  "gpui-kit",
  "tokio",

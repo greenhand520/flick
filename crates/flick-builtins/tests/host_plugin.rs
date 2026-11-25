@@ -3,6 +3,37 @@
 use flick_domain::*;
 use flick_runtime::{ActionRuntime, Plugin};
 
+#[tokio::test]
+async fn phase0_builtins_register_and_route_host() {
+    let rt = ActionRuntime::default();
+    flick_builtins::register_phase0_builtins(&rt).await;
+    let info = flick_domain::HostInfo {
+        os: flick_domain::OperatingSystem::Linux,
+        arch: flick_domain::Architecture::X86_64,
+        kernel: "test".into(),
+        locale: "en_US.UTF-8".into(),
+        shell: "bash".into(),
+        window_manager: Some("Mutter".into()),
+        lan_ip: None,
+    };
+    rt.set_host_info(std::sync::Arc::new(info));
+
+    let items = rt.route("host", InputType::PlainText).await;
+    assert!(
+        items
+            .iter()
+            .any(|i| i.action_id.as_str() == flick_builtins::HOST_ACTION_ID),
+        "query `host` should route to the host plugin, got {items:?}"
+    );
+
+    let echo = rt.route("echo hello", InputType::PlainText).await;
+    assert!(
+        echo.iter()
+            .any(|i| i.action_id.as_str() == flick_builtins::ECHO_ACTION_ID),
+        "query `echo hello` should still route to echo"
+    );
+}
+
 #[test]
 fn host_manifest_is_valid() {
     let m = flick_builtins::host::HostPlugin.manifest();

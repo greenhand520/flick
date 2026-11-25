@@ -211,7 +211,7 @@ fn build_surface(
     extras: &serde_json::Value,
 ) -> SurfaceContent {
     let mut body = vec![
-        SurfaceNode::Heading { id: None, text: "系统信息".into() },
+        // SurfaceNode::Heading { id: None, text: "系统信息".into() },
         SurfaceNode::KeyValue { id: None, key: "系统".into(), value: os_label(info.os).into() },
         SurfaceNode::KeyValue { id: None, key: "架构".into(), value: arch_label(info.arch).into() },
         SurfaceNode::KeyValue { id: None, key: "内核".into(), value: info.kernel.clone() },
