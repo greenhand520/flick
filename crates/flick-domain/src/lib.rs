@@ -10,6 +10,7 @@ pub mod caller;
 pub mod error;
 pub mod id;
 pub mod input;
+pub mod plugin;
 pub mod route;
 pub mod ui;
 
@@ -26,5 +27,6 @@ pub use caller::{Caller, CallerKind};
 pub use error::ActionError;
 pub use id::{ActionId, InvocationId, QueryGeneration};
 pub use input::SearchQuery;
+pub use plugin::*;
 pub use route::RouteItem;
 pub use ui::{HostToUi, RuntimeStatus, UiIntent, UiToHost};
