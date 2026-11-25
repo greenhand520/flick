@@ -68,7 +68,10 @@ fn node_height(node: &SurfaceNode, style: &SurfaceStyle) -> f32 {
         SurfaceNode::List { items, .. } => {
             let rows: f32 = items
                 .iter()
-                .map(|it| style.line_height * if it.subtitle.is_some() { 1.6 } else { 1.0 })
+                .map(|it| {
+                    style.line_height * if it.subtitle.is_some() { 1.6 } else { 1.0 }
+                        + if it.badge.is_some() { style.line_height } else { 0.0 }
+                })
                 .sum();
             rows + (items.len().saturating_sub(1) as f32) * style.row_gap
         }
@@ -91,7 +94,11 @@ fn node_height(node: &SurfaceNode, style: &SurfaceStyle) -> f32 {
             }
             h
         }
-        SurfaceNode::Row { children, .. } | SurfaceNode::Column { children, .. } => {
+        SurfaceNode::Row { children, .. } => children
+            .iter()
+            .map(|c| node_height(c, style))
+            .fold(0.0_f32, f32::max),
+        SurfaceNode::Column { children, .. } => {
             children.iter().map(|c| node_height(c, style)).sum::<f32>()
                 + (children.len().saturating_sub(1) as f32) * style.section_gap
         }

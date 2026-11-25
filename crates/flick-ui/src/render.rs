@@ -25,6 +25,29 @@ fn tone_color(style: &SurfaceStyle, tone: BadgeTone) -> (u8, u8, u8, u8) {
     }
 }
 
+/// 徽标前景色：按底色亮度选深/浅文字，浅底用深色以保证对比度。
+fn badge_fg(style: &SurfaceStyle, tone: BadgeTone) -> (u8, u8, u8, u8) {
+    let (r, g, b, _) = tone_color(style, tone);
+    let luma = 0.299 * r as f32 + 0.587 * g as f32 + 0.114 * b as f32;
+    if luma > 140.0 { style.panel_bg } else { style.text }
+}
+
+/// 渲染一个徽标（Badge 节点与 List item 共用）。
+fn render_badge(text: String, tone: BadgeTone, style: &SurfaceStyle) -> AnyElement {
+    div()
+        .flex()
+        .child(
+            div()
+                .rounded_full()
+                .px_2()
+                .py_1()
+                .bg(col(tone_color(style, tone)))
+                .text_color(col(badge_fg(style, tone)))
+                .child(Label::new(text)),
+        )
+        .into_any_element()
+}
+
 /// 把一个 Surface 渲染为 gpui 元素树。
 pub fn render_surface(content: &SurfaceContent, style: &SurfaceStyle) -> AnyElement {
     let mut root = div().flex().flex_col().w_full().gap(px(style.section_gap));
@@ -62,30 +85,32 @@ fn render_node(node: &SurfaceNode, style: &SurfaceStyle) -> AnyElement {
             .child(div().text_color(col(style.text_muted)).child(Label::new(key.clone())))
             .child(div().text_color(col(style.text)).child(Label::new(value.clone())))
             .into_any_element(),
-        SurfaceNode::Badge { text, tone, .. } => div()
-            .flex()
-            .child(
-                div()
-                    .rounded_full()
-                    .px_2()
-                    .py_1()
-                    .bg(col(tone_color(style, *tone)))
-                    .text_color(col(style.text))
-                    .child(Label::new(text.clone())),
-            )
-            .into_any_element(),
+        SurfaceNode::Badge { text, tone, .. } => render_badge(text.clone(), *tone, style),
         SurfaceNode::List { items, .. } => {
             let mut el = div().flex().flex_col().w_full().gap(px(style.row_gap));
             for item in items {
-                let mut row = div()
+                let mut entry = div().flex().flex_col().w_full();
+                let mut top = div()
                     .flex()
                     .w_full()
                     .justify_between()
                     .child(div().text_color(col(style.text)).child(Label::new(item.title.clone())));
                 if let Some(v) = &item.value {
-                    row = row.child(div().text_color(col(style.text_muted)).child(Label::new(v.clone())));
+                    top = top.child(div().text_color(col(style.text_muted)).child(Label::new(v.clone())));
                 }
-                el = el.child(row);
+                entry = entry.child(top);
+                if let Some(sub) = &item.subtitle {
+                    entry = entry.child(
+                        div()
+                            .text_sm()
+                            .text_color(col(style.text_muted))
+                            .child(Label::new(sub.clone())),
+                    );
+                }
+                if let Some(badge) = &item.badge {
+                    entry = entry.child(render_badge(badge.clone(), BadgeTone::Neutral, style));
+                }
+                el = el.child(entry);
             }
             el.into_any_element()
         }
