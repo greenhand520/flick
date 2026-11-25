@@ -11,7 +11,7 @@
 
 use std::time::Duration;
 
-use flick_domain::{ActionOutcome, HostToUi, UiToHost};
+use flick_domain::{ActionOutcome, HostToUi, SurfaceContent, UiToHost};
 use flick_ui::render::{col, render_surface};
 use flick_ui::style::SurfaceStyle;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
@@ -44,6 +44,8 @@ pub struct AppView {
     /// 请求应用级宿主泵销毁本窗口（隐藏时用；避免在窗口自身的焦点/更新帧内直接
     /// `remove_window`，否则会触发 "scheduling follow-up frame ... window not found"）。
     hide_tx: mpsc::UnboundedSender<()>,
+    /// 请求应用级泵把 Surface 分离成独立窗口：携带内容快照与当前主题。
+    detach_tx: mpsc::UnboundedSender<(SurfaceContent, ThemeMode)>,
     _subscriptions: Vec<Subscription>,
     _debounce: Option<Task<()>>,
     /// 上次已应用的窗口尺寸 (宽,高)；仅变化时才调用 window.resize，避免抖动。
@@ -58,6 +60,7 @@ impl AppView {
     pub fn new(
         host_tx: mpsc::UnboundedSender<UiToHost>,
         hide_tx: mpsc::UnboundedSender<()>,
+        detach_tx: mpsc::UnboundedSender<(SurfaceContent, ThemeMode)>,
         initial: ThemeMode,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -96,6 +99,7 @@ impl AppView {
             input_focus: input_focus.clone(),
             host_tx,
             hide_tx,
+            detach_tx,
             _subscriptions: vec![input_sub, blur_sub],
             _debounce: None,
             last_applied_size: None,
@@ -167,8 +171,9 @@ impl AppView {
                 Effect::Quit => {
                     cx.quit();
                 }
-                // 占位：Task 3 会替换为真正的 detach 接线。
-                Effect::Detach(_) => {}
+                Effect::Detach(content) => {
+                    let _ = self.detach_tx.send((content, self.state.theme));
+                }
             }
         }
         // 「隐藏即销毁窗口」模型：但销毁动作不能在本窗口的更新帧里同步执行——失焦等场景下
@@ -192,6 +197,21 @@ impl AppView {
 
     fn on_select_prev(&mut self, _: &SelectPrev, window: &mut Window, cx: &mut Context<Self>) {
         self.dispatch(UiEvent::SelectionUp, window, cx);
+    }
+
+    fn on_detach_surface(
+        &mut self,
+        _: &DetachSurface,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let effects = self.state.update(UiEvent::DetachRequested);
+        let should_detach = effects.iter().any(|e| matches!(e, Effect::Detach(_)));
+        self.apply(effects, window, cx);
+        if should_detach {
+            // 面板隐藏 + 通知 daemon（与 Esc 相同路径）。
+            self.dispatch(UiEvent::EscapePressed, window, cx);
+        }
     }
 
     fn on_toggle_theme(
@@ -253,6 +273,7 @@ impl Render for AppView {
             .on_action(cx.listener(Self::on_select_next))
             .on_action(cx.listener(Self::on_select_prev))
             .on_action(cx.listener(Self::on_toggle_theme))
+            .on_action(cx.listener(Self::on_detach_surface))
             // 按住面板空白/边缘即可拖动整个窗口（gpui Wayland 的 start_window_move）。
             // 输入区与结果区会 stop_propagation，避免在它们上面误触发拖动。
             .on_mouse_down(MouseButton::Left, |_ev, window, _cx| {

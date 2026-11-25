@@ -11,7 +11,7 @@ pub use flick_application::presenter::{PanelAction, PanelEvent, PanelState, Sele
 pub use theme::{Metrics, ThemeMode, UiTheme};
 pub use view::AppView;
 
-use flick_domain::{HostToUi, UiToHost};
+use flick_domain::{HostToUi, SurfaceContent, UiToHost};
 use gpui_kit::*;
 use tokio::sync::mpsc;
 
@@ -179,6 +179,7 @@ fn open_panel_window(
     app: &mut App,
     host_tx: mpsc::UnboundedSender<UiToHost>,
     hide_tx: mpsc::UnboundedSender<()>,
+    detach_tx: mpsc::UnboundedSender<(SurfaceContent, ThemeMode)>,
     initial: ThemeMode,
 ) -> Result<AnyWindowHandle, String> {
     let (x, y) = match app.primary_display() {
@@ -212,7 +213,56 @@ fn open_panel_window(
 
     let handle = app
         .open_window(options, move |window, cx| {
-            cx.new(|cx| AppView::new(host_tx, hide_tx, initial, window, cx))
+            cx.new(|cx| AppView::new(host_tx, hide_tx, detach_tx, initial, window, cx))
+        })
+        .map_err(|err| err.to_string())?;
+    Ok(handle.into())
+}
+
+/// 打开一个独立 Surface 窗口（快照渲染）。
+fn open_detached_window(
+    app: &mut App,
+    content: SurfaceContent,
+    theme: ThemeMode,
+    close_tx: mpsc::UnboundedSender<AnyWindowHandle>,
+    index: usize,
+) -> Result<AnyWindowHandle, String> {
+    let (w, h) = detached::detached_size(&content);
+    let (dx, dy) = detached::cascade_offset(index);
+    let (base_x, base_y) = match app.primary_display() {
+        Some(display) => {
+            let db = display.bounds();
+            let screen_w = f32::from(db.size.width);
+            let ox = f32::from(db.origin.x);
+            let oy = f32::from(db.origin.y);
+            (
+                ox + (screen_w - w) / 2.0,
+                oy + PANEL_TOP_MARGIN + PANEL_INPUT_HEIGHT + 24.0,
+            )
+        }
+        None => (0.0, PANEL_TOP_MARGIN + PANEL_INPUT_HEIGHT + 24.0),
+    };
+    let bounds = Bounds::new(
+        point(px(base_x + dx), px(base_y + dy)),
+        size(px(w), px(h)),
+    );
+    let options = WindowOptions {
+        titlebar: None,
+        is_resizable: true,
+        is_movable: true,
+        kind: WindowKind::Normal,
+        window_bounds: Some(WindowBounds::Windowed(bounds)),
+        window_background: WindowBackgroundAppearance::Transparent,
+        window_decorations: Some(WindowDecorations::Client),
+        focus: true,
+        app_id: Some(flick_domain::APP_ID.into()),
+        ..Default::default()
+    };
+    let title = content.title.clone().unwrap_or_else(|| "Flick".to_string());
+    let handle = app
+        .open_window(options, move |window, cx| {
+            window.set_window_title(&title);
+            cx.new(|cx| detached::DetachedSurfaceView::new(content, theme, close_tx, window, cx))
         })
         .map_err(|err| err.to_string())?;
     Ok(handle.into())
@@ -258,6 +308,8 @@ pub fn run_with_theme(
                 KeyBinding::new("up", view::SelectPrev, Some("FlickPanel")),
                 KeyBinding::new("down", view::SelectNext, Some("FlickPanel")),
                 KeyBinding::new("ctrl-shift-l", view::ToggleThemeAction, Some("FlickPanel")),
+                KeyBinding::new("ctrl-d", view::DetachSurface, Some("FlickPanel")),
+                KeyBinding::new("escape", view::CloseDetached, Some("FlickDetached")),
             ]);
 
             let host_tx_open = host_tx.clone();
@@ -265,6 +317,10 @@ pub fn run_with_theme(
             // 视图失焦自发隐藏时，通过该通道请求应用级泵销毁窗口（在窗口更新帧之外执行）。
             let (hide_tx, mut hide_rx) = mpsc::unbounded_channel::<()>();
             let hide_tx_open = hide_tx.clone();
+            let (detach_tx, mut detach_rx) = mpsc::unbounded_channel::<(SurfaceContent, ThemeMode)>();
+            let (close_tx, mut close_rx) = mpsc::unbounded_channel::<AnyWindowHandle>();
+            let detach_tx_open = detach_tx.clone();
+            let close_tx_open = close_tx.clone();
 
             // 应用级宿主事件泵（与窗口解耦）：窗口销毁后它仍存活，可再创建新窗口。
             cx.spawn(async move |cx: &mut AsyncApp| {
@@ -272,12 +328,23 @@ pub fn run_with_theme(
                 // 当前面板窗口句柄（窗口被销毁后会失效，用前需校验）。
                 let mut handle: Option<AnyWindowHandle> = None;
 
+                let mut detached: Vec<AnyWindowHandle> = Vec::new();
+                let mut detach_seq: usize = 0;
+                // 保持发送端存活，避免通道关闭后 select 分支忙循环。
+                let _detach_tx_guard = detach_tx_open.clone();
+                let _close_tx_guard = close_tx_open.clone();
+
                 loop {
                     tokio::select! {
                         maybe = rx.recv() => {
                             let Some(event) = maybe else { break; };
                             match event {
                                 HostToUi::Shutdown => {
+                                    for h in detached.drain(..) {
+                                        let _ = cx.update(|app| {
+                                            let _ = h.update(app, |_, window, _| window.remove_window());
+                                        });
+                                    }
                                     cx.update(|app| app.quit());
                                     break;
                                 }
@@ -291,6 +358,7 @@ pub fn run_with_theme(
                                                 app,
                                                 host_tx_open.clone(),
                                                 hide_tx_open.clone(),
+                                                detach_tx_open.clone(),
                                                 initial_for_open,
                                             )
                                         }) {
@@ -339,6 +407,29 @@ pub fn run_with_theme(
                                         });
                                     }
                                 }
+                            }
+                        }
+                        maybe = detach_rx.recv() => {
+                            if let Some((content, theme)) = maybe {
+                                match cx.update(|app| {
+                                    open_detached_window(app, content, theme, close_tx.clone(), detach_seq)
+                                }) {
+                                    Ok(h) => {
+                                        detached.push(h);
+                                        detach_seq += 1;
+                                    }
+                                    Err(err) => {
+                                        eprintln!("flick: failed to open detached window: {err}");
+                                    }
+                                }
+                            }
+                        }
+                        maybe = close_rx.recv() => {
+                            if let Some(handle) = maybe {
+                                detached.retain(|h| *h != handle);
+                                let _ = cx.update(|app| {
+                                    let _ = handle.update(app, |_, window, _| window.remove_window());
+                                });
                             }
                         }
                         _ = hide_rx.recv() => {
