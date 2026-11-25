@@ -333,6 +333,12 @@ impl Render for AppView {
                     ActionOutcome::Data(value) => format!("Result: {value}"),
                     ActionOutcome::Notice { message } => format!("Notice: {message}"),
                     ActionOutcome::Error(error) => format!("Error: {error}"),
+                    ActionOutcome::Text(text) => format!("{text}"),
+                    ActionOutcome::Url(url) => format!("{url}"),
+                    ActionOutcome::File(file) => format!("{}", file.display_name),
+                    ActionOutcome::OpenSurface { surface_id, .. } => {
+                        format!("Surface: {surface_id}")
+                    }
                 };
                 results = results.child(
                     div()

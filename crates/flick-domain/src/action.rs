@@ -233,6 +233,17 @@ pub enum ActionOutcome {
     Notice { message: String },
     /// 执行期间发生错误。
     Error(ActionError),
+    /// 纯文本结果。
+    Text(String),
+    /// URL 结果。
+    Url(String),
+    /// 文件结果。
+    File(FileRef),
+    /// 请求打开一个 Surface。
+    OpenSurface {
+        surface_id: String,
+        args: serde_json::Value,
+    },
 }
 
 #[cfg(test)]
