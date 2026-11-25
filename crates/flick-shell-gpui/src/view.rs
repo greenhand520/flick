@@ -58,6 +58,9 @@ pub struct AppView {
     /// 各控件订阅的句柄，随视图存活。
     _widget_subs: Vec<Subscription>,
     _debounce: Option<Task<()>>,
+    /// 失焦隐藏的延迟确认任务：避免控件内部焦点转移（如 Delete/Backspace 触发的
+    /// 编辑内部焦点变化）被误判为窗口失焦而隐藏面板。
+    _blur_task: Option<Task<()>>,
     /// 上次已应用的窗口尺寸 (宽,高)；仅变化时才调用 window.resize，避免抖动。
     last_applied_size: Option<(f32, f32)>,
     /// 上一轮 `panel.visible`，用于检测「可见 -> 隐藏」跃迁（只发一次销毁请求）。
@@ -97,12 +100,44 @@ impl AppView {
             }
         });
 
-        // 失焦隐藏挂在「输入框」的焦点句柄上（焦点实际在输入框），而非面板根句柄。
-        // 触发后会隐藏面板，并在 `apply` 里 `remove_window` 销毁窗口。
-        let blur_sub = cx.on_focus_out(&input_focus, window, |this, _event, window, cx| {
-            if this.state.panel.visible {
-                this.dispatch(UiEvent::WindowClosed, window, cx);
+        // 隐藏策略：**不再用「输入框失焦」触发隐藏**。
+        // gpui-kit 的 Input 在 Delete/Backspace 等编辑操作时可能发生控件内部焦点变化，
+        // 误判为失焦会直接隐藏面板。改为监听**窗口激活状态**：只有整个窗口真正失去激活
+        // （用户切到别的应用/桌面）才隐藏，并延迟确认以过滤瞬时抖动。
+        let activation_sub = cx.observe_window_activation(window, |this, window, cx| {
+            let active = window.is_window_active();
+            if debug_focus() {
+                eprintln!(
+                    "[flick-focus] window_activation active={active} visible={}",
+                    this.state.panel.visible
+                );
             }
+            if active {
+                // 重新激活：取消待执行的隐藏。
+                this._blur_task = None;
+                return;
+            }
+            if !this.state.panel.visible {
+                return;
+            }
+            let task = cx.spawn_in(window, async move |this, cx| {
+                cx.background_executor()
+                    .timer(Duration::from_millis(150))
+                    .await;
+                let _ = this.update_in(cx, |this, window, cx| {
+                    if debug_focus() {
+                        eprintln!(
+                            "[flick-focus] deactivate-check active={} visible={}",
+                            window.is_window_active(),
+                            this.state.panel.visible
+                        );
+                    }
+                    if this.state.panel.visible && !window.is_window_active() {
+                        this.dispatch(UiEvent::WindowClosed, window, cx);
+                    }
+                });
+            });
+            this._blur_task = Some(task);
         });
 
         let mut view = Self {
@@ -115,10 +150,11 @@ impl AppView {
             hide_tx,
             detach_tx,
             theme_tx,
-            _subscriptions: vec![input_sub, blur_sub],
+            _subscriptions: vec![input_sub, activation_sub],
             widgets: HashMap::new(),
             _widget_subs: Vec::new(),
             _debounce: None,
+            _blur_task: None,
             last_applied_size: None,
             was_visible: false,
             suppress_surface_closed: false,
@@ -151,14 +187,28 @@ impl AppView {
     }
 
     fn dispatch(&mut self, event: UiEvent, window: &mut Window, cx: &mut Context<Self>) {
+        if debug_focus() {
+            eprintln!(
+                "[flick-focus] ui_event={:?} visible_before={}",
+                event, self.state.panel.visible
+            );
+        }
         let effects = self.state.update(event);
         self.apply(effects, window, cx);
         // 面板已隐藏时窗口即将被应用级泵销毁，不再为它 resize/调度下一帧，
         // 避免对「已删除窗口」调度帧引发 "window not found"。
         if self.state.panel.visible {
             self.sync_surface_widgets(window, cx);
-            self.sync_window_size(window);
             cx.notify();
+            // 窗口 resize 不能在输入控件自身的按键/文本变更回调里同步执行：
+            // Wayland 下在事件处理中改窗口尺寸会影响焦点，导致 Delete/Backspace 误触发
+            // 失焦隐藏。延迟到本帧事件结束后再调整尺寸。
+            cx.defer_in(window, |this, window, cx| {
+                if this.state.panel.visible {
+                    this.sync_window_size(window);
+                    cx.notify();
+                }
+            });
         }
     }
 
@@ -602,6 +652,11 @@ pub(crate) fn collect_inputs(nodes: &[SurfaceNode], out: &mut Vec<InputSpec>) {
             _ => {}
         }
     }
+}
+
+/// 焦点/隐藏相关调试日志开关。
+fn debug_focus() -> bool {
+    std::env::var_os("FLICK_GPUI_DEBUG_FOCUS").is_some()
 }
 
 /// 尽力持久化主题覆盖；失败静默（$HOME 只读时预期失败）。
