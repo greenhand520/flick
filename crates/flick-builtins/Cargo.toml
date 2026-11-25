@@ -6,6 +6,7 @@ edition.workspace = true
 [dependencies]
 flick-domain = { path = "../flick-domain" }
 flick-runtime = { path = "../flick-runtime" }
+serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 async-trait = { workspace = true }
 

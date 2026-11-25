@@ -3,6 +3,7 @@
 //! Phase 0 仅包含一个动作：**echo**。
 
 pub mod echo;
+pub mod host;
 
 pub use echo::{EchoHandler, EchoPlugin, ECHO_ACTION_ID};
 use flick_runtime::ActionRuntime;
