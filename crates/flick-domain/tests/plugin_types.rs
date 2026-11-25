@@ -51,3 +51,20 @@ fn category_is_closed_enum() {
     ];
     assert_eq!(cats.len(), 13);
 }
+
+#[test]
+fn action_descriptor_new_fills_phase1_defaults() {
+    let d = flick_domain::ActionDescriptor::new(
+        ActionId::from_static("flick.builtin.host.show_info"),
+        "系统信息",
+        vec!["host".into(), "系统".into()],
+        Matcher::prefix_command("host"),
+        ConcurrencyPolicy::Parallel,
+    );
+    assert_eq!(d.supported_inputs, vec![InputType::PlainText]);
+    assert!(d.file_extensions.is_empty());
+    assert_eq!(d.output_types, vec![OutputType::Data]);
+    assert_eq!(d.visibility, ActionVisibility::Public);
+    assert_eq!(d.risk_level, RiskLevel::ReadOnly);
+    assert_eq!(d.invocation_policy, InvocationPolicy::NonInteractive);
+}

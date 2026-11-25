@@ -9,7 +9,7 @@ use std::time::Duration;
 // ─── 描述符 ───────────────────────────────────────────────────────────────
 
 /// 描述已注册的动作，用于路由和展示。
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ActionDescriptor {
     pub id: ActionId,
     pub title: String,
@@ -17,10 +17,41 @@ pub struct ActionDescriptor {
     pub keywords: Vec<String>,
     pub matcher: Matcher,
     pub concurrency: ConcurrencyPolicy,
+    pub supported_inputs: Vec<InputType>,
+    /// 仅 `InputType::File` 有效；小写、不带点。
+    pub file_extensions: Vec<String>,
+    pub output_types: Vec<OutputType>,
+    pub visibility: ActionVisibility,
+    pub risk_level: RiskLevel,
+    pub invocation_policy: InvocationPolicy,
+}
+
+impl ActionDescriptor {
+    pub fn new(
+        id: ActionId,
+        title: impl Into<String>,
+        keywords: Vec<String>,
+        matcher: Matcher,
+        concurrency: ConcurrencyPolicy,
+    ) -> Self {
+        Self {
+            id,
+            title: title.into(),
+            keywords,
+            matcher,
+            concurrency,
+            supported_inputs: vec![InputType::PlainText],
+            file_extensions: Vec::new(),
+            output_types: vec![OutputType::Data],
+            visibility: ActionVisibility::Public,
+            risk_level: RiskLevel::ReadOnly,
+            invocation_policy: InvocationPolicy::NonInteractive,
+        }
+    }
 }
 
 /// 此动作如何与用户输入进行匹配。
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Matcher {
     /// 基于关键词从纯文本输入中召回。
     Keyword,
@@ -79,6 +110,64 @@ impl ActionInput {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum InputKind {
     PlainText,
+}
+
+/// Phase 1 输入类型分类。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+pub enum InputType {
+    #[default]
+    PlainText,
+    Url,
+    PathCandidate,
+    MathExpression,
+    File,
+}
+
+/// 动作产出的结果类型。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+pub enum OutputType {
+    #[default]
+    Data,
+    Text,
+    Notice,
+    Url,
+    File,
+    Surface,
+    Error,
+}
+
+/// 指向文件的引用（仅接受 `file://` URI）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FileRef {
+    pub uri: String, // 仅接受 file://
+    pub display_name: String,
+    pub mime: Option<String>,
+}
+
+/// 动作对用户的可见性。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum ActionVisibility {
+    #[default]
+    Public,
+    Internal,
+}
+
+/// 动作的风险等级。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum RiskLevel {
+    #[default]
+    ReadOnly,
+    SideEffecting,
+    Destructive,
+}
+
+/// 动作的调用策略（是否需要交互）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum InvocationPolicy {
+    #[default]
+    NonInteractive,
+    InteractiveOptional,
+    InteractiveRequired,
 }
 
 // ─── 请求 ──────────────────────────────────────────────────────────────────

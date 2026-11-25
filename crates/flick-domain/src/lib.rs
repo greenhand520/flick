@@ -20,8 +20,9 @@ pub const APP_ID: &str = "io.github.greenhand520.Flick";
 
 // 为方便使用，在 crate 根目录重新导出关键类型。
 pub use action::{
-    ActionContext, ActionDescriptor, ActionInput, ActionOutcome, ActionRequest, ConcurrencyPolicy,
-    Deadline, InputKind, Matcher,
+    ActionContext, ActionDescriptor, ActionInput, ActionOutcome, ActionRequest, ActionVisibility,
+    ConcurrencyPolicy, Deadline, FileRef, InputKind, InputType, InvocationPolicy, Matcher,
+    OutputType, RiskLevel,
 };
 pub use caller::{Caller, CallerKind};
 pub use error::ActionError;

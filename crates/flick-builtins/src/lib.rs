@@ -14,13 +14,13 @@ use std::sync::Arc;
 /// 此函数是幂等的 —— 调用两次只会覆盖先前针对相同动作 ID
 /// 注册的处理器。
 pub async fn register_phase0_builtins(runtime: &ActionRuntime) {
-    let echo_descriptor = ActionDescriptor {
-        id: ActionId::from_static(ECHO_ACTION_ID),
-        title: "Echo".into(),
-        keywords: vec!["echo".into()],
-        matcher: Matcher::prefix_command("echo"),
-        concurrency: ConcurrencyPolicy::Parallel,
-    };
+    let echo_descriptor = ActionDescriptor::new(
+        ActionId::from_static(ECHO_ACTION_ID),
+        "Echo",
+        vec!["echo".into()],
+        Matcher::prefix_command("echo"),
+        ConcurrencyPolicy::Parallel,
+    );
 
     runtime
         .register(echo_descriptor, Arc::new(EchoHandler))

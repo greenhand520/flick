@@ -54,13 +54,13 @@ impl ActionHandler for SlowHandler {
 }
 
 fn echo_descriptor() -> ActionDescriptor {
-    ActionDescriptor {
-        id: ActionId::from_static("flick.builtin.echo.v1.echo"),
-        title: "Echo".into(),
-        keywords: vec!["echo".into(), "repeat".into()],
-        matcher: Matcher::prefix_command("echo"),
-        concurrency: ConcurrencyPolicy::Parallel,
-    }
+    ActionDescriptor::new(
+        ActionId::from_static("flick.builtin.echo.v1.echo"),
+        "Echo",
+        vec!["echo".into(), "repeat".into()],
+        Matcher::prefix_command("echo"),
+        ConcurrencyPolicy::Parallel,
+    )
 }
 
 fn echo_request(text: &str, caller: Caller) -> ActionRequest {
@@ -163,13 +163,13 @@ async fn cancelling_an_invocation_returns_cancelled_outcome_or_stops_work() {
     // 注册一个耗时 10 秒但会检查取消的慢速处理器。
     let slow_id = ActionId::from_static("flick.builtin.slow.v1.run");
     rt.register(
-        ActionDescriptor {
-            id: slow_id.clone(),
-            title: "Slow".into(),
-            keywords: vec!["slow".into()],
-            matcher: Matcher::Keyword,
-            concurrency: ConcurrencyPolicy::Parallel,
-        },
+        ActionDescriptor::new(
+            slow_id.clone(),
+            "Slow",
+            vec!["slow".into()],
+            Matcher::Keyword,
+            ConcurrencyPolicy::Parallel,
+        ),
         Arc::new(SlowHandler {
             delay: Duration::from_secs(10),
         }),

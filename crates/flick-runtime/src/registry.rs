@@ -155,23 +155,23 @@ mod tests {
     }
 
     fn echo_descriptor() -> ActionDescriptor {
-        ActionDescriptor {
-            id: ActionId::from_static("flick.builtin.echo.v1.echo"),
-            title: "Echo".into(),
-            keywords: vec!["echo".into(), "repeat".into()],
-            matcher: Matcher::prefix_command("echo"),
-            concurrency: ConcurrencyPolicy::Parallel,
-        }
+        ActionDescriptor::new(
+            ActionId::from_static("flick.builtin.echo.v1.echo"),
+            "Echo",
+            vec!["echo".into(), "repeat".into()],
+            Matcher::prefix_command("echo"),
+            ConcurrencyPolicy::Parallel,
+        )
     }
 
     fn notes_descriptor() -> ActionDescriptor {
-        ActionDescriptor {
-            id: ActionId::from_static("flick.builtin.notes.v1.search"),
-            title: "Search Notes".into(),
-            keywords: vec!["note".into(), "notes".into(), "search".into()],
-            matcher: Matcher::Keyword,
-            concurrency: ConcurrencyPolicy::Parallel,
-        }
+        ActionDescriptor::new(
+            ActionId::from_static("flick.builtin.notes.v1.search"),
+            "Search Notes",
+            vec!["note".into(), "notes".into(), "search".into()],
+            Matcher::Keyword,
+            ConcurrencyPolicy::Parallel,
+        )
     }
 
     #[test]
