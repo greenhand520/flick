@@ -12,6 +12,8 @@
 use std::time::Duration;
 
 use flick_domain::{ActionOutcome, HostToUi, UiToHost};
+use flick_ui::render::render_surface;
+use flick_ui::style::SurfaceStyle;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::label::Label;
 use gpui_kit::component::{Icon, IconName, Sizable};
@@ -287,72 +289,103 @@ impl Render for AppView {
                 ),
         );
 
+        let surface_style = SurfaceStyle {
+            panel_bg: ui.panel_bg,
+            surface: ui.surface,
+            text: ui.text,
+            text_muted: ui.text_muted,
+            border: ui.border,
+            badge_neutral: ui.text_muted,
+            badge_info: (120, 180, 255, 255),
+            badge_success: (120, 200, 140, 255),
+            badge_warning: (240, 190, 90, 255),
+            badge_danger: (240, 120, 120, 255),
+            radius_row: self.metrics.radius_row,
+            pad: 10.0,
+            row_gap: 8.0,
+            line_height: 22.0,
+            section_gap: 10.0,
+        };
+
         // 结果区 + 结果/通知行：整体限制在 results_max_height 内并可纵向滚动，
-        // 避免行数超过 ~7 时溢出/裁切。
-        let has_results =
-            !self.state.panel.routes.is_empty() || self.state.panel.last_outcome.is_some();
-        if has_results {
-            let mut results = div()
-                .id("flick-results")
-                .flex()
-                .flex_col()
-                .gap(px(self.metrics.row_gap))
-                .w_full()
-                .max_h(px(self.metrics.results_max_height))
-                .overflow_y_scroll()
-                .pt_2()
-                // 结果区吞掉鼠标按下，避免点结果行时误触发窗口拖动。
-                .on_mouse_down(MouseButton::Left, cx.listener(|_, _, _, cx| {
-                    cx.stop_propagation()
-                }));
+        // 避免行数超过 ~7 时溢出/裁切。若存在活动 Surface，则内联渲染该 Surface 取代结果列表。
+        if let Some(surface) = crate::app::active_surface(&self.state.panel) {
+            panel = panel.child(
+                div()
+                    .id("flick-surface")
+                    .w_full()
+                    .max_h(px(self.metrics.results_max_height))
+                    .overflow_y_scroll()
+                    .pt_2()
+                    .on_mouse_down(MouseButton::Left, cx.listener(|_, _, _, cx| {
+                        cx.stop_propagation()
+                    }))
+                    .child(render_surface(surface, &surface_style)),
+            );
+        } else {
+            let has_results =
+                !self.state.panel.routes.is_empty() || self.state.panel.last_outcome.is_some();
+            if has_results {
+                let mut results = div()
+                    .id("flick-results")
+                    .flex()
+                    .flex_col()
+                    .gap(px(self.metrics.row_gap))
+                    .w_full()
+                    .max_h(px(self.metrics.results_max_height))
+                    .overflow_y_scroll()
+                    .pt_2()
+                    .on_mouse_down(MouseButton::Left, cx.listener(|_, _, _, cx| {
+                        cx.stop_propagation()
+                    }));
 
-            for (index, item) in self.state.panel.routes.iter().enumerate() {
-                let selected = index == self.state.panel.selection.index;
-                let (bg, fg) = if selected {
-                    (ui.selected_bg, ui.selected_fg)
-                } else {
-                    (ui.surface, ui.text)
-                };
-                results = results.child(
-                    div()
-                        .h(px(self.metrics.row_height))
-                        .w_full()
-                        .flex()
-                        .items_center()
-                        .px_3()
-                        .rounded(px(self.metrics.radius_row))
-                        .bg(col(bg))
-                        .text_color(col(fg))
-                        .child(Label::new(item.title.clone())),
-                );
+                for (index, item) in self.state.panel.routes.iter().enumerate() {
+                    let selected = index == self.state.panel.selection.index;
+                    let (bg, fg) = if selected {
+                        (ui.selected_bg, ui.selected_fg)
+                    } else {
+                        (ui.surface, ui.text)
+                    };
+                    results = results.child(
+                        div()
+                            .h(px(self.metrics.row_height))
+                            .w_full()
+                            .flex()
+                            .items_center()
+                            .px_3()
+                            .rounded(px(self.metrics.radius_row))
+                            .bg(col(bg))
+                            .text_color(col(fg))
+                            .child(Label::new(item.title.clone())),
+                    );
+                }
+
+                if let Some(outcome) = &self.state.panel.last_outcome {
+                    let text = match outcome {
+                        ActionOutcome::Data(value) => format!("Result: {value}"),
+                        ActionOutcome::Notice { message } => format!("Notice: {message}"),
+                        ActionOutcome::Error(error) => format!("Error: {error}"),
+                        ActionOutcome::Text(text) => text.clone(),
+                        ActionOutcome::Url(url) => url.clone(),
+                        ActionOutcome::File(file) => file.display_name.clone(),
+                        ActionOutcome::OpenSurface { surface_id, .. } => {
+                            format!("Surface: {surface_id}")
+                        }
+                    };
+                    results = results.child(
+                        div()
+                            .w_full()
+                            .px_3()
+                            .py_2()
+                            .rounded(px(self.metrics.radius_row))
+                            .bg(col(ui.surface))
+                            .text_color(col(ui.text_muted))
+                            .child(Label::new(text)),
+                    );
+                }
+
+                panel = panel.child(results);
             }
-
-            // 最近一次调用的结果 / 通知 / 错误行（与 iced 的渲染保持一致）。
-            if let Some(outcome) = &self.state.panel.last_outcome {
-                let text = match outcome {
-                    ActionOutcome::Data(value) => format!("Result: {value}"),
-                    ActionOutcome::Notice { message } => format!("Notice: {message}"),
-                    ActionOutcome::Error(error) => format!("Error: {error}"),
-                    ActionOutcome::Text(text) => format!("{text}"),
-                    ActionOutcome::Url(url) => format!("{url}"),
-                    ActionOutcome::File(file) => format!("{}", file.display_name),
-                    ActionOutcome::OpenSurface { surface_id, .. } => {
-                        format!("Surface: {surface_id}")
-                    }
-                };
-                results = results.child(
-                    div()
-                        .w_full()
-                        .px_3()
-                        .py_2()
-                        .rounded(px(self.metrics.radius_row))
-                        .bg(col(ui.surface))
-                        .text_color(col(ui.text_muted))
-                        .child(Label::new(text)),
-                );
-            }
-
-            panel = panel.child(results);
         }
 
         root = root.child(panel);
