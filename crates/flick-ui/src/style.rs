@@ -1,6 +1,6 @@
 //! Surface 样式（纯数据，不依赖 gpui）与高度估算。
 
-use flick_domain::{SurfaceContent, SurfaceNode, SpacerSize};
+use flick_domain::{ButtonTone, SurfaceContent, SurfaceNode, SpacerSize};
 
 /// 一套 Surface 呈现样式（颜色 + 尺寸）。默认值仅为高度估算服务时使用。
 #[derive(Debug, Clone, Copy)]
@@ -15,6 +15,10 @@ pub struct SurfaceStyle {
     pub badge_success: (u8, u8, u8, u8),
     pub badge_warning: (u8, u8, u8, u8),
     pub badge_danger: (u8, u8, u8, u8),
+    /// 主按钮背景（通常取主题 primary/selected 背景）。
+    pub primary: (u8, u8, u8, u8),
+    /// 主按钮前景（通常取主题 selected 前景）。
+    pub primary_fg: (u8, u8, u8, u8),
     pub radius_row: f32,
     pub pad: f32,
     pub row_gap: f32,
@@ -35,11 +39,27 @@ impl Default for SurfaceStyle {
             badge_success: (120, 200, 140, 255),
             badge_warning: (240, 190, 90, 255),
             badge_danger: (240, 120, 120, 255),
+            primary: (103, 80, 164, 255),
+            primary_fg: (255, 255, 255, 255),
             radius_row: 14.0,
             pad: 10.0,
             row_gap: 8.0,
             line_height: 22.0,
             section_gap: 10.0,
+        }
+    }
+}
+
+impl SurfaceStyle {
+    /// 按按钮语义色调解析出（背景色, 前景色）。
+    pub fn button_colors(
+        &self,
+        tone: ButtonTone,
+    ) -> ((u8, u8, u8, u8), (u8, u8, u8, u8)) {
+        match tone {
+            ButtonTone::Primary => (self.primary, self.primary_fg),
+            ButtonTone::Danger => (self.badge_danger, self.panel_bg),
+            ButtonTone::Neutral => (self.surface, self.text),
         }
     }
 }
@@ -119,6 +139,12 @@ fn node_height(node: &SurfaceNode, style: &SurfaceStyle) -> f32 {
             children.iter().map(|c| node_height(c, style)).sum::<f32>()
                 + (children.len().saturating_sub(1) as f32) * style.section_gap
         }
+        SurfaceNode::Input { .. }
+        | SurfaceNode::Button { .. }
+        | SurfaceNode::Checkbox { .. } => 40.0,
+        SurfaceNode::TextArea { rows, .. } => {
+            style.line_height * ((*rows).unwrap_or(3).max(1) as f32)
+        }
     }
 }
 
@@ -183,9 +209,35 @@ mod tests {
     #[test]
     fn list_grows_per_item() {
         let s = SurfaceStyle::default();
-        let item = flick_domain::ListItem { title: "t".into(), subtitle: None, value: None, badge: None };
+        let item = flick_domain::ListItem { id: None, title: "t".into(), subtitle: None, value: None, badge: None };
         let a = content(vec![SurfaceNode::List { id: None, items: vec![item.clone()] }]);
         let b = content(vec![SurfaceNode::List { id: None, items: vec![item.clone(), item] }]);
         assert!(estimate_height(&b, &s) > estimate_height(&a, &s));
+    }
+
+    #[test]
+    fn interactive_nodes_have_sensible_heights() {
+        let s = SurfaceStyle::default();
+        let input = SurfaceNode::Input { id: "i".into(), value: String::new(), placeholder: None };
+        let button = SurfaceNode::Button { id: "b".into(), label: "ok".into(), tone: ButtonTone::Neutral };
+        let check = SurfaceNode::Checkbox { id: "c".into(), checked: true, label: "x".into() };
+        assert_eq!(estimate_height(&content(vec![input]), &s), 40.0);
+        assert_eq!(estimate_height(&content(vec![button]), &s), 40.0);
+        assert_eq!(estimate_height(&content(vec![check]), &s), 40.0);
+    }
+
+    #[test]
+    fn textarea_height_uses_rows() {
+        let s = SurfaceStyle::default();
+        let ta = SurfaceNode::TextArea { id: "t".into(), value: String::new(), placeholder: None, rows: Some(4) };
+        assert_eq!(estimate_height(&content(vec![ta]), &s), s.line_height * 4.0);
+    }
+
+    #[test]
+    fn button_colors_follow_tone() {
+        let s = SurfaceStyle::default();
+        assert_eq!(s.button_colors(ButtonTone::Primary), (s.primary, s.primary_fg));
+        assert_eq!(s.button_colors(ButtonTone::Danger), (s.badge_danger, s.panel_bg));
+        assert_eq!(s.button_colors(ButtonTone::Neutral), (s.surface, s.text));
     }
 }

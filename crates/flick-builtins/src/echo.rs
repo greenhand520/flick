@@ -72,6 +72,7 @@ impl Plugin for EchoPlugin {
             // 纯逻辑插件：不限平台与架构。
             supported_os: vec![],
             supported_architectures: vec![],
+            needs_search: false,
         }
     }
 

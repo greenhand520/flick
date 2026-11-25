@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use flick_domain::*;
 use flick_runtime::{ActionHandler, ActionSpec, Plugin, PluginLifecycle, PluginRuntimeError};
 
-pub const HOST_ACTION_ID: &str = "flick.builtin.host.show_info";
+pub const HOST_ACTION_ID: &str = "flick.builtin.host.host_info";
 
 pub struct HostPlugin;
 
@@ -19,6 +19,7 @@ impl HostPlugin {
             Matcher::prefix_command("host"),
             ConcurrencyPolicy::Parallel,
         );
+        d.supported_inputs = vec![InputType::None];
         d.output_types = vec![OutputType::Surface];
         d
     }
@@ -57,6 +58,7 @@ impl Plugin for HostPlugin {
             // 依赖 /proc、hostname 等 Linux 工具，仅声明支持 Linux。
             supported_os: vec![OperatingSystem::Linux],
             supported_architectures: vec![],
+            needs_search: false,
         }
     }
     fn actions(&self) -> Vec<ActionSpec> {
@@ -79,9 +81,9 @@ impl ActionHandler for HostHandler {
         request: ActionRequest,
         ctx: ActionContext,
     ) -> Result<ActionOutcome, ActionError> {
-        if request.input.kind != InputType::PlainText {
+        if request.input.kind != InputType::None {
             return Err(ActionError::InvalidInput {
-                message: "host 仅支持纯文本输入".into(),
+                message: "host 不需要任何输入".into(),
             });
         }
         let host = match ctx.host_info {
@@ -95,10 +97,7 @@ impl ActionHandler for HostHandler {
         let info = (*host).clone();
         let extras = collect_extras();
         let content = build_surface(&info, &extras);
-        Ok(ActionOutcome::OpenSurface {
-            surface_id: "info".into(),
-            content,
-        })
+        Ok(ActionOutcome::open_surface("info", content))
     }
 }
 

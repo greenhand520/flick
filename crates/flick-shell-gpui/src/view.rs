@@ -9,10 +9,12 @@
 //! 销毁窗口。因此隐藏时没有窗口、不会在任务栏留图标；再次唤起是全新映射的窗口，GNOME
 //! 会把新窗口带到前台，从而规避「后台应用无法抢焦点」的问题。
 
+use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Duration;
 
-use flick_domain::{ActionOutcome, HostToUi, SurfaceContent, UiToHost};
-use flick_ui::render::{col, render_surface};
+use flick_domain::{ActionOutcome, HostToUi, SurfaceEventKind, SurfaceNode, UiToHost};
+use flick_ui::render::{col, render_surface_with_inputs, InputWidgetSpec};
 use flick_ui::style::SurfaceStyle;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::label::Label;
@@ -20,7 +22,9 @@ use gpui_kit::component::{Icon, IconName, Sizable};
 use gpui_kit::*;
 use tokio::sync::mpsc;
 
-use crate::app::{desired_size, AppState, Effect, UiEvent, DEBOUNCE_MILLIS};
+use crate::app::{
+    desired_size, AppState, DetachPayload, Effect, UiEvent, DEBOUNCE_MILLIS,
+};
 use crate::theme::{self, Metrics, ThemeMode};
 
 actions!(flick_shell, [
@@ -44,16 +48,23 @@ pub struct AppView {
     /// 请求应用级宿主泵销毁本窗口（隐藏时用；避免在窗口自身的焦点/更新帧内直接
     /// `remove_window`，否则会触发 "scheduling follow-up frame ... window not found"）。
     hide_tx: mpsc::UnboundedSender<()>,
-    /// 请求应用级泵把 Surface 分离成独立窗口：携带内容快照与当前主题。
-    detach_tx: mpsc::UnboundedSender<(SurfaceContent, ThemeMode)>,
+    /// 请求应用级泵把 Surface 分离成独立窗口：携带内容快照、会话与当前主题。
+    detach_tx: mpsc::UnboundedSender<(DetachPayload, ThemeMode)>,
     /// 主题变更广播：通知应用级泵同步所有独立窗口。
     theme_tx: mpsc::UnboundedSender<ThemeMode>,
     _subscriptions: Vec<Subscription>,
+    /// Surface 内可编辑 Input/TextArea 的控件缓存，按节点 id 复用。
+    widgets: HashMap<String, Entity<InputState>>,
+    /// 各控件订阅的句柄，随视图存活。
+    _widget_subs: Vec<Subscription>,
     _debounce: Option<Task<()>>,
     /// 上次已应用的窗口尺寸 (宽,高)；仅变化时才调用 window.resize，避免抖动。
     last_applied_size: Option<(f32, f32)>,
     /// 上一轮 `panel.visible`，用于检测「可见 -> 隐藏」跃迁（只发一次销毁请求）。
     was_visible: bool,
+    /// 分离窗口进行中：抑制面板隐藏时发给宿主的 `SurfaceClosed`
+    /// （会话已转交给独立窗口，不能被当作已关闭）。
+    suppress_surface_closed: bool,
 }
 
 impl AppView {
@@ -62,7 +73,7 @@ impl AppView {
     pub fn new(
         host_tx: mpsc::UnboundedSender<UiToHost>,
         hide_tx: mpsc::UnboundedSender<()>,
-        detach_tx: mpsc::UnboundedSender<(SurfaceContent, ThemeMode)>,
+        detach_tx: mpsc::UnboundedSender<(DetachPayload, ThemeMode)>,
         theme_tx: mpsc::UnboundedSender<ThemeMode>,
         initial: ThemeMode,
         window: &mut Window,
@@ -105,9 +116,12 @@ impl AppView {
             detach_tx,
             theme_tx,
             _subscriptions: vec![input_sub, blur_sub],
+            widgets: HashMap::new(),
+            _widget_subs: Vec::new(),
             _debounce: None,
             last_applied_size: None,
             was_visible: false,
+            suppress_surface_closed: false,
         };
         // 打开即聚焦输入框，用户可直接输入。
         window.focus(&input_focus, cx);
@@ -142,8 +156,74 @@ impl AppView {
         // 面板已隐藏时窗口即将被应用级泵销毁，不再为它 resize/调度下一帧，
         // 避免对「已删除窗口」调度帧引发 "window not found"。
         if self.state.panel.visible {
+            self.sync_surface_widgets(window, cx);
             self.sync_window_size(window);
             cx.notify();
+        }
+    }
+
+    /// 为当前 Surface 的 Input/TextArea 建立（或复用）可编辑控件，并在其未聚焦时
+    /// 用内容里的值同步显示。控件事件翻译为 `UiToHost::SurfaceEvent` 上报宿主。
+    fn sync_surface_widgets(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(content) = crate::app::active_surface(&self.state.panel).cloned() else {
+            return;
+        };
+        let mut specs = Vec::new();
+        collect_inputs(&content.body, &mut specs);
+        for spec in specs {
+            if !self.widgets.contains_key(&spec.id) {
+                let placeholder = spec.placeholder.clone();
+                let entity = cx.new(|cx| {
+                    let mut state = InputState::new(window, cx);
+                    if let Some(p) = &placeholder {
+                        state = state.placeholder(p.clone());
+                    }
+                    state
+                });
+                self.widgets.insert(spec.id.clone(), entity.clone());
+                let node_id = spec.id.clone();
+                let sub = cx.subscribe_in(
+                    &entity,
+                    window,
+                    move |this, state, event, _window, cx| match event {
+                        InputEvent::Change => {
+                            let text = state.read(cx).value().to_string();
+                            if let Some(session_id) = this.state.panel.surface_session() {
+                                let _ = this.host_tx.send(UiToHost::SurfaceEvent {
+                                    session_id,
+                                    kind: SurfaceEventKind::TextChanged {
+                                        node_id: node_id.clone(),
+                                        text,
+                                    },
+                                });
+                            }
+                        }
+                        InputEvent::PressEnter { .. } => {
+                            let text = state.read(cx).value().to_string();
+                            if let Some(session_id) = this.state.panel.surface_session() {
+                                let _ = this.host_tx.send(UiToHost::SurfaceEvent {
+                                    session_id,
+                                    kind: SurfaceEventKind::Submitted {
+                                        node_id: node_id.clone(),
+                                        text,
+                                    },
+                                });
+                            }
+                        }
+                        _ => {}
+                    },
+                );
+                self._widget_subs.push(sub);
+            }
+            if let Some(entity) = self.widgets.get(&spec.id).cloned() {
+                let desired = spec.value.clone();
+                let w = &mut *window;
+                entity.update(cx, |state, cx| {
+                    if !state.focus_handle(cx).is_focused(w) {
+                        state.set_value(desired.clone(), w, cx);
+                    }
+                });
+            }
         }
     }
 
@@ -165,6 +245,13 @@ impl AppView {
         for effect in effects {
             match effect {
                 Effect::Send(message) => {
+                    // 分离时面板隐藏会由 presenter 追加 SurfaceClosed；但会话已转交
+                    // 独立窗口，这里抑制该消息，避免运行时误关会话。
+                    if self.suppress_surface_closed
+                        && matches!(&message, UiToHost::SurfaceClosed { .. })
+                    {
+                        continue;
+                    }
                     let _ = self.host_tx.send(message);
                 }
                 Effect::StartDebounce { revision } => {
@@ -181,8 +268,8 @@ impl AppView {
                 Effect::Quit => {
                     cx.quit();
                 }
-                Effect::Detach(content) => {
-                    let _ = self.detach_tx.send((content, self.state.theme));
+                Effect::Detach(payload) => {
+                    let _ = self.detach_tx.send((payload, self.state.theme));
                 }
             }
         }
@@ -219,8 +306,11 @@ impl AppView {
         let should_detach = effects.iter().any(|e| matches!(e, Effect::Detach(_)));
         self.apply(effects, window, cx);
         if should_detach {
-            // 面板隐藏 + 通知 daemon（与 Esc 相同路径）。
+            // 面板隐藏 + 通知 daemon（与 Esc 相同路径），但抑制 SurfaceClosed：
+            // 会话转交独立窗口，不能当作已关闭。
+            self.suppress_surface_closed = true;
             self.dispatch(UiEvent::EscapePressed, window, cx);
+            self.suppress_surface_closed = false;
         }
     }
 
@@ -330,13 +420,46 @@ impl Render for AppView {
             text: ui.text,
             text_muted: ui.text_muted,
             border: ui.border,
+            primary: ui.selected_bg,
+            primary_fg: ui.selected_fg,
             radius_row: self.metrics.radius_row,
             ..SurfaceStyle::default()
         };
 
         // 结果区 + 结果/通知行：整体限制在 results_max_height 内并可纵向滚动，
         // 避免行数超过 ~7 时溢出/裁切。若存在活动 Surface，则内联渲染该 Surface 取代结果列表。
-        if let Some(surface) = crate::app::active_surface(&self.state.panel) {
+        if let Some(surface) = crate::app::active_surface(&self.state.panel).cloned() {
+            // 交互失败的错误提示（红色）显示在 Surface 顶部。
+            if let Some(err) = self.state.surface_error().map(str::to_owned) {
+                panel = panel.child(
+                    div()
+                        .w_full()
+                        .pt(px(self.metrics.content_gap))
+                        .text_color(col((220, 53, 69, 255)))
+                        .child(Label::new(err)),
+                );
+            }
+            let session = self.state.panel.surface_session();
+            let host_tx = self.host_tx.clone();
+            let events: Arc<dyn Fn(SurfaceEventKind) + Send + Sync> = Arc::new(move |kind| {
+                if let Some(session_id) = session {
+                    let _ = host_tx.send(UiToHost::SurfaceEvent { session_id, kind });
+                }
+            });
+            // 可编辑控件来自缓存；缺失时 render 层退回只读样式。
+            let widgets = &self.widgets;
+            let input_widget = |spec: &InputWidgetSpec| {
+                widgets.get(spec.id).map(|entity| {
+                    Input::new(entity)
+                        .appearance(false)
+                        .cleanable(true)
+                        .with_size(gpui_kit::component::Size::Large)
+                        .w_full()
+                        .into_any_element()
+                })
+            };
+            let rendered =
+                render_surface_with_inputs(&surface, &surface_style, events, &input_widget);
             panel = panel.child(
                 div()
                     .id("flick-surface")
@@ -347,7 +470,7 @@ impl Render for AppView {
                     .on_mouse_down(MouseButton::Left, cx.listener(|_, _, _, cx| {
                         cx.stop_propagation()
                     }))
-                    .child(render_surface(surface, &surface_style)),
+                    .child(rendered),
             );
         } else {
             let has_results =
@@ -399,7 +522,7 @@ impl Render for AppView {
                         // 兜底：`OpenSurface` 但 body 为空（故未走 Surface 渲染）时，
                         // 不再输出 "Surface: {id}" 纯文本；按 spec §4.4 用
                         // Badge("Surface") + Text(title 或 surface_id) 组合渲染。
-                        ActionOutcome::OpenSurface { surface_id, content } => {
+                        ActionOutcome::OpenSurface { surface_id, content, .. } => {
                             let label = content.title.clone().unwrap_or_else(|| surface_id.clone());
                             results = results.child(
                                 row.flex()
@@ -440,6 +563,44 @@ impl Render for AppView {
 
         root = root.child(panel);
         root.into_any_element()
+    }
+}
+
+/// Surface 内一个可编辑文本节点的值快照（用于建立/同步控件）。
+pub(crate) struct InputSpec {
+    pub id: String,
+    pub value: String,
+    pub placeholder: Option<String>,
+}
+
+/// 递归收集 Surface 节点中的 Input/TextArea（含 Section/Row/Column 子节点）。
+pub(crate) fn collect_inputs(nodes: &[SurfaceNode], out: &mut Vec<InputSpec>) {
+    for node in nodes {
+        match node {
+            SurfaceNode::Input {
+                id,
+                value,
+                placeholder,
+            } => out.push(InputSpec {
+                id: id.clone(),
+                value: value.clone(),
+                placeholder: placeholder.clone(),
+            }),
+            SurfaceNode::TextArea {
+                id,
+                value,
+                placeholder,
+                ..
+            } => out.push(InputSpec {
+                id: id.clone(),
+                value: value.clone(),
+                placeholder: placeholder.clone(),
+            }),
+            SurfaceNode::Section { children, .. }
+            | SurfaceNode::Row { children, .. }
+            | SurfaceNode::Column { children, .. } => collect_inputs(children, out),
+            _ => {}
+        }
     }
 }
 

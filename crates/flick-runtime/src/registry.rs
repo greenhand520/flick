@@ -1,15 +1,16 @@
 //! ActionRegistry — 存储与其处理器配对的 ActionDescriptors。
 
 use crate::handler::ActionHandler;
-use crate::plugin::{Plugin, PluginRegistrationError};
-use flick_domain::{ActionDescriptor, ActionId, InputType, RouteItem};
+use crate::plugin::{Plugin, PluginRegistrationError, SurfaceHandler};
+use flick_domain::{ActionDescriptor, ActionId, InputType, PluginManifest, RouteItem};
 use std::collections::HashMap;
 use std::sync::Arc;
 
-/// 注册表中的一个条目：描述符 + 处理器。
+/// 注册表中的一个条目：描述符 + 处理器 + 所属插件 id（裸注册时为 None）。
 struct Entry {
     descriptor: ActionDescriptor,
     handler: Arc<dyn ActionHandler>,
+    plugin_id: Option<String>,
 }
 
 /// 将 [`ActionId`] 映射到（[`ActionDescriptor`]，[`ActionHandler`]）。
@@ -19,6 +20,10 @@ struct Entry {
 /// `search` 可用。
 pub struct ActionRegistry {
     entries: HashMap<ActionId, Entry>,
+    /// 插件 id → manifest（仅通过 `register_plugin` 注册的插件）。
+    manifests: HashMap<String, PluginManifest>,
+    /// 插件 id → Surface 交互处理器。
+    surface_handlers: HashMap<String, Arc<dyn SurfaceHandler>>,
 }
 
 impl ActionRegistry {
@@ -26,13 +31,15 @@ impl ActionRegistry {
     pub fn new() -> Self {
         Self {
             entries: HashMap::new(),
+            manifests: HashMap::new(),
+            surface_handlers: HashMap::new(),
         }
     }
 
-    /// 注册一个新动作。
+    /// 注册一个新动作（裸注册，无插件归属）。
     ///
     /// 如果已存在具有相同 [`ActionId`] 的动作，则将其
-    /// 替换，并返回旧的处理器（包装为 `Ok`）。
+    /// 替换。
     pub fn register(&mut self, descriptor: ActionDescriptor, handler: Arc<dyn ActionHandler>) {
         let id = descriptor.id.clone();
         self.entries.insert(
@@ -40,6 +47,7 @@ impl ActionRegistry {
             Entry {
                 descriptor,
                 handler,
+                plugin_id: None,
             },
         );
     }
@@ -101,9 +109,15 @@ impl ActionRegistry {
                 Entry {
                     descriptor: spec.descriptor,
                     handler: spec.handler,
+                    plugin_id: Some(manifest.id.clone()),
                 },
             );
         }
+        if let Some(handler) = plugin.surface_handler() {
+            self.surface_handlers
+                .insert(manifest.id.clone(), handler);
+        }
+        self.manifests.insert(manifest.id.clone(), manifest);
         Ok(())
     }
 
@@ -113,6 +127,17 @@ impl ActionRegistry {
         id: &ActionId,
     ) -> Option<(&ActionDescriptor, &Arc<dyn ActionHandler>)> {
         self.entries.get(id).map(|e| (&e.descriptor, &e.handler))
+    }
+
+    /// 返回持有给定动作的插件 manifest（裸注册动作返回 None）。
+    pub fn plugin_for_action(&self, id: &ActionId) -> Option<&PluginManifest> {
+        let plugin_id = self.entries.get(id)?.plugin_id.as_ref()?;
+        self.manifests.get(plugin_id)
+    }
+
+    /// 返回插件的 Surface 交互处理器（若有注册）。
+    pub fn surface_handler_for(&self, plugin_id: &str) -> Option<Arc<dyn SurfaceHandler>> {
+        self.surface_handlers.get(plugin_id).cloned()
     }
 
     /// 搜索匹配的动作。

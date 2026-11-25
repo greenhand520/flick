@@ -4,14 +4,20 @@
 //! 窗口的创建与销毁由 `lib.rs` 的应用级事件泵统一管理：本视图只负责渲染，并在
 //! Esc 时通过 `close_tx` 请求泵在窗口更新帧之外 `remove_window`。
 
-use flick_domain::SurfaceContent;
-use flick_ui::render::{col, render_surface};
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use flick_domain::{SurfaceContent, SurfaceEventKind, SurfaceSessionId, UiToHost};
+use flick_ui::render::{col, render_surface_with_inputs, InputWidgetSpec};
 use flick_ui::style::{estimate_height, SurfaceStyle};
+use gpui_kit::component::input::{Input, InputEvent, InputState};
+use gpui_kit::component::label::Label;
+use gpui_kit::component::Sizable;
 use gpui_kit::*;
 use tokio::sync::mpsc;
 
 use crate::theme::{self, ThemeMode};
-use crate::view::CloseDetached;
+use crate::view::{collect_inputs, CloseDetached};
 
 /// 独立窗口逻辑宽度（与搜索面板一致，统一取 `theme::PANEL_WIDTH`）。
 pub const DETACHED_WIDTH: f32 = theme::PANEL_WIDTH;
@@ -39,14 +45,26 @@ pub(crate) fn surface_style(theme: ThemeMode) -> SurfaceStyle {
         text: ui.text,
         text_muted: ui.text_muted,
         border: ui.border,
+        primary: ui.selected_bg,
+        primary_fg: ui.selected_fg,
         radius_row: metrics.radius_row,
         ..SurfaceStyle::default()
     }
 }
 
 /// 由 Surface 内容与样式计算独立窗口尺寸（宽, 高）。
-pub fn detached_size(content: &SurfaceContent, style: &SurfaceStyle) -> (f32, f32) {
-    let content_h = estimate_height(content, style);
+///
+/// `needs_search` 为真时在内容上方保留一条搜索框，因此高度额外加上
+/// `crate::PANEL_INPUT_HEIGHT`（与面板搜索行同高）。
+pub fn detached_size(
+    content: &SurfaceContent,
+    style: &SurfaceStyle,
+    needs_search: bool,
+) -> (f32, f32) {
+    let mut content_h = estimate_height(content, style);
+    if needs_search {
+        content_h += crate::PANEL_INPUT_HEIGHT;
+    }
     let h = (content_h + DETACHED_PAD_V * 2.0).clamp(DETACHED_MIN_HEIGHT, DETACHED_MAX_HEIGHT);
     (DETACHED_WIDTH, h)
 }
@@ -63,10 +81,11 @@ pub fn detached_bounds(
     theme: ThemeMode,
     display: (f32, f32, f32, f32),
     index: usize,
+    needs_search: bool,
 ) -> (f32, f32, f32, f32) {
     let (ox, oy, screen_w, screen_h) = display;
     let style = surface_style(theme);
-    let (w, h) = detached_size(content, &style);
+    let (w, h) = detached_size(content, &style, needs_search);
     let (dx, dy) = cascade_offset(index);
 
     let base_x = ox + (screen_w - w) / 2.0;
@@ -111,27 +130,162 @@ pub fn cascade_offset(index: usize) -> (f32, f32) {
 /// 独立 Surface 窗口视图。
 pub struct DetachedSurfaceView {
     content: SurfaceContent,
+    session_id: SurfaceSessionId,
+    needs_search: bool,
     theme: ThemeMode,
     focus: FocusHandle,
+    /// 搜索框（仅 `needs_search` 时建立），其 Change → SearchChanged，
+    /// Enter → Submitted{node_id:"__search__"}。
+    search_input: Option<Entity<InputState>>,
+    /// 回送控件/搜索/关闭事件到宿主运行时。
+    surface_tx: mpsc::UnboundedSender<UiToHost>,
+    /// 请求应用级泵销毁本窗口。
     close_tx: mpsc::UnboundedSender<AnyWindowHandle>,
+    /// Surface 内可编辑 Input/TextArea 的控件缓存，按节点 id 复用。
+    widgets: HashMap<String, Entity<InputState>>,
+    _widget_subs: Vec<Subscription>,
+    /// 交互失败的错误提示（红色文本）。
+    error: Option<String>,
 }
 
 impl DetachedSurfaceView {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         content: SurfaceContent,
+        session_id: SurfaceSessionId,
+        needs_search: bool,
         theme: ThemeMode,
         close_tx: mpsc::UnboundedSender<AnyWindowHandle>,
+        surface_tx: mpsc::UnboundedSender<UiToHost>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
         let focus = cx.focus_handle();
-        window.focus(&focus, cx);
-        Self {
+        let mut widget_subs: Vec<Subscription> = Vec::new();
+        let search_input = if needs_search {
+            let input = cx.new(|cx| InputState::new(window, cx).placeholder("搜索"));
+            let sub = cx.subscribe_in(
+                &input,
+                window,
+                |this, state, event, _window, cx| {
+                    let text = state.read(cx).value().to_string();
+                    let kind = match event {
+                        InputEvent::Change => {
+                            Some(SurfaceEventKind::SearchChanged { text: text.clone() })
+                        }
+                        InputEvent::PressEnter { .. } => Some(SurfaceEventKind::Submitted {
+                            node_id: "__search__".into(),
+                            text: text.clone(),
+                        }),
+                        _ => None,
+                    };
+                    if let Some(kind) = kind {
+                        let _ = this.surface_tx.send(UiToHost::SurfaceEvent {
+                            session_id: this.session_id,
+                            kind,
+                        });
+                    }
+                },
+            );
+            widget_subs.push(sub);
+            Some(input)
+        } else {
+            None
+        };
+
+        let mut view = Self {
             content,
+            session_id,
+            needs_search,
             theme,
             focus,
+            search_input,
+            surface_tx,
             close_tx,
+            widgets: HashMap::new(),
+            _widget_subs: widget_subs,
+            error: None,
+        };
+        view.sync_widgets(window, cx);
+        if let Some(input) = view.search_input.clone() {
+            window.focus(&input.focus_handle(cx), cx);
+        } else {
+            window.focus(&view.focus, cx);
         }
+        view
+    }
+
+    /// 为当前 Surface 的 Input/TextArea 建立（或复用）可编辑控件并同步值。
+    fn sync_widgets(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let mut specs = Vec::new();
+        collect_inputs(&self.content.body, &mut specs);
+        for spec in specs {
+            if !self.widgets.contains_key(&spec.id) {
+                let placeholder = spec.placeholder.clone();
+                let entity = cx.new(|cx| {
+                    let mut state = InputState::new(window, cx);
+                    if let Some(p) = &placeholder {
+                        state = state.placeholder(p.clone());
+                    }
+                    state
+                });
+                self.widgets.insert(spec.id.clone(), entity.clone());
+                let node_id = spec.id.clone();
+                let sub = cx.subscribe_in(
+                    &entity,
+                    window,
+                    move |this, state, event, _window, cx| {
+                        let text = state.read(cx).value().to_string();
+                        let kind = match event {
+                            InputEvent::Change => Some(SurfaceEventKind::TextChanged {
+                                node_id: node_id.clone(),
+                                text: text.clone(),
+                            }),
+                            InputEvent::PressEnter { .. } => Some(SurfaceEventKind::Submitted {
+                                node_id: node_id.clone(),
+                                text: text.clone(),
+                            }),
+                            _ => None,
+                        };
+                        if let Some(kind) = kind {
+                            let _ = this.surface_tx.send(UiToHost::SurfaceEvent {
+                                session_id: this.session_id,
+                                kind,
+                            });
+                        }
+                    },
+                );
+                self._widget_subs.push(sub);
+            }
+            if let Some(entity) = self.widgets.get(&spec.id).cloned() {
+                let desired = spec.value.clone();
+                let w = &mut *window;
+                entity.update(cx, |state, cx| {
+                    if !state.focus_handle(cx).is_focused(w) {
+                        state.set_value(desired.clone(), w, cx);
+                    }
+                });
+            }
+        }
+    }
+
+    /// 宿主推送的新内容：更新快照、清除错误、重建/同步可编辑控件并重绘。
+    pub fn set_content(
+        &mut self,
+        content: SurfaceContent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.content = content;
+        self.error = None;
+        self.sync_widgets(window, cx);
+        cx.notify();
+    }
+
+    /// 宿主报告的交互失败：记录错误信息并重绘（内容保持不变）。
+    pub fn set_error(&mut self, message: String, cx: &mut Context<Self>) {
+        self.error = Some(message);
+        cx.notify();
     }
 
     /// 主题广播：更新配色并请求重绘。
@@ -141,15 +295,110 @@ impl DetachedSurfaceView {
     }
 
     fn on_close(&mut self, _: &CloseDetached, window: &mut Window, _cx: &mut Context<Self>) {
-        // 交给应用级泵在窗口更新帧之外销毁，避免 "window not found"。
+        // 先告知宿主会话已关闭（会话生命周期由运行时负责），
+        // 再交给应用级泵在窗口更新帧之外销毁，避免 "window not found"。
+        let _ = self.surface_tx.send(UiToHost::SurfaceClosed {
+            session_id: self.session_id,
+        });
         let _ = self.close_tx.send(window.window_handle());
     }
 }
 
 impl Render for DetachedSurfaceView {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let (ui, metrics) = theme::resolve(self.theme);
         let style = surface_style(self.theme);
+
+        // 搜索行（仅插件声明 needs_search 时）。
+        let search_row = if self.needs_search {
+            self.search_input.clone().map(|input| {
+                div()
+                    .h(px(crate::PANEL_INPUT_HEIGHT))
+                    .w_full()
+                    .flex()
+                    .items_center()
+                    .child(
+                        div()
+                            .w_full()
+                            .on_mouse_down(MouseButton::Left, cx.listener(|_, _, _, cx| {
+                                cx.stop_propagation()
+                            }))
+                            .child(
+                                Input::new(&input)
+                                    .appearance(false)
+                                    .cleanable(true)
+                                    .with_size(gpui_kit::component::Size::Large)
+                                    .w_full(),
+                            ),
+                    )
+            })
+        } else {
+            None
+        };
+
+        let error_row = self.error.clone().map(|message| {
+            div()
+                .w_full()
+                .text_color(col((220, 53, 69, 255)))
+                .child(Label::new(message))
+        });
+
+        // Surface 交互节点的事件回送（session_id 固定为本窗口会话）。
+        let session = self.session_id;
+        let surface_tx = self.surface_tx.clone();
+        let events: Arc<dyn Fn(SurfaceEventKind) + Send + Sync> = Arc::new(move |kind| {
+            let _ = surface_tx.send(UiToHost::SurfaceEvent {
+                session_id: session,
+                kind,
+            });
+        });
+        let widgets = &self.widgets;
+        let input_widget = |spec: &InputWidgetSpec| {
+            widgets.get(spec.id).map(|entity| {
+                Input::new(entity)
+                    .appearance(false)
+                    .cleanable(true)
+                    .with_size(gpui_kit::component::Size::Large)
+                    .w_full()
+                    .into_any_element()
+            })
+        };
+        let rendered = render_surface_with_inputs(&self.content, &style, events, &input_widget);
+
+        let mut panel = div()
+            .id("flick-detached-panel")
+            .w(px(DETACHED_WIDTH))
+            .h_full()
+            .flex()
+            .flex_col()
+            .overflow_hidden()
+            .rounded(px(metrics.radius_panel))
+            .bg(col(ui.panel_bg))
+            .text_color(col(ui.text))
+            .p(px(DETACHED_PAD_V))
+            // 卡片空白处拖动整个窗口。
+            .on_mouse_down(MouseButton::Left, |_ev, window, _cx| {
+                window.start_window_move()
+            });
+        if let Some(row) = search_row {
+            panel = panel.child(row);
+        }
+        if let Some(row) = error_row {
+            panel = panel.child(row);
+        }
+        panel = panel.child(
+            div()
+                .id("flick-detached-surface")
+                .w_full()
+                .flex_1()
+                .overflow_y_scroll()
+                // 内容区吞掉鼠标按下，避免在文字上拖动窗口。
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|_, _, _, cx| cx.stop_propagation()),
+                )
+                .child(rendered),
+        );
 
         div()
             .id("flick-detached-root")
@@ -159,37 +408,8 @@ impl Render for DetachedSurfaceView {
             .items_center()
             .track_focus(&self.focus)
             .key_context("FlickDetached")
-            .on_action(_cx.listener(Self::on_close))
-            .child(
-                div()
-                    .id("flick-detached-panel")
-                    .w(px(DETACHED_WIDTH))
-                    .h_full()
-                    .flex()
-                    .flex_col()
-                    .overflow_hidden()
-                    .rounded(px(metrics.radius_panel))
-                    .bg(col(ui.panel_bg))
-                    .text_color(col(ui.text))
-                    .p(px(DETACHED_PAD_V))
-                    // 卡片空白处拖动整个窗口。
-                    .on_mouse_down(MouseButton::Left, |_ev, window, _cx| {
-                        window.start_window_move()
-                    })
-                    .child(
-                        div()
-                            .id("flick-detached-surface")
-                            .w_full()
-                            .flex_1()
-                            .overflow_y_scroll()
-                            // 内容区吞掉鼠标按下，避免在文字上拖动窗口。
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                _cx.listener(|_, _, _, cx| cx.stop_propagation()),
-                            )
-                            .child(render_surface(&self.content, &style)),
-                    ),
-            )
+            .on_action(cx.listener(Self::on_close))
+            .child(panel)
     }
 }
 
@@ -220,7 +440,7 @@ mod tests {
     #[test]
     fn detached_size_clamps_to_min_and_max() {
         let style = SurfaceStyle::default();
-        let (w, h) = detached_size(&content(vec![]), &style);
+        let (w, h) = detached_size(&content(vec![]), &style, false);
         assert_eq!(w, DETACHED_WIDTH);
         assert_eq!(h, DETACHED_MIN_HEIGHT);
 
@@ -231,8 +451,29 @@ mod tests {
                 muted: false,
             })
             .collect();
-        let (_w, h2) = detached_size(&content(many), &style);
+        let (_w, h2) = detached_size(&content(many), &style, false);
         assert_eq!(h2, DETACHED_MAX_HEIGHT);
+    }
+
+    fn medium_content() -> SurfaceContent {
+        let nodes: Vec<SurfaceNode> = (0..10)
+            .map(|i| SurfaceNode::Text {
+                id: None,
+                text: format!("line {i}"),
+                muted: false,
+            })
+            .collect();
+        content(nodes)
+    }
+
+    #[test]
+    fn detached_size_adds_search_row_height() {
+        let style = SurfaceStyle::default();
+        let c = medium_content();
+        let (_, without) = detached_size(&c, &style, false);
+        let (_, with) = detached_size(&c, &style, true);
+        assert!(without > DETACHED_MIN_HEIGHT && without < DETACHED_MAX_HEIGHT);
+        assert_eq!(with, without + crate::PANEL_INPUT_HEIGHT);
     }
 
     /// 正常（小）内容 + index 0：窗口居中、`y = oy + 208`，不应被改动。
@@ -242,7 +483,7 @@ mod tests {
             id: None,
             text: "系统信息".into(),
         }];
-        let (x, y, w, h) = detached_bounds(&content(one), ThemeMode::Dark, DISPLAY_1366X768, 0);
+        let (x, y, w, h) = detached_bounds(&content(one), ThemeMode::Dark, DISPLAY_1366X768, 0, false);
         assert_eq!(w, DETACHED_WIDTH);
         assert_eq!(h, DETACHED_MIN_HEIGHT); // 小内容被夹到最小高度
         // 水平居中：(1366 - 666) / 2 = 350。
@@ -261,7 +502,7 @@ mod tests {
                 muted: false,
             })
             .collect();
-        let (x, y, w, h) = detached_bounds(&content(many), ThemeMode::Dark, DISPLAY_1366X768, 0);
+        let (x, y, w, h) = detached_bounds(&content(many), ThemeMode::Dark, DISPLAY_1366X768, 0, false);
         assert_eq!(w, DETACHED_WIDTH);
         assert!(h <= DETACHED_MAX_HEIGHT);
         assert!(h <= 768.0);
@@ -275,7 +516,7 @@ mod tests {
     fn detached_bounds_cascade_near_right_edge_clamps_x() {
         // 800 宽：居中基准 x=(800-666)/2=67，index 7 级联 +168 => 越右缘。
         let display = (0.0f32, 0.0f32, 800.0f32, 600.0f32);
-        let (x, y, w, h) = detached_bounds(&content(vec![]), ThemeMode::Dark, display, 7);
+        let (x, y, w, h) = detached_bounds(&content(vec![]), ThemeMode::Dark, display, 7, false);
         assert_eq!(w, DETACHED_WIDTH);
         assert!(x >= 0.0, "x {x} < left edge");
         assert!(
@@ -291,5 +532,25 @@ mod tests {
         assert_eq!(cascade_offset(0), (0.0, 0.0));
         assert_eq!(cascade_offset(3), (72.0, 72.0));
         assert_eq!(cascade_offset(8), (0.0, 0.0));
+    }
+
+    #[test]
+    fn detached_bounds_needs_search_adds_input_height() {
+        let without = detached_bounds(
+            &medium_content(),
+            ThemeMode::Dark,
+            DISPLAY_1366X768,
+            0,
+            false,
+        );
+        let with = detached_bounds(
+            &medium_content(),
+            ThemeMode::Dark,
+            DISPLAY_1366X768,
+            0,
+            true,
+        );
+        assert_eq!(with.3, without.3 + crate::PANEL_INPUT_HEIGHT);
+        assert_eq!(with.2, DETACHED_WIDTH);
     }
 }

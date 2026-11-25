@@ -1,8 +1,9 @@
 //! UI ↔ Host 通信协议。
 
 use crate::action::{ActionInput, ActionOutcome};
-use crate::id::{ActionId, InvocationId, QueryGeneration};
+use crate::id::{ActionId, InvocationId, QueryGeneration, SurfaceSessionId};
 use crate::route::RouteItem;
+use crate::surface::{SurfaceContent, SurfaceEventKind};
 use serde::{Deserialize, Serialize};
 
 // ─── UI 意图（来自 Portal / 外部触发器）─────────────────────────────
@@ -47,6 +48,13 @@ pub enum UiToHost {
     Cancel { invocation_id: InvocationId },
     /// 搜索面板被用户关闭。
     SearchPanelClosed,
+    /// 用户在 Surface 中产生了交互事件。
+    SurfaceEvent {
+        session_id: SurfaceSessionId,
+        kind: SurfaceEventKind,
+    },
+    /// 用户关闭了某个 Surface 会话。
+    SurfaceClosed { session_id: SurfaceSessionId },
 }
 
 // ─── Host → UI 消息 ──────────────────────────────────────────────────────
@@ -72,6 +80,16 @@ pub enum HostToUi {
     ShowSearchPanel { activation_token: Option<String> },
     /// 隐藏搜索面板。
     HideSearchPanel,
+    /// Surface 内容因交互而更新。
+    SurfaceUpdated {
+        session_id: SurfaceSessionId,
+        content: SurfaceContent,
+    },
+    /// Surface 交互处理失败（保留旧内容，显示错误）。
+    SurfaceFailed {
+        session_id: SurfaceSessionId,
+        message: String,
+    },
 }
 
 // ─── Runtime 状态 ──────────────────────────────────────────────────────────

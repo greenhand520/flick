@@ -69,7 +69,7 @@ async fn host_action_returns_open_surface() {
         deadline: Deadline::from_secs(30),
     };
     match rt.invoke(req).await {
-        ActionOutcome::OpenSurface { surface_id, content } => {
+        ActionOutcome::OpenSurface { surface_id, content, .. } => {
             assert_eq!(surface_id, "info");
             assert_eq!(content.schema_version, flick_domain::SURFACE_SCHEMA_VERSION);
             assert!(!content.body.is_empty());

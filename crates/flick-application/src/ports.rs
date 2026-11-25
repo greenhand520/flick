@@ -5,7 +5,10 @@
 //! 测试则提供伪造实现。
 
 use async_trait::async_trait;
-use flick_domain::{ActionOutcome, ActionRequest, HostToUi, InputType, InvocationId, RouteItem};
+use flick_domain::{
+    ActionOutcome, ActionRequest, HostToUi, InputType, InvocationId, RouteItem, SurfaceContent,
+    SurfaceEventKind, SurfaceSessionId,
+};
 
 /// 对 Flick Runtime 的路由与调用能力的抽象。
 ///
@@ -24,6 +27,19 @@ pub trait RuntimePort: Send + Sync {
     /// 如果找到了该调用并已发出取消信号，则返回 `true`；
     /// 如果它已完成或未知，则返回 `false`。
     async fn cancel(&self, invocation_id: InvocationId) -> bool;
+
+    /// 向一个 Surface 会话投递控件事件，返回更新后的内容。
+    ///
+    /// 错误以可展示的字符串返回（由实现把 `SurfaceError` 的 `message`
+    /// 映射过来）。
+    async fn surface_event(
+        &self,
+        session: SurfaceSessionId,
+        kind: SurfaceEventKind,
+    ) -> Result<SurfaceContent, String>;
+
+    /// 关闭一个 Surface 会话（幂等）。
+    async fn surface_closed(&self, session: SurfaceSessionId);
 }
 
 /// 协调器发出的 `HostToUi` 事件的接收器。

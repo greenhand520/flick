@@ -20,6 +20,7 @@ fn sample() -> SurfaceContent {
             SurfaceNode::List {
                 id: None,
                 items: vec![ListItem {
+                    id: None,
                     title: "内存".into(),
                     subtitle: Some("15 GiB".into()),
                     value: None,

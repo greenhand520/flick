@@ -37,6 +37,19 @@ impl RuntimePort for RuntimeAdapter {
     async fn cancel(&self, invocation_id: InvocationId) -> bool {
         self.runtime.cancel(invocation_id).await
     }
+    async fn surface_event(
+        &self,
+        session: SurfaceSessionId,
+        kind: SurfaceEventKind,
+    ) -> Result<SurfaceContent, String> {
+        self.runtime
+            .surface_event(session, kind)
+            .await
+            .map_err(|e| e.message)
+    }
+    async fn surface_closed(&self, session: SurfaceSessionId) {
+        self.runtime.surface_closed(session).await;
+    }
 }
 
 pub struct ChannelEventSink {
@@ -119,7 +132,7 @@ impl flick_ipc::server::IpcDispatcher for DaemonIpcDispatcher {
                     ActionOutcome::File(file) => {
                         IpcResult::Ok(serde_json::to_value(&file).unwrap_or(serde_json::Value::Null))
                     }
-                    ActionOutcome::OpenSurface { surface_id, content } => IpcResult::Ok(
+                    ActionOutcome::OpenSurface { surface_id, content, .. } => IpcResult::Ok(
                         serde_json::json!({ "surface_id": surface_id, "content": content }),
                     ),
                 }
@@ -351,6 +364,12 @@ pub async fn run_headless(socket_path: std::path::PathBuf) -> Result<(), String>
                         info!("UI: Invocation {invocation_id} completed");
                     }
                     Some(HostToUi::RuntimeStatus(status)) => info!("UI: Runtime status: {status:?}"),
+                    Some(HostToUi::SurfaceUpdated { session_id, .. }) => {
+                        info!("UI: Surface {session_id} updated")
+                    }
+                    Some(HostToUi::SurfaceFailed { session_id, message }) => {
+                        info!("UI: Surface {session_id} failed: {message}")
+                    }
                 }
             }
         }

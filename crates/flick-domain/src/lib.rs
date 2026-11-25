@@ -29,11 +29,12 @@ pub use action::{
 pub use caller::{Caller, CallerKind};
 pub use error::ActionError;
 pub use host::HostInfo;
-pub use id::{ActionId, InvocationId, QueryGeneration};
+pub use id::{ActionId, InvocationId, QueryGeneration, SurfaceSessionId};
 pub use input::SearchQuery;
 pub use plugin::*;
 pub use route::RouteItem;
 pub use surface::{
-    BadgeTone, ListItem, SpacerSize, SurfaceContent, SurfaceNode, SURFACE_SCHEMA_VERSION,
+    BadgeTone, ButtonTone, ListItem, SpacerSize, SurfaceContent, SurfaceEventKind, SurfaceNode,
+    SURFACE_SCHEMA_VERSION,
 };
 pub use ui::{HostToUi, RuntimeStatus, UiIntent, UiToHost};

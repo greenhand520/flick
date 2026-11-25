@@ -43,6 +43,19 @@ impl RuntimePort for TestRuntimeAdapter {
     async fn cancel(&self, invocation_id: InvocationId) -> bool {
         self.runtime.cancel(invocation_id).await
     }
+    async fn surface_event(
+        &self,
+        session: SurfaceSessionId,
+        kind: SurfaceEventKind,
+    ) -> Result<SurfaceContent, String> {
+        self.runtime
+            .surface_event(session, kind)
+            .await
+            .map_err(|e| e.message)
+    }
+    async fn surface_closed(&self, session: SurfaceSessionId) {
+        self.runtime.surface_closed(session).await;
+    }
 }
 
 struct TestEventSink {
@@ -123,7 +136,7 @@ impl IpcDispatcher for TestDispatcher {
                     ActionOutcome::File(file) => {
                         IpcResult::Ok(serde_json::to_value(&file).unwrap_or(serde_json::Value::Null))
                     }
-                    ActionOutcome::OpenSurface { surface_id, content } => IpcResult::Ok(
+                    ActionOutcome::OpenSurface { surface_id, content, .. } => IpcResult::Ok(
                         serde_json::json!({ "surface_id": surface_id, "content": content }),
                     ),
                 }

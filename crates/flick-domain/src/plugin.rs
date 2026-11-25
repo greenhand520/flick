@@ -126,6 +126,9 @@ pub struct PluginManifest {
     pub supported_os: Vec<OperatingSystem>,
     /// 支持的处理器架构；空列表表示"全部架构"。
     pub supported_architectures: Vec<Architecture>,
+    /// 该插件的 Surface 是否需要宿主搜索框（全局，默认 false）。
+    #[serde(default)]
+    pub needs_search: bool,
 }
 
 impl PluginManifest {
@@ -137,5 +140,47 @@ impl PluginManifest {
         let arch_ok = self.supported_architectures.is_empty()
             || self.supported_architectures.contains(&arch);
         os_ok && arch_ok
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample() -> PluginManifest {
+        PluginManifest {
+            id: "demo.plugin".into(),
+            name: "Demo".into(),
+            version: "1.0.0".into(),
+            kind: PluginKind::BuiltInRust,
+            keywords: vec![],
+            profile: PluginProfile::default(),
+            capabilities: vec![],
+            plugin_dependencies: vec![],
+            settings: vec![],
+            surfaces: vec![],
+            supported_os: vec![],
+            supported_architectures: vec![],
+            needs_search: true,
+        }
+    }
+
+    #[test]
+    fn needs_search_defaults_to_false_when_missing() {
+        let value = serde_json::to_value(sample()).unwrap();
+        let mut object = value.as_object().unwrap().clone();
+        object.remove("needs_search");
+        let back: PluginManifest =
+            serde_json::from_value(serde_json::Value::Object(object)).unwrap();
+        assert!(!back.needs_search);
+    }
+
+    #[test]
+    fn needs_search_round_trips() {
+        let m = sample();
+        let json = serde_json::to_string(&m).unwrap();
+        let back: PluginManifest = serde_json::from_str(&json).unwrap();
+        assert!(back.needs_search);
+        assert_eq!(m, back);
     }
 }

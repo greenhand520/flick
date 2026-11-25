@@ -40,6 +40,10 @@ pub enum PanelEvent {
         outcome: ActionOutcome,
     },
     RuntimeStatus(RuntimeStatus),
+    /// Surface 内容更新（来自宿主对 SurfaceEvent 的回应）。
+    SurfaceUpdated {
+        content: SurfaceContent,
+    },
 }
 
 /// [`PanelState`] 发出的出站命令。
@@ -109,6 +113,10 @@ pub struct PanelState {
     pub runtime_status: RuntimeStatus,
     pub activation_token: Option<String>,
     pub activation_token_applied: bool,
+    /// 当前打开的 Surface 会话（若有）。
+    surface_session: Option<SurfaceSessionId>,
+    /// Surface 是否处于「搜索模式」（输入变化只触发 SearchChanged，不清结果）。
+    surface_search: bool,
     debounce_revision: u64,
     flushed_debounce_revision: Option<u64>,
     hidden_at: Option<Instant>,
@@ -129,6 +137,8 @@ impl PanelState {
             runtime_status: RuntimeStatus::Running,
             activation_token: None,
             activation_token_applied: false,
+            surface_session: None,
+            surface_search: false,
             debounce_revision: 0,
             flushed_debounce_revision: None,
             hidden_at: None,
@@ -138,6 +148,16 @@ impl PanelState {
     /// 当前的输入防抖 revision，供 UI 任务接线和测试使用。
     pub fn debounce_revision(&self) -> u64 {
         self.debounce_revision
+    }
+
+    /// 当前打开的 Surface 会话（若有）。
+    pub fn surface_session(&self) -> Option<SurfaceSessionId> {
+        self.surface_session
+    }
+
+    /// Surface 是否处于搜索模式。
+    pub fn surface_search(&self) -> bool {
+        self.surface_search
     }
 
     /// 使用当前单调时间应用一个事件。
@@ -175,6 +195,7 @@ impl PanelState {
                 self.runtime_status = status;
                 vec![]
             }
+            PanelEvent::SurfaceUpdated { content } => self.on_surface_updated(content),
         }
     }
 
@@ -207,7 +228,16 @@ impl PanelState {
         // 失效可让任何迟到的完成操作变得无害。
         self.debounce_revision = self.debounce_revision.wrapping_add(1);
         self.flushed_debounce_revision = None;
-        vec![PanelAction::SendToHost(UiToHost::SearchPanelClosed)]
+
+        let mut actions = vec![PanelAction::SendToHost(UiToHost::SearchPanelClosed)];
+        // Surface 会话随面板隐藏而关闭；清空本地会话状态。
+        if let Some(session) = self.surface_session.take() {
+            self.surface_search = false;
+            actions.push(PanelAction::SendToHost(UiToHost::SurfaceClosed {
+                session_id: session,
+            }));
+        }
+        actions
     }
 
     fn on_input_changed(&mut self, text: String) -> Vec<PanelAction> {
@@ -216,11 +246,20 @@ impl PanelState {
         // 重复输入都不会观察到过期的模型文本。
         self.query = text;
         self.pending_query.clone_from(&self.query);
-        // QueryGeneration 用于防范异步的运行时结果；下方的本地 revision
-        // 则独立地防范 UI 防抖任务。
-        self.generation = self.generation.next();
         self.debounce_revision = self.debounce_revision.wrapping_add(1);
         self.flushed_debounce_revision = None;
+
+        // Surface 搜索模式：结果面板仍由 Surface 会话持有，
+        // 因此输入变化只更新查询并重新防抖，绝不清空结果。
+        if self.surface_search {
+            return vec![PanelAction::StartDebounce {
+                revision: self.debounce_revision,
+            }];
+        }
+
+        // QueryGeneration 用于防范异步的运行时结果；上方的本地 revision
+        // 则独立地防范 UI 防抖任务。
+        self.generation = self.generation.next();
         self.routes.clear();
         self.selection.set_total(0);
         self.last_outcome = None;
@@ -240,6 +279,19 @@ impl PanelState {
         }
 
         self.flushed_debounce_revision = Some(revision);
+
+        if self.surface_search {
+            let Some(session) = self.surface_session else {
+                return vec![];
+            };
+            return vec![PanelAction::SendToHost(UiToHost::SurfaceEvent {
+                session_id: session,
+                kind: SurfaceEventKind::SearchChanged {
+                    text: self.pending_query.clone(),
+                },
+            })];
+        }
+
         vec![PanelAction::SendToHost(UiToHost::QueryChanged {
             generation: self.generation,
             text: self.query.clone(),
@@ -247,6 +299,19 @@ impl PanelState {
     }
 
     fn on_submitted(&mut self) -> Vec<PanelAction> {
+        if self.surface_search {
+            let Some(session) = self.surface_session else {
+                return vec![];
+            };
+            return vec![PanelAction::SendToHost(UiToHost::SurfaceEvent {
+                session_id: session,
+                kind: SurfaceEventKind::Submitted {
+                    node_id: "__search__".to_string(),
+                    text: self.query.clone(),
+                },
+            })];
+        }
+
         if self.query.is_empty() || self.routes.is_empty() {
             return vec![];
         }
@@ -287,7 +352,38 @@ impl PanelState {
         }
 
         self.active_invocation = None;
+
+        // 记录/清除 Surface 会话：只有打开 Surface 才进入会话模式。
+        if let ActionOutcome::OpenSurface {
+            session_id,
+            needs_search,
+            ..
+        } = &outcome
+        {
+            self.surface_session = *session_id;
+            self.surface_search = *needs_search;
+        } else {
+            self.surface_session = None;
+            self.surface_search = false;
+        }
+
         self.last_outcome = Some(outcome);
+        vec![]
+    }
+
+    fn on_surface_updated(&mut self, content: SurfaceContent) -> Vec<PanelAction> {
+        if let Some(session) = self.surface_session {
+            if let Some(ActionOutcome::OpenSurface {
+                session_id: Some(current),
+                content: slot,
+                ..
+            }) = self.last_outcome.as_mut()
+            {
+                if *current == session {
+                    *slot = content;
+                }
+            }
+        }
         vec![]
     }
 
@@ -301,11 +397,159 @@ impl PanelState {
         self.selection.set_total(0);
         self.active_invocation = None;
         self.last_outcome = None;
+        self.surface_session = None;
+        self.surface_search = false;
     }
 }
 
 impl Default for PanelState {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_content(text: &str) -> SurfaceContent {
+        SurfaceContent {
+            schema_version: 1,
+            title: None,
+            body: vec![SurfaceNode::Text {
+                id: None,
+                text: text.to_string(),
+                muted: false,
+            }],
+        }
+    }
+
+    fn open_surface_outcome(
+        session: SurfaceSessionId,
+        needs_search: bool,
+        text: &str,
+    ) -> ActionOutcome {
+        ActionOutcome::OpenSurface {
+            surface_id: "surface".into(),
+            content: make_content(text),
+            session_id: Some(session),
+            needs_search,
+        }
+    }
+
+    fn state_in_surface_search(session: SurfaceSessionId) -> PanelState {
+        let mut st = PanelState::new();
+        st.visible = true;
+        st.active_invocation = Some(InvocationId::new());
+        st.surface_session = Some(session);
+        st.surface_search = true;
+        st.last_outcome = Some(open_surface_outcome(session, true, "old"));
+        st
+    }
+
+    #[test]
+    fn surface_input_keeps_results_and_flush_emits_search_changed() {
+        let session = SurfaceSessionId::new();
+        let mut st = state_in_surface_search(session);
+        let before_active = st.active_invocation;
+
+        let actions = st.update(PanelEvent::InputChanged("abc".into()));
+        assert!(
+            matches!(actions.as_slice(), [PanelAction::StartDebounce { .. }]),
+            "surface input should start a debounce, got {actions:?}"
+        );
+        // 关键：Surface 搜索模式下输入变化绝不清空当前结果。
+        assert!(
+            matches!(
+                st.last_outcome,
+                Some(ActionOutcome::OpenSurface { .. })
+            ),
+            "surface input must not clear last_outcome"
+        );
+        assert_eq!(st.active_invocation, before_active);
+
+        let revision = st.debounce_revision();
+        let actions = st.update(PanelEvent::DebounceFlush { revision });
+        assert_eq!(
+            actions,
+            vec![PanelAction::SendToHost(UiToHost::SurfaceEvent {
+                session_id: session,
+                kind: SurfaceEventKind::SearchChanged {
+                    text: "abc".into()
+                },
+            })]
+        );
+    }
+
+    #[test]
+    fn surface_hide_emits_surface_closed_and_clears_state() {
+        let session = SurfaceSessionId::new();
+        let mut st = state_in_surface_search(session);
+
+        let actions = st.update(PanelEvent::Hide);
+        assert!(actions.contains(&PanelAction::SendToHost(UiToHost::SurfaceClosed {
+            session_id: session,
+        })));
+        assert!(actions.contains(&PanelAction::SendToHost(UiToHost::SearchPanelClosed)));
+        assert_eq!(st.surface_session(), None);
+        assert!(!st.surface_search());
+    }
+
+    #[test]
+    fn surface_updated_replaces_open_surface_content() {
+        let session = SurfaceSessionId::new();
+        let mut st = state_in_surface_search(session);
+        let new_content = make_content("new");
+
+        let actions = st.update(PanelEvent::SurfaceUpdated {
+            content: new_content.clone(),
+        });
+        assert!(actions.is_empty());
+        match st.last_outcome.as_ref().expect("last_outcome present") {
+            ActionOutcome::OpenSurface {
+                content, session_id, ..
+            } => {
+                assert_eq!(*content, new_content);
+                assert_eq!(*session_id, Some(session));
+            }
+            other => panic!("expected OpenSurface, got {other:?}"),
+        }
+        assert_eq!(st.surface_session(), Some(session));
+    }
+
+    #[test]
+    fn surface_submitted_sends_submitted_event() {
+        let session = SurfaceSessionId::new();
+        let mut st = state_in_surface_search(session);
+        st.query = "hello".into();
+
+        let actions = st.update(PanelEvent::Submitted);
+        assert_eq!(
+            actions,
+            vec![PanelAction::SendToHost(UiToHost::SurfaceEvent {
+                session_id: session,
+                kind: SurfaceEventKind::Submitted {
+                    node_id: "__search__".into(),
+                    text: "hello".into(),
+                },
+            })]
+        );
+    }
+
+    #[test]
+    fn invocation_completed_records_surface_session_and_search() {
+        let session = SurfaceSessionId::new();
+        let mut st = PanelState::new();
+        st.visible = true;
+        let invocation_id = InvocationId::new();
+        st.active_invocation = Some(invocation_id);
+
+        let actions = st.update(PanelEvent::InvocationCompleted {
+            invocation_id,
+            outcome: open_surface_outcome(session, true, "x"),
+        });
+        assert!(actions.is_empty());
+        assert_eq!(st.surface_session(), Some(session));
+        assert!(st.surface_search());
     }
 }

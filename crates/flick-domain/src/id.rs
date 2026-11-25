@@ -27,6 +27,30 @@ impl fmt::Display for InvocationId {
     }
 }
 
+/// 单个 Surface 交互会话的唯一标识符。
+///
+/// 与 [`InvocationId`] 同风格：`Uuid` newtype，支持 `new()/Default/Display` 与 serde。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct SurfaceSessionId(Uuid);
+
+impl SurfaceSessionId {
+    pub fn new() -> Self {
+        Self(Uuid::new_v4())
+    }
+}
+
+impl Default for SurfaceSessionId {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl fmt::Display for SurfaceSessionId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
 /// 查询结果单调递增的代次。
 ///
 /// 用于确保过期的结果永远不会覆盖当前结果。
@@ -117,6 +141,16 @@ mod tests {
         let a = InvocationId::new();
         let b = InvocationId::new();
         assert_ne!(a, b);
+    }
+
+    #[test]
+    fn surface_session_ids_are_unique_and_round_trip() {
+        let a = SurfaceSessionId::new();
+        let b = SurfaceSessionId::new();
+        assert_ne!(a, b);
+        let json = serde_json::to_string(&a).unwrap();
+        let back: SurfaceSessionId = serde_json::from_str(&json).unwrap();
+        assert_eq!(a, back);
     }
 
     #[test]

@@ -1,11 +1,11 @@
 //! ActionRuntime — 编排路由、调用和生命周期。
 
 use crate::handler::ActionHandler;
-use crate::plugin::{Plugin, PluginRegistrationError};
+use crate::plugin::{Plugin, PluginRegistrationError, SurfaceError, SurfaceSession};
 use crate::registry::ActionRegistry;
 use flick_domain::{
-    ActionContext, ActionDescriptor, ActionError, ActionOutcome, ActionRequest, InputType,
-    InvocationId, RouteItem,
+    ActionContext, ActionDescriptor, ActionError, ActionInput, ActionOutcome, ActionRequest, InputType,
+    InvocationId, RouteItem, SurfaceContent, SurfaceEventKind, SurfaceSessionId,
 };
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -21,6 +21,11 @@ struct ActiveEntry {
     cancel_token: CancellationToken,
 }
 
+/// 一个活动 Surface 会话的运行时状态。
+struct SurfaceSessionState {
+    session: SurfaceSession,
+}
+
 /// Flick 运行时。
 ///
 /// 将 [`ActionRegistry`] 保存在 `Arc<RwLock<_>>` 之后，以便
@@ -32,6 +37,8 @@ pub struct ActionRuntime {
     registry: Arc<RwLock<ActionRegistry>>,
     active: Arc<tokio::sync::Mutex<HashMap<InvocationId, ActiveEntry>>>,
     host_info: std::sync::RwLock<Option<Arc<flick_domain::HostInfo>>>,
+    /// 活动 Surface 会话映射（会话 id → 状态）。
+    surface_sessions: Arc<RwLock<HashMap<SurfaceSessionId, SurfaceSessionState>>>,
 }
 
 impl ActionRuntime {
@@ -41,6 +48,7 @@ impl ActionRuntime {
             registry: Arc::new(RwLock::new(ActionRegistry::new())),
             active: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             host_info: std::sync::RwLock::new(None),
+            surface_sessions: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -83,15 +91,24 @@ impl ActionRuntime {
     /// 3. 将处理器的完成与请求截止时间和
     ///    外部取消进行竞速。
     /// 4. 完成后清理活动条目。
-    pub async fn invoke(&self, request: ActionRequest) -> ActionOutcome {
+    pub async fn invoke(&self, mut request: ActionRequest) -> ActionOutcome {
         let invocation_id = request.invocation_id;
         let deadline = request.deadline.timeout;
 
         // ── 1. 查找处理器（仅短暂持有读锁） ────────
-        let handler: Arc<dyn ActionHandler> = {
+        let (handler, accepts_no_input): (Arc<dyn ActionHandler>, bool) = {
             let reg = self.registry.read().await;
             match reg.find_by_id(&request.action_id) {
-                Some((_desc, h)) => Arc::clone(h),
+                Some((desc, h)) => {
+                    // 语义：`supported_inputs == [None]` 表示该动作不接受输入。
+                    // 搜索框里的文本只用于路由，不应作为插件输入传入；这里统一归一化为空输入。
+                    let no_input = !desc.supported_inputs.is_empty()
+                        && desc
+                            .supported_inputs
+                            .iter()
+                            .all(|kind| *kind == InputType::None);
+                    (Arc::clone(h), no_input)
+                }
                 None => {
                     return ActionOutcome::Error(ActionError::UnknownAction {
                         action_id: request.action_id.to_string(),
@@ -100,6 +117,12 @@ impl ActionRuntime {
             }
         };
         // 注册表的读锁在此处释放
+        if accepts_no_input && request.input.kind != InputType::None {
+            request.input = ActionInput {
+                kind: InputType::None,
+                text: String::new(),
+            };
+        }
 
         // ── 2. 准备取消令牌并生成任务 ───────────────────
         let token = CancellationToken::new();
@@ -148,6 +171,9 @@ impl ActionRuntime {
             }
         };
 
+        // ── 3.5 若返回 OpenSurface，则生成会话并回填 ──────────────
+        let outcome = self.backfill_open_surface(outcome, &request).await;
+
         // ── 4. 清理 ────────────────────────────────────────────
         {
             let mut active = self.active.lock().await;
@@ -155,6 +181,93 @@ impl ActionRuntime {
         }
 
         outcome
+    }
+
+    /// 若结果为 `OpenSurface` 且尚无会话，则生成会话 id、按 manifest
+    /// 回填 `needs_search`，注册会话并触发 `on_open`。
+    async fn backfill_open_surface(
+        &self,
+        outcome: ActionOutcome,
+        request: &ActionRequest,
+    ) -> ActionOutcome {
+        let (surface_id, content) = match outcome {
+            ActionOutcome::OpenSurface {
+                surface_id,
+                content,
+                session_id: None,
+                ..
+            } => (surface_id, content),
+            other => return other,
+        };
+        let session_id = SurfaceSessionId::new();
+        let (needs_search, plugin_id, handler) = {
+            let reg = self.registry.read().await;
+            let manifest = reg.plugin_for_action(&request.action_id);
+            let needs_search = manifest.map(|m| m.needs_search).unwrap_or(false);
+            let plugin_id = manifest.map(|m| m.id.clone()).unwrap_or_default();
+            let handler = reg.surface_handler_for(&plugin_id);
+            (needs_search, plugin_id, handler)
+        };
+        let session = SurfaceSession {
+            id: session_id,
+            plugin_id,
+            surface_id: surface_id.clone(),
+        };
+        if let Some(h) = &handler {
+            h.on_open(&session).await;
+        }
+        {
+            let mut sessions = self.surface_sessions.write().await;
+            sessions.insert(session_id, SurfaceSessionState { session });
+        }
+        ActionOutcome::OpenSurface {
+            surface_id,
+            content,
+            session_id: Some(session_id),
+            needs_search,
+        }
+    }
+
+    /// 向会话的插件处理器转发一次 Surface 交互事件，返回更新后的内容。
+    pub async fn surface_event(
+        &self,
+        session_id: SurfaceSessionId,
+        event: SurfaceEventKind,
+    ) -> Result<SurfaceContent, SurfaceError> {
+        let session = {
+            let sessions = self.surface_sessions.read().await;
+            sessions
+                .get(&session_id)
+                .map(|s| s.session.clone())
+                .ok_or(SurfaceError {
+                    message: "surface session not found".into(),
+                })?
+        };
+        let handler = {
+            let reg = self.registry.read().await;
+            reg.surface_handler_for(&session.plugin_id)
+        }
+        .ok_or(SurfaceError {
+            message: "surface handler not found".into(),
+        })?;
+        handler.on_event(&session, event).await
+    }
+
+    /// 关闭一个 Surface 会话（幂等）：触发 `on_close` 并移除会话。
+    pub async fn surface_closed(&self, session_id: SurfaceSessionId) {
+        let removed = {
+            let mut sessions = self.surface_sessions.write().await;
+            sessions.remove(&session_id)
+        };
+        if let Some(state) = removed {
+            let handler = {
+                let reg = self.registry.read().await;
+                reg.surface_handler_for(&state.session.plugin_id)
+            };
+            if let Some(h) = handler {
+                h.on_close(&state.session).await;
+            }
+        }
     }
 
     /// 取消正在执行中的调用。

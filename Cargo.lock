@@ -1786,6 +1786,7 @@ dependencies = [
 name = "flick-shell-gpui"
 version = "0.2.0"
 dependencies = [
+ "async-trait",
  "flick-adapters-linux",
  "flick-application",
  "flick-builtins",

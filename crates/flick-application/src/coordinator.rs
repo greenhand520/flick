@@ -84,6 +84,30 @@ impl ApplicationCoordinator {
                 // 记录面板不再可见。
                 self.panel_visible.store(false, Ordering::SeqCst);
             }
+
+            // Surface 事件转发给运行时；结果作为 SurfaceUpdated 回送 UI，
+            // 失败则回送 SurfaceFailed（保留 UI 既有内容）。
+            UiToHost::SurfaceEvent {
+                session_id,
+                kind,
+            } => match self.runtime.surface_event(session_id, kind).await {
+                Ok(content) => {
+                    self.sink.send(HostToUi::SurfaceUpdated {
+                        session_id,
+                        content,
+                    });
+                }
+                Err(message) => {
+                    self.sink.send(HostToUi::SurfaceFailed {
+                        session_id,
+                        message,
+                    });
+                }
+            },
+            // Surface 关闭：通知运行时清理会话，无需回送 UI。
+            UiToHost::SurfaceClosed { session_id } => {
+                self.runtime.surface_closed(session_id).await;
+            }
         }
     }
 

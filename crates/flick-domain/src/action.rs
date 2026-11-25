@@ -239,7 +239,31 @@ pub enum ActionOutcome {
     OpenSurface {
         surface_id: String,
         content: crate::surface::SurfaceContent,
+        /// 会话 id；由插件构造时为 None，由 `ActionRuntime::invoke` 回填。
+        #[serde(default)]
+        session_id: Option<crate::id::SurfaceSessionId>,
+        /// 该动作所属插件是否需要宿主搜索框；由运行时按 manifest 回填。
+        #[serde(default)]
+        needs_search: bool,
     },
+}
+
+impl ActionOutcome {
+    /// 构造一个 `OpenSurface` 结果。
+    ///
+    /// 插件 handler 应使用此 helper；`session_id` 保持 `None`、`needs_search`
+    /// 保持 `false`，随后由 `ActionRuntime::invoke` 回填真实值。
+    pub fn open_surface(
+        surface_id: impl Into<String>,
+        content: crate::surface::SurfaceContent,
+    ) -> Self {
+        Self::OpenSurface {
+            surface_id: surface_id.into(),
+            content,
+            session_id: None,
+            needs_search: false,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -292,5 +316,66 @@ mod tests {
         assert!(json.contains("echo"));
         let back: Matcher = serde_json::from_str(&json).unwrap();
         assert_eq!(back.as_prefix_command(), Some("echo"));
+    }
+
+    fn empty_surface() -> crate::surface::SurfaceContent {
+        crate::surface::SurfaceContent {
+            schema_version: crate::surface::SURFACE_SCHEMA_VERSION,
+            title: None,
+            body: vec![],
+        }
+    }
+
+    #[test]
+    fn open_surface_helper_sets_placeholders() {
+        match ActionOutcome::open_surface("info", empty_surface()) {
+            ActionOutcome::OpenSurface {
+                surface_id,
+                session_id,
+                needs_search,
+                ..
+            } => {
+                assert_eq!(surface_id, "info");
+                assert!(session_id.is_none());
+                assert!(!needs_search);
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    #[test]
+    fn legacy_open_surface_json_without_new_fields_decodes() {
+        // 旧版载荷：不含 session_id / needs_search。
+        let legacy = serde_json::json!({
+            "OpenSurface": {
+                "surface_id": "info",
+                "content": { "schema_version": 1, "body": [] }
+            }
+        });
+        let outcome: ActionOutcome = serde_json::from_value(legacy).unwrap();
+        match outcome {
+            ActionOutcome::OpenSurface {
+                session_id,
+                needs_search,
+                ..
+            } => {
+                assert!(session_id.is_none());
+                assert!(!needs_search);
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    #[test]
+    fn open_surface_with_session_round_trips() {
+        let outcome = ActionOutcome::OpenSurface {
+            surface_id: "info".into(),
+            content: empty_surface(),
+            session_id: Some(crate::id::SurfaceSessionId::new()),
+            needs_search: true,
+        };
+        let json = serde_json::to_string(&outcome).unwrap();
+        let back: ActionOutcome = serde_json::from_str(&json).unwrap();
+        assert_eq!(outcome, back);
     }
 }

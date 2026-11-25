@@ -55,6 +55,19 @@ impl RuntimePort for TestRuntimeAdapter {
     async fn cancel(&self, invocation_id: InvocationId) -> bool {
         self.runtime.cancel(invocation_id).await
     }
+    async fn surface_event(
+        &self,
+        session: SurfaceSessionId,
+        kind: SurfaceEventKind,
+    ) -> Result<SurfaceContent, String> {
+        self.runtime
+            .surface_event(session, kind)
+            .await
+            .map_err(|e| e.message)
+    }
+    async fn surface_closed(&self, session: SurfaceSessionId) {
+        self.runtime.surface_closed(session).await;
+    }
 }
 
 struct TestEventSink {

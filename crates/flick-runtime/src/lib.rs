@@ -25,7 +25,7 @@ pub use handler::ActionHandler;
 pub use invocation::InvocationHandle;
 pub use plugin::{
     ActionSpec, Plugin, PluginLifecycle, PluginRegistrationError, PluginRuntimeError,
-    PluginUiFactory,
+    PluginUiFactory, SurfaceError, SurfaceHandler, SurfaceSession,
 };
 pub use registry::ActionRegistry;
 pub use runtime::ActionRuntime;

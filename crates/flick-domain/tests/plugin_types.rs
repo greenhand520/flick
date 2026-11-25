@@ -37,6 +37,7 @@ fn plugin_manifest_roundtrips_via_json() {
         }],
         supported_os: vec![OperatingSystem::Linux, OperatingSystem::Windows],
         supported_architectures: vec![Architecture::X86_64],
+        needs_search: false,
     };
     let json = serde_json::to_string(&manifest).unwrap();
     let back: PluginManifest = serde_json::from_str(&json).unwrap();
@@ -84,6 +85,8 @@ fn action_outcome_new_variants_roundtrip() {
                 title: None,
                 body: vec![],
             },
+            session_id: None,
+            needs_search: false,
         },
     ];
     for c in cases {
@@ -108,6 +111,7 @@ fn manifest_supports_platform_treats_empty_as_wildcard() {
         surfaces: vec![],
         supported_os: vec![OperatingSystem::Linux],
         supported_architectures: vec![],
+        needs_search: false,
     };
     // 架构为空 = 全部架构。
     assert!(m.supports_platform(OperatingSystem::Linux, Architecture::X86_64));

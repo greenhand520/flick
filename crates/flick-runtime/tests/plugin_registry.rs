@@ -39,6 +39,7 @@ fn manifest(id: &str) -> PluginManifest {
         kind: PluginKind::BuiltInRust, keywords: vec![], profile: PluginProfile::default(),
         capabilities: vec![], plugin_dependencies: vec![], settings: vec![], surfaces: vec![],
         supported_os: vec![], supported_architectures: vec![],
+        needs_search: false,
     }
 }
 

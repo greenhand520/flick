@@ -24,6 +24,12 @@ struct FakeRuntime {
     invocations: Arc<Mutex<Vec<ActionRequest>>>,
     /// 记录每一次 `cancel` 调用以供断言。
     cancellations: Arc<Mutex<Vec<InvocationId>>>,
+    /// `surface_event` 的返回值。
+    surface_event_result: Mutex<Result<SurfaceContent, String>>,
+    /// 记录每一次 `surface_event` 调用。
+    surface_events: Arc<Mutex<Vec<(SurfaceSessionId, SurfaceEventKind)>>>,
+    /// 记录每一次 `surface_closed` 调用。
+    surface_closed: Arc<Mutex<Vec<SurfaceSessionId>>>,
 }
 
 impl FakeRuntime {
@@ -35,6 +41,13 @@ impl FakeRuntime {
             }),
             invocations: Arc::new(Mutex::new(Vec::new())),
             cancellations: Arc::new(Mutex::new(Vec::new())),
+            surface_event_result: Mutex::new(Ok(SurfaceContent {
+                schema_version: 1,
+                title: None,
+                body: Vec::new(),
+            })),
+            surface_events: Arc::new(Mutex::new(Vec::new())),
+            surface_closed: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -80,6 +93,22 @@ impl RuntimePort for FakeRuntime {
     async fn cancel(&self, invocation_id: InvocationId) -> bool {
         self.cancellations.lock().unwrap().push(invocation_id);
         true
+    }
+
+    async fn surface_event(
+        &self,
+        session: SurfaceSessionId,
+        kind: SurfaceEventKind,
+    ) -> Result<SurfaceContent, String> {
+        self.surface_events
+            .lock()
+            .unwrap()
+            .push((session, kind));
+        self.surface_event_result.lock().unwrap().clone()
+    }
+
+    async fn surface_closed(&self, session: SurfaceSessionId) {
+        self.surface_closed.lock().unwrap().push(session);
     }
 }
 
@@ -296,4 +325,97 @@ fn toggle_emits_show_then_hide_without_stopping_runtime() {
 
     // 运行时未被触碰。
     assert!(invocations.lock().unwrap().is_empty());
+}
+
+// ─── Surface 转发测试 ───────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn surface_event_forwards_to_runtime_and_emits_updated() {
+    let runtime = Arc::new(FakeRuntime::new());
+    let session = SurfaceSessionId::new();
+    let content = SurfaceContent {
+        schema_version: 1,
+        title: Some("标题".into()),
+        body: Vec::new(),
+    };
+    *runtime.surface_event_result.lock().unwrap() = Ok(content.clone());
+    let recorded = runtime.surface_events.clone();
+    let (sink, events) = FakeSink::new();
+    let coord = ApplicationCoordinator::new(runtime, Arc::new(sink));
+
+    coord
+        .handle_ui(UiToHost::SurfaceEvent {
+            session_id: session,
+            kind: SurfaceEventKind::Click {
+                node_id: "btn".into(),
+            },
+        })
+        .await;
+
+    {
+        let rec = recorded.lock().unwrap();
+        assert_eq!(rec.len(), 1);
+        assert_eq!(rec[0].0, session);
+        assert!(matches!(&rec[0].1, SurfaceEventKind::Click { node_id } if node_id == "btn"));
+    }
+
+    let emitted = events.lock().unwrap();
+    assert_eq!(emitted.len(), 1);
+    match &emitted[0] {
+        HostToUi::SurfaceUpdated {
+            session_id,
+            content: got,
+        } => {
+            assert_eq!(*session_id, session);
+            assert_eq!(*got, content);
+        }
+        other => panic!("expected SurfaceUpdated, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn surface_event_error_emits_surface_failed() {
+    let runtime = Arc::new(FakeRuntime::new());
+    let session = SurfaceSessionId::new();
+    *runtime.surface_event_result.lock().unwrap() = Err("boom".into());
+    let (sink, events) = FakeSink::new();
+    let coord = ApplicationCoordinator::new(runtime, Arc::new(sink));
+
+    coord
+        .handle_ui(UiToHost::SurfaceEvent {
+            session_id: session,
+            kind: SurfaceEventKind::SearchChanged { text: "x".into() },
+        })
+        .await;
+
+    let emitted = events.lock().unwrap();
+    assert_eq!(emitted.len(), 1);
+    match &emitted[0] {
+        HostToUi::SurfaceFailed {
+            session_id,
+            message,
+        } => {
+            assert_eq!(*session_id, session);
+            assert_eq!(message, "boom");
+        }
+        other => panic!("expected SurfaceFailed, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn surface_closed_forwards_to_runtime_without_emitting() {
+    let runtime = Arc::new(FakeRuntime::new());
+    let session = SurfaceSessionId::new();
+    let closed = runtime.surface_closed.clone();
+    let (sink, events) = FakeSink::new();
+    let coord = ApplicationCoordinator::new(runtime, Arc::new(sink));
+
+    coord
+        .handle_ui(UiToHost::SurfaceClosed {
+            session_id: session,
+        })
+        .await;
+
+    assert_eq!(*closed.lock().unwrap(), vec![session]);
+    assert!(events.lock().unwrap().is_empty());
 }

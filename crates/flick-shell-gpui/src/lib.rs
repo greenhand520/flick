@@ -11,7 +11,8 @@ pub use flick_application::presenter::{PanelAction, PanelEvent, PanelState, Sele
 pub use theme::{Metrics, ThemeMode, UiTheme};
 pub use view::AppView;
 
-use flick_domain::{HostToUi, SurfaceContent, UiToHost};
+use crate::app::DetachPayload;
+use flick_domain::{HostToUi, SurfaceSessionId, UiToHost};
 use gpui_kit::*;
 use tokio::sync::mpsc;
 
@@ -179,7 +180,7 @@ fn open_panel_window(
     app: &mut App,
     host_tx: mpsc::UnboundedSender<UiToHost>,
     hide_tx: mpsc::UnboundedSender<()>,
-    detach_tx: mpsc::UnboundedSender<(SurfaceContent, ThemeMode)>,
+    detach_tx: mpsc::UnboundedSender<(DetachPayload, ThemeMode)>,
     theme_tx: mpsc::UnboundedSender<ThemeMode>,
     initial: ThemeMode,
 ) -> Result<AnyWindowHandle, String> {
@@ -220,14 +221,20 @@ fn open_panel_window(
     Ok(handle.into())
 }
 
-/// 打开一个独立 Surface 窗口（快照渲染）。
+/// 打开一个独立 Surface 窗口（快照渲染 + 会话交互）。
 fn open_detached_window(
     app: &mut App,
-    content: SurfaceContent,
+    payload: DetachPayload,
     theme: ThemeMode,
     close_tx: mpsc::UnboundedSender<AnyWindowHandle>,
+    host_tx: mpsc::UnboundedSender<UiToHost>,
     index: usize,
 ) -> Result<AnyWindowHandle, String> {
+    let DetachPayload {
+        session_id,
+        content,
+        needs_search,
+    } = payload;
     // 位置与尺寸统一由纯函数 `detached_bounds` 计算：基准居中 + 级联，并夹进显示器
     // （越界时回落到规范位置），避免高窗口底边/级联把窗推到屏幕外。
     let (x, y, w, h) = match app.primary_display() {
@@ -243,12 +250,13 @@ fn open_detached_window(
                     f32::from(db.size.height),
                 ),
                 index,
+                needs_search,
             )
         }
         None => {
             // 无显示器信息：退化为默认位置 + 内容尺寸（不做 clamp）。
             let style = detached::surface_style(theme);
-            let (w, h) = detached::detached_size(&content, &style);
+            let (w, h) = detached::detached_size(&content, &style, needs_search);
             (0.0, PANEL_TOP_MARGIN + PANEL_INPUT_HEIGHT + 24.0, w, h)
         }
     };
@@ -269,7 +277,18 @@ fn open_detached_window(
     let handle = app
         .open_window(options, move |window, cx| {
             window.set_window_title(&title);
-            cx.new(|cx| detached::DetachedSurfaceView::new(content, theme, close_tx, window, cx))
+            cx.new(|cx| {
+                detached::DetachedSurfaceView::new(
+                    content,
+                    session_id,
+                    needs_search,
+                    theme,
+                    close_tx,
+                    host_tx,
+                    window,
+                    cx,
+                )
+            })
         })
         .map_err(|err| err.to_string())?;
     Ok(handle.into())
@@ -323,7 +342,7 @@ pub fn run_with_theme(
             // 视图失焦自发隐藏时，通过该通道请求应用级泵销毁窗口（在窗口更新帧之外执行）。
             let (hide_tx, mut hide_rx) = mpsc::unbounded_channel::<()>();
             let hide_tx_open = hide_tx.clone();
-            let (detach_tx, mut detach_rx) = mpsc::unbounded_channel::<(SurfaceContent, ThemeMode)>();
+            let (detach_tx, mut detach_rx) = mpsc::unbounded_channel::<(DetachPayload, ThemeMode)>();
             let (close_tx, mut close_rx) = mpsc::unbounded_channel::<AnyWindowHandle>();
             let detach_tx_open = detach_tx.clone();
             let close_tx_open = close_tx.clone();
@@ -338,7 +357,7 @@ pub fn run_with_theme(
                 // 当前面板窗口句柄（窗口被销毁后会失效，用前需校验）。
                 let mut handle: Option<AnyWindowHandle> = None;
 
-                let mut detached: Vec<AnyWindowHandle> = Vec::new();
+                let mut detached: Vec<(SurfaceSessionId, AnyWindowHandle)> = Vec::new();
                 let mut detach_seq: usize = 0;
                 // 保持发送端存活，避免通道关闭后 select 分支忙循环。
                 let _detach_tx_guard = detach_tx_open.clone();
@@ -351,7 +370,7 @@ pub fn run_with_theme(
                             let Some(event) = maybe else { break; };
                             match event {
                                 HostToUi::Shutdown => {
-                                    for h in detached.drain(..) {
+                                    for (_, h) in detached.drain(..) {
                                         let _ = cx.update(|app| {
                                             let _ = h.update(app, |_, window, _| window.remove_window());
                                         });
@@ -406,6 +425,83 @@ pub fn run_with_theme(
                                         });
                                     }
                                 }
+                                HostToUi::SurfaceUpdated { session_id, content } => {
+                                    // 面板未持有该会话时，把更新路由到匹配的独立窗口。
+                                    let mut routed = false;
+                                    for (sid, h) in detached.iter() {
+                                        if *sid == session_id {
+                                            routed = true;
+                                            let h = *h;
+                                            let c = content.clone();
+                                            let _ = cx.update(|app| {
+                                                let _ = h.update(app, |anyview, window, app2| {
+                                                    if let Ok(view) = anyview
+                                                        .downcast::<detached::DetachedSurfaceView>(
+                                                    ) {
+                                                        view.update(app2, |v, cx2| {
+                                                            v.set_content(c, window, cx2)
+                                                        });
+                                                    }
+                                                });
+                                            });
+                                        }
+                                    }
+                                    if !routed {
+                                        if let Some(h) = handle {
+                                            let ev = HostToUi::SurfaceUpdated {
+                                                session_id,
+                                                content,
+                                            };
+                                            let _ = cx.update(|app| {
+                                                let _ = h.update(app, |anyview, window, app2| {
+                                                    if let Ok(view) = anyview.downcast::<AppView>() {
+                                                        view.update(app2, |v, cx2| {
+                                                            v.on_host(ev, window, cx2)
+                                                        });
+                                                    }
+                                                });
+                                            });
+                                        }
+                                    }
+                                }
+                                HostToUi::SurfaceFailed { session_id, message } => {
+                                    let mut routed = false;
+                                    for (sid, h) in detached.iter() {
+                                        if *sid == session_id {
+                                            routed = true;
+                                            let h = *h;
+                                            let m = message.clone();
+                                            let _ = cx.update(|app| {
+                                                let _ = h.update(app, |anyview, _window, app2| {
+                                                    if let Ok(view) = anyview
+                                                        .downcast::<detached::DetachedSurfaceView>(
+                                                    ) {
+                                                        view.update(app2, |v, cx2| {
+                                                            v.set_error(m, cx2)
+                                                        });
+                                                    }
+                                                });
+                                            });
+                                        }
+                                    }
+                                    if !routed {
+                                        if let Some(h) = handle {
+                                            let ev = HostToUi::SurfaceFailed {
+                                                session_id,
+                                                message,
+                                            };
+                                            let _ = cx.update(|app| {
+                                                let _ = h.update(app, |anyview, window, app2| {
+                                                    if let Ok(view) = anyview.downcast::<AppView>() {
+                                                        view.update(app2, |v, cx2| {
+                                                            v.on_host(ev, window, cx2)
+                                                        });
+                                                    }
+                                                });
+                                            });
+                                        }
+                                    }
+                                }
                                 other => {
                                     if let Some(h) = handle {
                                         cx.update(|app| {
@@ -422,13 +518,21 @@ pub fn run_with_theme(
                             }
                         }
                         maybe = detach_rx.recv() => {
-                            if let Some((content, theme)) = maybe {
+                            if let Some((payload, theme)) = maybe {
                                 current_theme = theme;
+                                let session_id = payload.session_id;
                                 match cx.update(|app| {
-                                    open_detached_window(app, content, theme, close_tx.clone(), detach_seq)
+                                    open_detached_window(
+                                        app,
+                                        payload,
+                                        theme,
+                                        close_tx.clone(),
+                                        host_tx_open.clone(),
+                                        detach_seq,
+                                    )
                                 }) {
                                     Ok(h) => {
-                                        detached.push(h);
+                                        detached.push((session_id, h));
                                         detach_seq += 1;
                                     }
                                     Err(err) => {
@@ -439,7 +543,7 @@ pub fn run_with_theme(
                         }
                         maybe = close_rx.recv() => {
                             if let Some(handle) = maybe {
-                                detached.retain(|h| *h != handle);
+                                detached.retain(|(_, h)| *h != handle);
                                 let _ = cx.update(|app| {
                                     let _ = handle.update(app, |_, window, _| window.remove_window());
                                 });
@@ -460,7 +564,7 @@ pub fn run_with_theme(
                                 // 广播到所有独立窗口；顺带剪除已失效句柄（例如被 WM 以
                                 // Alt+F4 销毁的窗口），避免 `detached` 永久累积死句柄。
                                 let mut live = Vec::with_capacity(detached.len());
-                                for h in detached.drain(..) {
+                                for (sid, h) in detached.drain(..) {
                                     let ok = cx.update(|app| {
                                         h.update(app, |anyview, _, app2| {
                                             if let Ok(view) =
@@ -472,7 +576,7 @@ pub fn run_with_theme(
                                         .is_ok()
                                     });
                                     if ok {
-                                        live.push(h);
+                                        live.push((sid, h));
                                     }
                                 }
                                 detached = live;
