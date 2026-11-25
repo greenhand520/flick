@@ -131,7 +131,7 @@ fn run_graphical(socket_path: PathBuf) -> Result<(), String> {
     let socket_path_for_cleanup = socket_path.clone();
 
     // 后台线程：所有由 Tokio 拥有的服务（IPC、Portal、协调器，
-    // 以及工作线程）。Iced 事件循环保留在进程主线程上。
+    // 以及工作线程）。UI 事件循环保留在进程主线程上。
     let bg_thread = std::thread::spawn(move || {
         let result = catch_unwind(AssertUnwindSafe(|| {
             let rt = tokio::runtime::Runtime::new().expect("failed to create bg runtime");
