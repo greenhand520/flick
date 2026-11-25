@@ -20,6 +20,71 @@ const PANEL_INPUT_HEIGHT: f32 = 64.0;
 /// 面板距主显示器顶部的偏移。
 const PANEL_TOP_MARGIN: f32 = 120.0;
 
+/// 解析一个 fontconfig 族的首选名称（`fc-match` 输出的第一个族名）。
+fn fc_family(query: &str) -> Option<String> {
+    let output = std::process::Command::new("fc-match")
+        .args(["-f", "%{family}", query])
+        .output()
+        .ok()?;
+    let text = String::from_utf8(output.stdout).ok()?;
+    text.split(',')
+        .next()
+        .map(|name| name.trim().to_string())
+        .filter(|name| !name.is_empty())
+}
+
+/// 该族是否**精确安装**（`fc-match` 未回退到别的族名）。
+fn font_installed(family: &str) -> bool {
+    fc_family(family)
+        .map(|resolved| resolved.eq_ignore_ascii_case(family))
+        .unwrap_or(false)
+}
+
+fn resolve_font(candidates: &[&str], generic: &str) -> String {
+    candidates
+        .iter()
+        .find(|family| font_installed(family))
+        .map(|family| (*family).to_string())
+        .or_else(|| fc_family(generic))
+        .unwrap_or_else(|| generic.to_string())
+}
+
+/// UI 无衬线字体族。gpui-kit 默认的 `.SystemUIFont` 是 macOS 别名，Linux 上不存在，
+/// 会触发 `gpui::text_system: failed to load font ...: no font found` 告警；这里探测
+/// 一个真实安装的族（优先含 CJK 的 Noto Sans CJK，避免中文缺字）。
+pub fn ui_font_family() -> &'static str {
+    static FONT: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    FONT.get_or_init(|| {
+        resolve_font(
+            &[
+                "Noto Sans CJK SC",
+                "Noto Sans",
+                "Adwaita Sans",
+                "DejaVu Sans",
+                "Liberation Sans",
+            ],
+            "sans-serif",
+        )
+    })
+}
+
+/// UI 等宽字体族（同样避免 `.SystemUIFont` 之类不存在的别名）。
+pub fn ui_mono_font_family() -> &'static str {
+    static FONT: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    FONT.get_or_init(|| {
+        resolve_font(
+            &[
+                "Noto Sans Mono CJK SC",
+                "Noto Sans Mono",
+                "Adwaita Mono",
+                "DejaVu Sans Mono",
+                "Liberation Mono",
+            ],
+            "monospace",
+        )
+    })
+}
+
 /// 主题持久化配置路径：`$XDG_CONFIG_HOME/flick/shell-gpui.toml`
 /// （未设置时回退 `$HOME/.config/flick/shell-gpui.toml`）。
 pub(crate) fn theme_config_path() -> std::path::PathBuf {
@@ -182,6 +247,9 @@ pub fn run_with_theme(
             gpui_kit::component::Theme::update(cx, |theme| {
                 theme.window_radius = px(26.0);
                 theme.colors.window_border.a = 0.0;
+                // 用真实安装的字体族替换 gpui-kit 默认的 `.SystemUIFont`（Linux 上不存在）。
+                theme.font_family = ui_font_family().into();
+                theme.mono_font_family = ui_mono_font_family().into();
             });
             cx.bind_keys([
                 KeyBinding::new("escape", view::HidePanel, Some("FlickPanel")),

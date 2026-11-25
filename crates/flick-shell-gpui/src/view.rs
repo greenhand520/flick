@@ -211,6 +211,9 @@ impl AppView {
         gpui_kit::component::Theme::update(cx, |theme| {
             theme.window_radius = px(26.0);
             theme.colors.window_border.a = 0.0;
+            // Theme::change 后同样恢复真实字体族（避免回退到不存在的 `.SystemUIFont`）。
+            theme.font_family = crate::ui_font_family().into();
+            theme.mono_font_family = crate::ui_mono_font_family().into();
         });
         persist_theme(self.state.theme);
     }

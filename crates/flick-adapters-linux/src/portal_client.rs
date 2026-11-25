@@ -106,6 +106,12 @@ pub struct AshpdPortalClient {
     event_rx: StdMutex<Option<mpsc::UnboundedReceiver<PortalEvent>>>,
     /// 进程级只做一次 host-app 注册（写出 `.desktop` 并 `Register`）。
     app_id_registered: AtomicBool,
+    /// 供 portal 注册与会话共享的**专用** D-Bus 连接。
+    ///
+    /// 不复用 ashpd 的进程级全局连接：gpui 等组件可能先经 ashpd 触碰全局连接，
+    /// 使其被 portal 以「空 app id」关联，从而让 `CreateSession` 报
+    /// "An app id is required"。专用连接可确保「注册」与「CreateSession」一致。
+    connection: StdMutex<Option<zbus::Connection>>,
 }
 
 struct AshpdPortalState {
@@ -159,16 +165,37 @@ impl AshpdPortalClient {
             event_tx,
             event_rx: StdMutex::new(Some(event_rx)),
             app_id_registered: AtomicBool::new(false),
+            connection: StdMutex::new(None),
         }
     }
 
-    /// 首次使用时注册 host-app 身份。GNOME 下若缺少这一步，`CreateSession`
-    /// 会直接以 "An app id is required" 失败。
-    async fn ensure_app_id_registered(&self) {
+    /// 取得（必要时创建）本客户端专用的 session-bus 连接。
+    async fn connection(&self) -> Result<zbus::Connection, ShortcutError> {
+        if let Some(existing) = self
+            .connection
+            .lock()
+            .expect("portal connection slot poisoned")
+            .clone()
+        {
+            return Ok(existing);
+        }
+        let connection =
+            zbus::Connection::session()
+                .await
+                .map_err(|error| ShortcutError::Unavailable {
+                    reason: format!("Failed to connect to the session bus:{error}"),
+                })?;
+        let mut slot = self.connection.lock().expect("portal connection slot poisoned");
+        Ok(slot.get_or_insert(connection).clone())
+    }
+
+    /// 首次使用时在专用连接上注册 host-app 身份。GNOME 下若缺少这一步，
+    /// `CreateSession` 会直接以 "An app id is required" 失败。
+    async fn ensure_app_id_registered(&self, connection: zbus::Connection) {
         if self.app_id_registered.load(Ordering::SeqCst) {
             return;
         }
-        match crate::portal_identity::register_portal_app_id().await {
+        match crate::portal_identity::register_portal_app_id_with_connection(connection).await {
             Ok(()) => {
                 self.app_id_registered.store(true, Ordering::SeqCst);
                 tracing::info!("portal host-app 身份已注册");
@@ -361,9 +388,10 @@ impl PortalClient for AshpdPortalClient {
     async fn open_session_and_list(&self) -> Result<PortalSession, ShortcutError> {
         let _operation = self.operation_lock.lock().await;
         self.close_registered_sessions().await;
-        self.ensure_app_id_registered().await;
+        let connection = self.connection().await?;
+        self.ensure_app_id_registered(connection.clone()).await;
 
-        let portal = GlobalShortcuts::new()
+        let portal = GlobalShortcuts::with_connection(connection)
             .await
             .map_err(|error| unavailable_error("GlobalShortcuts", error))?;
         let session = Arc::new(
@@ -660,26 +688,28 @@ fn session_handle(session: &Session<GlobalShortcuts>) -> Result<String, Shortcut
         })
 }
 
-fn unavailable_error(operation: &str, _error: ashpd::Error) -> ShortcutError {
+fn unavailable_error(operation: &str, error: ashpd::Error) -> ShortcutError {
     debug!(
         operation,
+        %error,
         error_category = "unavailable",
         "Portal client operation unavailable"
     );
     ShortcutError::Unavailable {
-        reason: format!("Portal GlobalShortcuts is unavailable during {operation}"),
+        reason: format!("Portal GlobalShortcuts is unavailable during {operation}: {error}"),
     }
 }
 
 fn session_error<T>(operation: &str, result: Result<T, ashpd::Error>) -> Result<T, ShortcutError> {
-    result.map_err(|_error| {
+    result.map_err(|error| {
         debug!(
             operation,
+            %error,
             error_category = "session",
             "Portal session operation failed"
         );
         ShortcutError::SessionError {
-            reason: format!("Portal {operation} failed"),
+            reason: format!("Portal {operation} failed: {error}"),
         }
     })
 }

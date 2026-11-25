@@ -88,6 +88,26 @@ fn run_graphical(socket_path: PathBuf) -> Result<(), String> {
     use tokio::signal::unix::{SignalKind, signal};
     use tokio::sync::mpsc;
 
+    /// 启动时自动绑定 show-search（会弹一次系统授权；可用 FLICK_DISABLE_AUTO_BIND=1 关闭）。
+    fn spawn_startup_auto_bind(portal: Arc<PortalShortcutAdapter>) {
+        if std::env::var_os("FLICK_DISABLE_AUTO_BIND").is_some() {
+            return;
+        }
+        tokio::spawn(async move {
+            let trigger = flick_adapters_linux::session::show_search_preferred_trigger();
+            match portal.configure_search_shortcut(trigger).await {
+                Ok(binding) => tracing::info!(
+                    ?binding,
+                    "Portal show-search shortcut bound at startup"
+                ),
+                Err(error) => tracing::warn!(
+                    ?error,
+                    "Portal startup binding failed; run `flick shortcuts configure` to bind manually"
+                ),
+            }
+        });
+    }
+
     if !is_wayland_session() {
         let diag = flick_adapters_linux::diagnostics::probe_session();
         return Err(format!(
@@ -157,23 +177,7 @@ fn run_graphical(socket_path: PathBuf) -> Result<(), String> {
                         // BindShortcuts，会弹一次系统授权对话框。放到后台任务里
                         // 执行，避免阻塞 IPC/UI 启动。设置 FLICK_DISABLE_AUTO_BIND=1
                         // 可关闭自动绑定（改用 `flick shortcuts configure`）。
-                        if std::env::var_os("FLICK_DISABLE_AUTO_BIND").is_none() {
-                            let bind_portal = Arc::clone(&portal);
-                            tokio::spawn(async move {
-                                let trigger =
-                                    flick_adapters_linux::session::show_search_preferred_trigger();
-                                match bind_portal.configure_search_shortcut(trigger).await {
-                                    Ok(binding) => tracing::info!(
-                                        ?binding,
-                                        "Portal show-search shortcut bound at startup"
-                                    ),
-                                    Err(error) => tracing::warn!(
-                                        ?error,
-                                        "Portal startup binding failed; run `flick shortcuts configure` to bind manually"
-                                    ),
-                                }
-                            });
-                        }
+                        spawn_startup_auto_bind(Arc::clone(&portal));
                     }
                     Err(error) => {
                         let snapshot = portal.diagnostics().await;
@@ -182,6 +186,36 @@ fn run_graphical(socket_path: PathBuf) -> Result<(), String> {
                             ?snapshot,
                             "Portal init failed; IPC remains available"
                         );
+                        // 启动竞态自愈：登录时 xdg-desktop-portal / GNOME 后端可能
+                        // 尚未就绪，首轮 CreateSession 会以 unavailable 失败。
+                        // 后台有限次重试，成功后自动绑定（FLICK_DISABLE_PORTAL_RETRY=1 可关闭）。
+                        if std::env::var_os("FLICK_DISABLE_PORTAL_RETRY").is_none() {
+                            let retry_portal = Arc::clone(&portal);
+                            tokio::spawn(async move {
+                                for attempt in 1..=10u32 {
+                                    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                                    match retry_portal.reconnect().await {
+                                        Ok(snapshot) => {
+                                            tracing::info!(
+                                                ?snapshot,
+                                                attempt,
+                                                "Portal reconnected after startup race"
+                                            );
+                                            spawn_startup_auto_bind(retry_portal);
+                                            return;
+                                        }
+                                        Err(retry_error) => tracing::debug!(
+                                            ?retry_error,
+                                            attempt,
+                                            "Portal startup retry failed"
+                                        ),
+                                    }
+                                }
+                                tracing::warn!(
+                                    "Portal startup retries exhausted; run `flick shortcuts reconnect` to retry"
+                                );
+                            });
+                        }
                     }
                 }
 

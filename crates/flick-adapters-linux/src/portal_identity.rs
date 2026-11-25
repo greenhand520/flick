@@ -21,15 +21,13 @@ use ashpd::AppID;
 
 use crate::session::ShortcutError;
 
-/// 默认 app id；必须与写出的 `<app_id>.desktop` 文件名一致。
-pub const DEFAULT_APP_ID: &str = "io.github.flick.Flick";
+/// 固定的 app id；必须与写出的 `<app_id>.desktop` 文件名一致。
+/// 直接使用代码常量（与 `flick_domain::APP_ID` 同源），不读取环境变量。
+pub const DEFAULT_APP_ID: &str = flick_domain::APP_ID;
 
-/// 解析 app id：优先 `FLICK_APP_ID` 环境变量，否则使用 [`DEFAULT_APP_ID`]。
+/// 返回固定的 app id（直接使用代码中的 [`DEFAULT_APP_ID`]，不读取环境变量）。
 pub fn resolve_app_id() -> String {
-    env::var("FLICK_APP_ID")
-        .ok()
-        .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| DEFAULT_APP_ID.to_owned())
+    DEFAULT_APP_ID.to_owned()
 }
 
 fn data_home() -> PathBuf {
@@ -106,31 +104,84 @@ pub fn ensure_desktop_entry(app_id: &str) -> std::io::Result<PathBuf> {
     Ok(path)
 }
 
-/// 确保 `.desktop` 存在并完成 `register_host_app`。
-///
-/// 失败时返回 [`ShortcutError::Internal`]；调用方通常记录告警并继续（后续的
-/// `CreateSession` 会给出更具操作性的 portal 错误）。
-pub async fn register_portal_app_id() -> Result<(), ShortcutError> {
-    let app_id = resolve_app_id();
+/// 写出图标与 `.desktop`，返回解析后的 app id 字符串。
+fn prepare_identity_files() -> Result<String, ShortcutError> {
+    let app_id_str = resolve_app_id();
 
-    match ensure_icons(&app_id) {
+    match ensure_icons(&app_id_str) {
         Ok(paths) => tracing::info!(count = paths.len(), "已安装 Flick 图标到 hicolor 主题"),
         Err(error) => tracing::warn!(%error, "安装 Flick 图标失败，将使用系统默认图标"),
     }
 
-    if let Err(error) = ensure_desktop_entry(&app_id) {
-        tracing::warn!(%error, app_id, "无法写入 portal app-id 的 .desktop 入口");
+    if let Err(error) = ensure_desktop_entry(&app_id_str) {
+        tracing::warn!(%error, app_id = %app_id_str, "无法写入 portal app-id 的 .desktop 入口");
     }
 
-    let app_id = AppID::from_str(&app_id).map_err(|error| ShortcutError::Internal {
-        message: format!("无效的 portal app id: {error}"),
-    })?;
+    Ok(app_id_str)
+}
 
-    ashpd::register_host_app(app_id)
-        .await
-        .map_err(|error| ShortcutError::Internal {
+fn parse_app_id(app_id_str: &str) -> Result<AppID, ShortcutError> {
+    AppID::from_str(app_id_str).map_err(|error| ShortcutError::Internal {
+        message: format!("无效的 portal app id: {error}"),
+    })
+}
+
+/// 把注册结果规范化：`already associated` 视为成功。
+fn map_register_result(
+    app_id_str: String,
+    result: Result<(), ashpd::Error>,
+) -> Result<(), ShortcutError> {
+    match result {
+        Ok(()) => Ok(()),
+        // 该 D-Bus 连接此前已经注册过 app id（例如启动竞态下的重试、或同一连接的
+        // 重复初始化）。xdg-desktop-portal 对此返回 "Connection already associated
+        // with an application ID"，但这等价于「app id 已就绪」，属于良性情况，
+        // 不应视为失败。
+        Err(error) if is_already_associated(&error) => {
+            tracing::debug!(
+                app_id = %app_id_str,
+                "portal 主机应用连接已关联 app id，跳过重复注册"
+            );
+            Ok(())
+        }
+        Err(error) => Err(ShortcutError::Internal {
             message: format!("register_host_app 失败: {error}"),
-        })
+        }),
+    }
+}
+
+/// 在 ashpd 的全局共享连接上完成 host-app 注册（沿用旧行为，供独立探针使用）。
+///
+/// 注意：daemon 不应使用本函数——进程内其它组件（gpui 经 ashpd 读取 portal
+/// Settings 等）可能已经先初始化了该全局连接，使其被 portal 以「空 app id」关联，
+/// 从而令后续 `CreateSession` 报 `An app id is required`。daemon 必须改用
+/// [`register_portal_app_id_with_connection`] 绑定一条专用连接。
+pub async fn register_portal_app_id() -> Result<(), ShortcutError> {
+    let app_id_str = prepare_identity_files()?;
+    let app_id = parse_app_id(&app_id_str)?;
+    map_register_result(app_id_str, ashpd::register_host_app(app_id).await)
+}
+
+/// 在**调用方指定的独立 D-Bus 连接**上完成 host-app 注册。
+///
+/// 保证「注册」与随后的 `GlobalShortcuts::with_connection(同一连接)`/
+/// `CreateSession` 落在同一条、且未被进程内其它 ashpd 使用者污染的连接上。
+pub async fn register_portal_app_id_with_connection(
+    connection: zbus::Connection,
+) -> Result<(), ShortcutError> {
+    let app_id_str = prepare_identity_files()?;
+    let app_id = parse_app_id(&app_id_str)?;
+    map_register_result(
+        app_id_str,
+        ashpd::register_host_app_with_connection(connection, app_id).await,
+    )
+}
+
+/// 判断 ashpd 错误是否为「连接已关联 app id」（良性、可忽略）。
+fn is_already_associated(error: &ashpd::Error) -> bool {
+    error
+        .to_string()
+        .contains("Connection already associated with an application ID")
 }
 
 #[cfg(test)]
