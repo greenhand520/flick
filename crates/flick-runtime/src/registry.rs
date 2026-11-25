@@ -1,6 +1,7 @@
 //! ActionRegistry — 存储与其处理器配对的 ActionDescriptors。
 
 use crate::handler::ActionHandler;
+use crate::plugin::{Plugin, PluginRegistrationError};
 use flick_domain::{ActionDescriptor, ActionId, InputKind, RouteItem};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -41,6 +42,69 @@ impl ActionRegistry {
                 handler,
             },
         );
+    }
+
+    /// 注册一个插件提供的全部动作，并做命名空间/冲突/元数据校验。
+    ///
+    /// 校验全部通过后才写入，避免半写入状态。
+    pub fn register_plugin(
+        &mut self,
+        plugin: &dyn Plugin,
+    ) -> Result<(), PluginRegistrationError> {
+        let manifest = plugin.manifest();
+        if manifest.id.trim().is_empty() {
+            return Err(PluginRegistrationError::InvalidManifest {
+                reason: "empty plugin id".into(),
+            });
+        }
+        // 设置 key 唯一
+        let mut seen_keys = std::collections::HashSet::new();
+        for s in &manifest.settings {
+            if !seen_keys.insert(s.key.as_str()) {
+                return Err(PluginRegistrationError::DuplicateSettingKey {
+                    key: s.key.clone(),
+                });
+            }
+        }
+        // surface id 唯一
+        let mut seen_surfaces = std::collections::HashSet::new();
+        for s in &manifest.surfaces {
+            if !seen_surfaces.insert(s.id.as_str()) {
+                return Err(PluginRegistrationError::SurfaceIdCollision {
+                    surface_id: s.id.clone(),
+                });
+            }
+        }
+        let actions = plugin.actions();
+        if actions.is_empty() {
+            return Err(PluginRegistrationError::NoActions);
+        }
+        let prefix = format!("{}.", manifest.id);
+        // 先全量校验，再插入（避免半写入）
+        for spec in &actions {
+            let id = spec.descriptor.id.as_str();
+            if !id.starts_with(&prefix) {
+                return Err(PluginRegistrationError::NamespaceViolation {
+                    action_id: id.to_string(),
+                    plugin_id: manifest.id.clone(),
+                });
+            }
+            if self.entries.contains_key(&spec.descriptor.id) {
+                return Err(PluginRegistrationError::IdCollision {
+                    action_id: id.to_string(),
+                });
+            }
+        }
+        for spec in actions {
+            self.entries.insert(
+                spec.descriptor.id.clone(),
+                Entry {
+                    descriptor: spec.descriptor,
+                    handler: spec.handler,
+                },
+            );
+        }
+        Ok(())
     }
 
     /// 按 id 查找单个动作。

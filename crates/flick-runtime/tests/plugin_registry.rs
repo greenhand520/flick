@@ -1,4 +1,7 @@
-use flick_runtime::{ActionSpec, Plugin, PluginLifecycle, PluginRuntimeError, PluginUiFactory};
+use flick_runtime::{
+    ActionHandler, ActionRegistry, ActionSpec, Plugin, PluginLifecycle, PluginRegistrationError,
+    PluginRuntimeError, PluginUiFactory,
+};
 
 // 仅用于编译期检查 trait 存在与对象安全。
 fn _assert_plugin(_p: &dyn Plugin) {}
@@ -16,4 +19,96 @@ fn plugin_traits_exist() {
     let d = Dummy;
     _assert_plugin(&d);
     assert!(matches!(PluginRuntimeError::Cancelled, PluginRuntimeError::Cancelled));
+}
+
+use std::sync::Arc;
+use async_trait::async_trait;
+use flick_domain::*;
+
+struct NoopHandler;
+#[async_trait]
+impl ActionHandler for NoopHandler {
+    async fn invoke(&self, _r: ActionRequest, _c: ActionContext) -> Result<ActionOutcome, ActionError> {
+        Ok(ActionOutcome::Data(serde_json::json!({"ok": true})))
+    }
+}
+
+fn manifest(id: &str) -> PluginManifest {
+    PluginManifest {
+        id: id.into(), name: "P".into(), version: "1.0.0".into(),
+        kind: PluginKind::BuiltInRust, keywords: vec![], profile: PluginProfile::default(),
+        capabilities: vec![], plugin_dependencies: vec![], settings: vec![], surfaces: vec![],
+    }
+}
+
+fn spec(id: &str) -> ActionSpec {
+    ActionSpec {
+        descriptor: ActionDescriptor::new(
+            ActionId::new(id).unwrap(), "T", vec![], Matcher::prefix_command("x"),
+            ConcurrencyPolicy::Parallel,
+        ),
+        handler: Arc::new(NoopHandler),
+    }
+}
+
+struct P { m: PluginManifest, a: Vec<ActionSpec> }
+impl Plugin for P {
+    fn manifest(&self) -> PluginManifest { self.m.clone() }
+    fn actions(&self) -> Vec<ActionSpec> {
+        self.a.iter().map(|s| ActionSpec {
+            descriptor: s.descriptor.clone(), handler: s.handler.clone(),
+        }).collect()
+    }
+}
+
+#[test]
+fn register_plugin_success() {
+    let mut reg = ActionRegistry::default();
+    let p = P { m: manifest("demo.plugin"), a: vec![spec("demo.plugin.run")] };
+    reg.register_plugin(&p).unwrap();
+    assert!(reg.find_by_id(&ActionId::from_static("demo.plugin.run")).is_some());
+}
+
+#[test]
+fn register_plugin_rejects_no_actions() {
+    let mut reg = ActionRegistry::default();
+    let p = P { m: manifest("demo.plugin"), a: vec![] };
+    assert_eq!(reg.register_plugin(&p).unwrap_err(), PluginRegistrationError::NoActions);
+}
+
+#[test]
+fn register_plugin_rejects_namespace_violation() {
+    let mut reg = ActionRegistry::default();
+    let p = P { m: manifest("demo.plugin"), a: vec![spec("other.thing.run")] };
+    match reg.register_plugin(&p).unwrap_err() {
+        PluginRegistrationError::NamespaceViolation { .. } => {}
+        e => panic!("expected namespace violation, got {e:?}"),
+    }
+}
+
+#[test]
+fn register_plugin_rejects_id_collision() {
+    let mut reg = ActionRegistry::default();
+    let a = P { m: manifest("demo.plugin"), a: vec![spec("demo.plugin.run")] };
+    reg.register_plugin(&a).unwrap();
+    let b = P { m: manifest("demo.plugin"), a: vec![spec("demo.plugin.run")] };
+    match reg.register_plugin(&b).unwrap_err() {
+        PluginRegistrationError::IdCollision { .. } => {}
+        e => panic!("expected id collision, got {e:?}"),
+    }
+}
+
+#[test]
+fn register_plugin_rejects_duplicate_setting_key() {
+    let mut reg = ActionRegistry::default();
+    let mut m = manifest("demo.plugin");
+    m.settings = vec![
+        SettingDecl { key: "k".into(), label: "".into(), description: "".into(), kind: SettingKind::Bool, default: None, secret: false },
+        SettingDecl { key: "k".into(), label: "".into(), description: "".into(), kind: SettingKind::Bool, default: None, secret: false },
+    ];
+    let p = P { m, a: vec![spec("demo.plugin.run")] };
+    match reg.register_plugin(&p).unwrap_err() {
+        PluginRegistrationError::DuplicateSettingKey { key } => assert_eq!(key, "k"),
+        e => panic!("expected duplicate setting key, got {e:?}"),
+    }
 }
