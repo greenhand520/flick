@@ -66,6 +66,20 @@ async fn echo_does_not_vary_by_caller_kind() {
 }
 
 #[tokio::test]
+async fn echo_plugin_registers_and_routes() {
+    use flick_runtime::ActionRuntime;
+    let rt = ActionRuntime::default();
+    rt.register_plugin(&flick_builtins::EchoPlugin).await.unwrap();
+    let routes = rt
+        .route("echo hello", flick_domain::InputKind::PlainText)
+        .await;
+    assert_eq!(
+        routes[0].action_id.as_str(),
+        flick_builtins::ECHO_ACTION_ID
+    );
+}
+
+#[tokio::test]
 async fn echo_registered_in_runtime_is_findable() {
     use flick_builtins::register_phase0_builtins;
     use flick_domain::ActionId;

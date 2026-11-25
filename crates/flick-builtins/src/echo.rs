@@ -1,7 +1,12 @@
 //! Echo 内置动作 —— Flick 动作的 "hello world"。
 
-use flick_domain::{ActionContext, ActionError, ActionOutcome, ActionRequest, InputKind};
-use flick_runtime::ActionHandler;
+use std::sync::Arc;
+
+use flick_domain::{
+    ActionContext, ActionDescriptor, ActionError, ActionId, ActionOutcome, ActionRequest, Category,
+    ConcurrencyPolicy, InputKind, Matcher, PluginKind, PluginManifest, PluginProfile,
+};
+use flick_runtime::{ActionHandler, ActionSpec, Plugin};
 
 /// Echo 动作的稳定标识符。
 pub const ECHO_ACTION_ID: &str = "flick.builtin.echo.v1.echo";
@@ -29,5 +34,48 @@ impl ActionHandler for EchoHandler {
 
         let text = request.input.text;
         Ok(ActionOutcome::Data(serde_json::json!({ "echo": text })))
+    }
+}
+
+/// 构造 Echo 动作的描述符（供插件与直接注册共用）。
+pub fn echo_descriptor() -> ActionDescriptor {
+    ActionDescriptor::new(
+        ActionId::from_static(ECHO_ACTION_ID),
+        "Echo",
+        vec!["echo".into(), "回显".into(), "repeater".into()],
+        Matcher::prefix_command("echo"),
+        ConcurrencyPolicy::Parallel,
+    )
+}
+
+/// Echo 插件：将 Phase 0 的 echo 动作作为 [`Plugin`] 暴露。
+pub struct EchoPlugin;
+
+impl Plugin for EchoPlugin {
+    fn manifest(&self) -> PluginManifest {
+        PluginManifest {
+            id: "flick.builtin.echo".into(),
+            name: "Echo".into(),
+            version: "1.0.0".into(),
+            kind: PluginKind::BuiltInRust,
+            keywords: vec!["echo".into(), "回显".into(), "repeater".into()],
+            profile: PluginProfile {
+                description: "Echo 内置动作：将输入原样回显为结构化数据。".into(),
+                categories: vec![Category::Developer],
+                tags: vec!["echo".into(), "text".into()],
+                ..Default::default()
+            },
+            capabilities: vec![],
+            plugin_dependencies: vec![],
+            settings: vec![],
+            surfaces: vec![],
+        }
+    }
+
+    fn actions(&self) -> Vec<ActionSpec> {
+        vec![ActionSpec {
+            descriptor: echo_descriptor(),
+            handler: Arc::new(EchoHandler),
+        }]
     }
 }
