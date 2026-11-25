@@ -16,11 +16,16 @@
 
 pub mod handler;
 pub mod invocation;
+pub mod plugin;
 pub mod registry;
 pub mod runtime;
 
 // 在 crate 根重新导出主要的公共 API。
 pub use handler::ActionHandler;
 pub use invocation::InvocationHandle;
+pub use plugin::{
+    ActionSpec, Plugin, PluginLifecycle, PluginRegistrationError, PluginRuntimeError,
+    PluginUiFactory,
+};
 pub use registry::ActionRegistry;
 pub use runtime::ActionRuntime;
