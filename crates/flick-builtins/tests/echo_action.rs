@@ -77,6 +77,13 @@ async fn echo_plugin_registers_and_routes() {
         routes[0].action_id.as_str(),
         flick_builtins::ECHO_ACTION_ID
     );
+
+    // 端到端：经插件注册后的运行时 invoke 仍返回同样的 Data 载荷。
+    let req = ActionRequest::new_echo("hi there", Caller::cli("test"));
+    match rt.invoke(req).await {
+        ActionOutcome::Data(val) => assert_eq!(val["echo"], "hi there"),
+        other => panic!("expected ActionOutcome::Data, got {other:?}"),
+    }
 }
 
 #[tokio::test]

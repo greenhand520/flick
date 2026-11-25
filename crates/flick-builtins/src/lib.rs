@@ -10,8 +10,8 @@ use flick_runtime::ActionRuntime;
 
 /// 将所有 Phase 0 内置动作注册到给定的运行时。
 ///
-/// 通过插件注册表注册 [`EchoPlugin`]；此函数是幂等的 ——
-/// 调用两次只会覆盖先前针对相同动作 ID 注册的处理器。
+/// 通过插件注册表注册 [`EchoPlugin`]。`register_plugin` 对重复动作 ID 返回
+/// `IdCollision`（不做静默覆盖），因此每个运行时只应调用一次。
 pub async fn register_phase0_builtins(runtime: &ActionRuntime) {
     runtime
         .register_plugin(&EchoPlugin)

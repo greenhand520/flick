@@ -37,7 +37,7 @@ impl ActionHandler for EchoHandler {
     }
 }
 
-/// 构造 Echo 动作的描述符（供插件与直接注册共用）。
+/// 构造 Echo 动作的描述符（供 [`EchoPlugin`] 使用）。
 pub fn echo_descriptor() -> ActionDescriptor {
     ActionDescriptor::new(
         ActionId::from_static(ECHO_ACTION_ID),
