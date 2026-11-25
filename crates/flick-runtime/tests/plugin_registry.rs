@@ -113,6 +113,24 @@ fn register_plugin_rejects_duplicate_setting_key() {
     }
 }
 
+#[test]
+fn register_plugin_rejects_duplicate_surface_id() {
+    let mut reg = ActionRegistry::default();
+    let mut m = manifest("demo.plugin");
+    let surface = UiSurfaceDecl {
+        id: "info".into(),
+        title: "Info".into(),
+        kind: SurfaceKind::Panel,
+        default_placement: SurfacePlacement::BelowSearchBox,
+    };
+    m.surfaces = vec![surface.clone(), surface];
+    let p = P { m, a: vec![spec("demo.plugin.run")] };
+    match reg.register_plugin(&p).unwrap_err() {
+        PluginRegistrationError::SurfaceIdCollision { surface_id } => assert_eq!(surface_id, "info"),
+        e => panic!("expected surface id collision, got {e:?}"),
+    }
+}
+
 #[tokio::test]
 async fn runtime_register_plugin_routes_and_invokes() {
     let rt = flick_runtime::ActionRuntime::default();
