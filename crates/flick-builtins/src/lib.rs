@@ -1,6 +1,6 @@
 //! `flick-builtins` —— 随 Flick 一起提供的内置动作。
 //!
-//! Phase 0 仅包含一个动作：**echo**。
+//! 内置插件：**echo**、**host** 与 **apps**（应用搜索）。
 
 pub mod apps;
 pub mod echo;
