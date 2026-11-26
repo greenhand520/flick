@@ -286,6 +286,15 @@ async fn fake_host(
                     runtime.search_invoke(&action_input.text, action_input.kind),
                 );
                 let items = merge_demo_results(action_items, execution_items);
+                if !input.files.is_empty() || input.image.is_some() {
+                    eprintln!(
+                        "[demo] input kind={:?} source={:?} files={} image={}",
+                        input.kind,
+                        input.source,
+                        input.files.len(),
+                        input.image.is_some()
+                    );
+                }
                 let _ = host_tx.send(HostToUi::Routes { generation, items });
             }
             UiToHost::Invoke {
