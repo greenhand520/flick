@@ -781,12 +781,11 @@ fn render_attachment_chips(
     }
     let mut row = div()
         .w_full()
+        .h(px(crate::app::ATTACHMENT_ROW_HEIGHT))
         .flex()
-        .flex_wrap()
         .items_center()
         .gap(px(6.0))
-        .px(px(metrics.input_padding_h))
-        .pb(px(metrics.content_gap));
+        .px(px(metrics.input_padding_h));
     for file in &attachments.files {
         row = row.child(
             div()

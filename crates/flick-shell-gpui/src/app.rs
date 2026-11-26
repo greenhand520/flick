@@ -179,14 +179,26 @@ pub fn active_surface(panel: &PanelState) -> Option<&SurfaceContent> {
     }
 }
 
+/// 附件 chip 行固定高度（文件/图片存在时占用）。
+pub const ATTACHMENT_ROW_HEIGHT: f32 = 24.0;
+
 /// 由内容计算逻辑窗口尺寸（宽, 高）。修复 iced 缺陷 #2/#4 的核心公式。
 pub fn desired_size(panel: &PanelState, m: &Metrics) -> (f32, f32) {
+    let attachments_h = if panel.input.files.is_empty() && panel.input.image.is_none() {
+        0.0
+    } else {
+        ATTACHMENT_ROW_HEIGHT
+    };
     // Surface 优先：内容即当前动作的输出视图，替换结果列表。
     if let Some(surface) = active_surface(panel) {
         let content_h = estimate_height(surface, &SurfaceStyle::default());
-        let height = (m.input_height + m.content_gap + content_h + m.padding_bottom)
+        let height = (m.input_height
+            + m.content_gap
+            + content_h
+            + m.padding_bottom
+            + attachments_h)
             .min(m.panel_max_height);
-        return (m.width, height.max(m.input_height));
+        return (m.width, height.max(m.input_height + attachments_h));
     }
     let has_results = !(panel.routes.is_empty() && panel.last_outcome.is_none());
     let results_h = if has_results {
@@ -221,14 +233,33 @@ mod tests {
     }
 
     #[test]
+    fn attachment_row_adds_height() {
+        use flick_domain::{FileInput, InputSource};
+
+        let mut s = state();
+        let file = FileInput {
+            uri: "file:///tmp/a.txt".into(),
+            display_name: "a.txt".into(),
+            extension: Some("txt".into()),
+            is_dir: false,
+            mime: Some("text/plain".into()),
+        };
+        s.panel.input = SearchInputSnapshot::files(vec![file], InputSource::Paste);
+        let (_, h) = desired_size(&s.panel, &Metrics::default());
+        assert_eq!(h, 64.0 + ATTACHMENT_ROW_HEIGHT);
+    }
+
+    #[test]
     fn desired_size_clamps_to_max_height() {
         let mut s = state();
         s.panel.routes = (0..20)
-            .map(|i| RouteItem::action(
-                ActionId::new(format!("a{i}")).unwrap(),
-                format!("T{i}"),
-                1.0,
-            ))
+            .map(|i| {
+                RouteItem::action(
+                    ActionId::new(format!("a{i}")).unwrap(),
+                    format!("T{i}"),
+                    1.0,
+                )
+            })
             .collect();
         let (_w, h) = desired_size(&s.panel, &Metrics::default());
         assert_eq!(h, 480.0);
