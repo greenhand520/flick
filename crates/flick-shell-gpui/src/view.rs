@@ -65,6 +65,8 @@ pub struct AppView {
     /// 各控件订阅的句柄，随视图存活。
     _widget_subs: Vec<Subscription>,
     _debounce: Option<Task<()>>,
+    /// 开框后延迟重试读取剪贴板的任务（部分 Wayland compositor 要等窗口获得焦点后才能读）。
+    _clipboard_import: Option<Task<()>>,
     /// 上一轮 `panel.visible`，用于检测「可见 -> 隐藏」跃迁（只发一次销毁请求）。
     was_visible: bool,
     /// 分离窗口进行中：抑制面板隐藏时发给宿主的 `SurfaceClosed`
@@ -164,6 +166,7 @@ impl AppView {
             widgets: HashMap::new(),
             _widget_subs: Vec::new(),
             _debounce: None,
+            _clipboard_import: None,
             was_visible: false,
             suppress_surface_closed: false,
             drag_origin: None,
@@ -203,8 +206,24 @@ impl AppView {
         // 每次从隐藏状态重新打开面板时都检查一次最近 5 秒剪贴板；
         // 不能只在 `AppView::new` 做，因为 demo/复用窗口可能保持同一视图实例。
         if showing && !was_visible {
-            self.try_import_recent_clipboard(window, cx);
+            self.schedule_clipboard_import(window, cx);
         }
+    }
+
+    /// 先立即尝试读取剪贴板；若窗口尚未获得焦点导致读不到，再延迟重试一次。
+    fn schedule_clipboard_import(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.try_import_recent_clipboard(window, cx) {
+            return;
+        }
+        let task = cx.spawn_in(window, async move |this, cx| {
+            cx.background_executor()
+                .timer(Duration::from_millis(120))
+                .await;
+            let _ = this.update_in(cx, |this, window, cx| {
+                this.try_import_recent_clipboard(window, cx);
+            });
+        });
+        self._clipboard_import = Some(task);
     }
 
     /// 应用完整输入快照：同步受控 Input 文本，再进入统一的 dispatch 流程。
@@ -228,9 +247,9 @@ impl AppView {
     }
 
     /// 开窗时若剪贴板在最近 5 秒内变化，自动带入并立刻触发路由。
-    fn try_import_recent_clipboard(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    fn try_import_recent_clipboard(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
         let Some(item) = cx.read_from_clipboard() else {
-            return;
+            return false;
         };
         let now = std::time::Instant::now();
         self.clipboard_watch.observe(&item, now);
@@ -238,12 +257,12 @@ impl AppView {
             now.saturating_duration_since(recent.changed_at) <= ClipboardWatch::RECENT_WINDOW
         });
         if !within_window {
-            return;
+            return false;
         }
         let Some(snapshot) =
             crate::input_capture::snapshot_from_clipboard_item(&item, InputSource::ClipboardRecent)
         else {
-            return;
+            return false;
         };
         let input_text = if snapshot.kind == UiInputKind::Text {
             snapshot.text.clone()
@@ -254,6 +273,7 @@ impl AppView {
             state.set_value(input_text, window, input_cx);
         });
         self.dispatch(UiEvent::InputCaptured(snapshot), window, cx);
+        true
     }
 
     /// 外部路径拖入：转为文件快照并同步输入。
