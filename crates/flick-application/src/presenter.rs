@@ -22,6 +22,8 @@ pub enum PanelEvent {
     },
     Hide,
     InputChanged(String),
+    /// UI 采集到完整输入快照（含文件/图片附件）。
+    InputCaptured(SearchInputSnapshot),
     /// 针对某个输入 revision 的 UI 端防抖计时器已到期。
     DebounceFlush {
         revision: u64,
@@ -103,6 +105,8 @@ pub struct PanelState {
     pub created: bool,
     /// 实时的、受控文本输入值。
     pub query: String,
+    /// 最近一次 UI 采集到的完整输入快照（文本/文件/图片）。
+    pub input: SearchInputSnapshot,
     /// Phase 0 期间保留的兼容性字段；始终镜像 [`Self::query`]。
     pub pending_query: String,
     pub generation: QueryGeneration,
@@ -128,6 +132,7 @@ impl PanelState {
             visible: false,
             created: false,
             query: String::new(),
+            input: SearchInputSnapshot::text(String::new(), InputSource::Manual),
             pending_query: String::new(),
             generation: QueryGeneration::INITIAL,
             routes: Vec::new(),
@@ -176,6 +181,7 @@ impl PanelState {
                 self.on_hide(now)
             }
             PanelEvent::InputChanged(text) => self.on_input_changed(text),
+            PanelEvent::InputCaptured(snapshot) => self.on_input_captured(snapshot),
             PanelEvent::DebounceFlush { revision } => self.on_debounce_flush(revision),
             PanelEvent::Submitted => self.on_submitted(),
             PanelEvent::SelectionUp => {
@@ -245,6 +251,9 @@ impl PanelState {
         // 同一个事件轮次中更新，这样光标编辑和长时间按住 Backspace
         // 重复输入都不会观察到过期的模型文本。
         self.query = text;
+        if self.input.kind == UiInputKind::Text {
+            self.input.text = self.query.clone();
+        }
         self.pending_query.clone_from(&self.query);
         self.debounce_revision = self.debounce_revision.wrapping_add(1);
         self.flushed_debounce_revision = None;
@@ -259,6 +268,31 @@ impl PanelState {
 
         // QueryGeneration 用于防范异步的运行时结果；上方的本地 revision
         // 则独立地防范 UI 防抖任务。
+        self.generation = self.generation.next();
+        self.routes.clear();
+        self.selection.set_total(0);
+        self.last_outcome = None;
+        self.active_invocation = None;
+
+        vec![PanelAction::StartDebounce {
+            revision: self.debounce_revision,
+        }]
+    }
+
+    /// 应用一次完整输入快照：文件/图片输入也能推进查询代次并触发防抖。
+    fn on_input_captured(&mut self, snapshot: SearchInputSnapshot) -> Vec<PanelAction> {
+        self.query = snapshot.text.clone();
+        self.pending_query.clone_from(&self.query);
+        self.input = snapshot;
+        self.debounce_revision = self.debounce_revision.wrapping_add(1);
+        self.flushed_debounce_revision = None;
+
+        if self.surface_search {
+            return vec![PanelAction::StartDebounce {
+                revision: self.debounce_revision,
+            }];
+        }
+
         self.generation = self.generation.next();
         self.routes.clear();
         self.selection.set_total(0);
@@ -415,6 +449,7 @@ impl PanelState {
 
     fn reset_expired_session(&mut self) {
         self.query.clear();
+        self.input = SearchInputSnapshot::text(String::new(), InputSource::Manual);
         self.pending_query.clear();
         self.generation = self.generation.next();
         self.debounce_revision = self.debounce_revision.wrapping_add(1);
@@ -618,5 +653,45 @@ mod tests {
         assert!(actions.is_empty());
         assert_eq!(st.surface_session(), Some(session));
         assert!(st.surface_search());
+    }
+
+    #[test]
+    fn captured_file_snapshot_keeps_attachments_and_queries_host() {
+        let mut state = PanelState::new();
+        state.visible = true;
+        let file = flick_domain::FileInput {
+            uri: "file:///tmp/a.txt".into(),
+            display_name: "a.txt".into(),
+            extension: Some("txt".into()),
+            is_dir: false,
+            mime: Some("text/plain".into()),
+        };
+        let snapshot = SearchInputSnapshot::files(vec![file.clone()], InputSource::DragDrop);
+
+        let actions = state.update_at(PanelEvent::InputCaptured(snapshot.clone()), Instant::now());
+        assert_eq!(state.input, snapshot);
+        assert_eq!(state.query, "file:///tmp/a.txt");
+        assert!(actions.iter().any(|a| matches!(a, PanelAction::StartDebounce { .. })));
+
+        let sent = state.update_at(
+            PanelEvent::DebounceFlush {
+                revision: state.debounce_revision(),
+            },
+            Instant::now(),
+        );
+        assert!(sent.iter().any(|a| matches!(
+            a,
+            PanelAction::SendToHost(UiToHost::QueryChanged { text, .. })
+                if text == "file:///tmp/a.txt"
+        )));
+    }
+
+    #[test]
+    fn manual_typing_updates_snapshot_text() {
+        let mut state = PanelState::new();
+        state.visible = true;
+        state.update_at(PanelEvent::InputChanged("abc".into()), Instant::now());
+        assert_eq!(state.input.kind, UiInputKind::Text);
+        assert_eq!(state.input.text, "abc");
     }
 }
