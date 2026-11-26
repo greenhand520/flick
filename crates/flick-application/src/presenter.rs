@@ -328,7 +328,7 @@ impl PanelState {
 
         vec![PanelAction::SendToHost(UiToHost::QueryChanged {
             generation: self.generation,
-            text: self.query.clone(),
+            input: self.input.clone(),
         })]
     }
 
@@ -346,7 +346,10 @@ impl PanelState {
             })];
         }
 
-        if self.query.is_empty() || self.routes.is_empty() {
+        let has_input = !self.query.is_empty()
+            || !self.input.files.is_empty()
+            || self.input.image.is_some();
+        if !has_input || self.routes.is_empty() {
             return vec![];
         }
         let Some(route) = self.selection.selected(&self.routes) else {
@@ -381,10 +384,11 @@ impl PanelState {
 
         let invocation_id = InvocationId::new();
         self.active_invocation = Some(invocation_id);
+        let input = self.input.to_action_input();
         vec![PanelAction::SendToHost(UiToHost::Invoke {
             invocation_id,
             action_id: route.action_id.clone(),
-            input: ActionInput::plain_text(&self.query),
+            input,
         })]
     }
 
@@ -681,8 +685,8 @@ mod tests {
         );
         assert!(sent.iter().any(|a| matches!(
             a,
-            PanelAction::SendToHost(UiToHost::QueryChanged { text, .. })
-                if text == "file:///tmp/a.txt"
+            PanelAction::SendToHost(UiToHost::QueryChanged { input, .. })
+                if input.files == vec![file.clone()]
         )));
     }
 

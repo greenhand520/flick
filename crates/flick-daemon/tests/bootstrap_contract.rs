@@ -307,7 +307,7 @@ async fn coordinator_query_changed_returns_routes() {
     coordinator
         .handle_ui(UiToHost::QueryChanged {
             generation: QueryGeneration::INITIAL,
-            text: "echo".into(),
+            input: SearchInputSnapshot::text("echo", InputSource::Manual),
         })
         .await;
 

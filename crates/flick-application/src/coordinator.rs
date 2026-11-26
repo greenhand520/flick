@@ -79,15 +79,16 @@ impl ApplicationCoordinator {
     /// 运行时 / 接收器调用。
     pub async fn handle_ui(&self, event: UiToHost) {
         match event {
-            UiToHost::QueryChanged { generation, text } => {
+            UiToHost::QueryChanged { generation, input } => {
                 // 在调用运行时之前记录最新的代次。
                 self.query_tracker.set_current(generation);
 
+                let action_input = input.to_action_input();
                 // 首屏路由（纯内存）与搜索阶段执行（最多 150ms）并行进行；
                 // 后者的结果作为 Execution 项排在各自父 Action 之后。
                 let (action_items, execution_items) = tokio::join!(
-                    self.runtime.route(&text, InputType::PlainText),
-                    self.runtime.search_invoke(&text, InputType::PlainText),
+                    self.runtime.route(&action_input.text, action_input.kind),
+                    self.runtime.search_invoke(&action_input.text, action_input.kind),
                 );
                 let items = merge_search_results(action_items, execution_items);
 

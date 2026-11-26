@@ -3,6 +3,7 @@
 use crate::action::{ActionInput, ActionOutcome};
 use crate::execution::ExecutionEventKind;
 use crate::id::{ActionId, InvocationId, QueryGeneration, SurfaceSessionId};
+use crate::input::SearchInputSnapshot;
 use crate::route::RouteItem;
 use crate::surface::{SurfaceContent, SurfaceEventKind};
 use serde::{Deserialize, Serialize};
@@ -34,10 +35,10 @@ impl UiIntent {
 /// 从 UI 发往 Host（协调器）的消息。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum UiToHost {
-    /// 用户输入/更改了搜索查询。
+    /// 查询文本或附件已变化；携带 UI 采集到的完整输入快照。
     QueryChanged {
         generation: QueryGeneration,
-        text: String,
+        input: SearchInputSnapshot,
     },
     /// 用户选择了一个路由项进行调用。
     Invoke {

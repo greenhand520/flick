@@ -107,7 +107,7 @@ fn ui_to_host_round_trips() {
     let messages = vec![
         UiToHost::QueryChanged {
             generation: QueryGeneration::INITIAL,
-            text: "hello".into(),
+            input: SearchInputSnapshot::text("hello", InputSource::Manual),
         },
         UiToHost::SearchPanelClosed,
         UiToHost::Cancel {

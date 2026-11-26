@@ -12,6 +12,14 @@ use async_trait::async_trait;
 use flick_application::{ApplicationCoordinator, HostEventSink, RuntimePort};
 use flick_domain::*;
 
+/// 构造文本查询消息，减少协议字段变化对测试的重复修改。
+fn text_query(generation: QueryGeneration, text: &str) -> UiToHost {
+    UiToHost::QueryChanged {
+        generation,
+        input: SearchInputSnapshot::text(text, InputSource::Manual),
+    }
+}
+
 // ─── 伪造实现 ───────────────────────────────────────────────────────────────────
 
 /// 具有可配置响应的伪造 `RuntimePort`。
@@ -170,11 +178,7 @@ async fn newer_query_generation_wins_when_results_complete_out_of_order() {
     // 先生成较慢的查询任务。
     let c1 = coord.clone();
     let h1 = tokio::spawn(async move {
-        c1.handle_ui(UiToHost::QueryChanged {
-            generation: gen1,
-            text: "first".into(),
-        })
-        .await;
+        c1.handle_ui(text_query(gen1, "first")).await;
     });
 
     // 给 gen1 时间执行 set_current 并启动其慢速路由。
@@ -183,11 +187,7 @@ async fn newer_query_generation_wins_when_results_complete_out_of_order() {
     // 现在生成较快的查询任务。
     let c2 = coord.clone();
     let h2 = tokio::spawn(async move {
-        c2.handle_ui(UiToHost::QueryChanged {
-            generation: gen2,
-            text: "second".into(),
-        })
-        .await;
+        c2.handle_ui(text_query(gen2, "second")).await;
     });
 
     let _ = tokio::join!(h1, h2);
@@ -499,10 +499,7 @@ async fn query_merges_execution_items_after_their_parent_action() {
     let coord = ApplicationCoordinator::new(runtime, Arc::new(sink));
 
     coord
-        .handle_ui(UiToHost::QueryChanged {
-            generation: QueryGeneration::INITIAL,
-            text: "fire".into(),
-        })
+        .handle_ui(text_query(QueryGeneration::INITIAL, "fire"))
         .await;
 
     let emitted = events.lock().unwrap();
@@ -528,10 +525,7 @@ async fn execution_activated_forwards_to_parent_and_emits_completion() {
 
     // ExecutionActivated 只对当前查询代次有效，先建立一次查询代次。
     coord
-        .handle_ui(UiToHost::QueryChanged {
-            generation: QueryGeneration::INITIAL,
-            text: "fire".into(),
-        })
+        .handle_ui(text_query(QueryGeneration::INITIAL, "fire"))
         .await;
 
     coord

@@ -279,10 +279,11 @@ async fn fake_host(
 
     while let Some(message) = ui_rx.recv().await {
         match message {
-            UiToHost::QueryChanged { generation, text } => {
+            UiToHost::QueryChanged { generation, input } => {
+                let action_input = input.to_action_input();
                 let (action_items, execution_items) = tokio::join!(
-                    runtime.route(&text, InputType::PlainText),
-                    runtime.search_invoke(&text, InputType::PlainText),
+                    runtime.route(&action_input.text, action_input.kind),
+                    runtime.search_invoke(&action_input.text, action_input.kind),
                 );
                 let items = merge_demo_results(action_items, execution_items);
                 let _ = host_tx.send(HostToUi::Routes { generation, items });

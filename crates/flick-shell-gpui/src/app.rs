@@ -1,10 +1,12 @@
 //! 纯逻辑更新层：把 UI/宿主事件归约为面板事件，并计算窗口尺寸。
 //! 不依赖任何 UI 框架，可直接单测。
 
-use flick_application::presenter::{PanelAction, PanelEvent, PanelState};
 use crate::theme::{Metrics, ThemeMode};
-use flick_domain::{ActionOutcome, HostToUi, SurfaceContent, SurfaceSessionId, UiToHost};
-use flick_ui::style::{estimate_height, SurfaceStyle};
+use flick_application::presenter::{PanelAction, PanelEvent, PanelState};
+use flick_domain::{
+    ActionOutcome, HostToUi, SearchInputSnapshot, SurfaceContent, SurfaceSessionId, UiToHost,
+};
+use flick_ui::style::{SurfaceStyle, estimate_height};
 use std::time::Instant;
 
 /// 输入防抖窗口（毫秒）。仅决定何时发协议，不决定显示。
@@ -258,15 +260,16 @@ mod tests {
         s.update(UiEvent::InputChanged("echo".into()));
 
         let a = s.update(UiEvent::DebounceElapsed { revision: obsolete });
-        assert!(!a
-            .iter()
-            .any(|e| matches!(e, Effect::Send(UiToHost::QueryChanged { .. }))));
+        assert!(
+            !a.iter()
+                .any(|e| matches!(e, Effect::Send(UiToHost::QueryChanged { .. })))
+        );
 
         let current = s.panel.debounce_revision();
         let b = s.update(UiEvent::DebounceElapsed { revision: current });
         assert!(b.iter().any(|e| matches!(
             e,
-            Effect::Send(UiToHost::QueryChanged { text, .. }) if text == "echo"
+            Effect::Send(UiToHost::QueryChanged { input, .. }) if input.text == "echo"
         )));
     }
 
