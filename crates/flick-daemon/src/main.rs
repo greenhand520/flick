@@ -138,7 +138,8 @@ fn run_graphical(socket_path: PathBuf) -> Result<(), String> {
             rt.block_on(async move {
                 let lifecycle = background_lifecycle;
                 let runtime = Arc::new(ActionRuntime::new());
-                flick_builtins::register_phase0_builtins(&runtime).await;
+                flick_builtins::register_builtin(&runtime).await;
+                runtime.activate_all_plugins().await;
                 runtime.set_host_info(std::sync::Arc::new(
                     flick_adapters_linux::host_info::collect_host_info(),
                 ));

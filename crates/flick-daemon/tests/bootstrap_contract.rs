@@ -203,7 +203,8 @@ async fn build_test_stack() -> (
     mpsc::UnboundedReceiver<HostToUi>,
 ) {
     let runtime = Arc::new(ActionRuntime::new());
-    flick_builtins::register_phase0_builtins(&runtime).await;
+    flick_builtins::register_builtin(&runtime).await;
+    runtime.activate_all_plugins().await;
 
     let (event_tx, event_rx) = mpsc::unbounded_channel();
     let sink = Arc::new(TestEventSink { tx: event_tx });

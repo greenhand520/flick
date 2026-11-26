@@ -24,4 +24,15 @@ pub trait ActionHandler: Send + Sync {
         request: ActionRequest,
         ctx: ActionContext,
     ) -> Result<ActionOutcome, ActionError>;
+
+    /// 用户对 Execution 项的操作；默认 no-op。
+    async fn execution_event(
+        &self,
+        _parent_action_id: &flick_domain::ActionId,
+        _item_id: &str,
+        _event: flick_domain::ExecutionEventKind,
+        _ctx: flick_domain::ActionContext,
+    ) -> Result<Option<flick_domain::ActionOutcome>, flick_domain::ActionError> {
+        Ok(None)
+    }
 }

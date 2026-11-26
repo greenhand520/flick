@@ -1,7 +1,7 @@
 //! ActionRegistry — 存储与其处理器配对的 ActionDescriptors。
 
 use crate::handler::ActionHandler;
-use crate::plugin::{Plugin, PluginRegistrationError, SurfaceHandler};
+use crate::plugin::{Plugin, PluginLifecycle, PluginRegistrationError, SurfaceHandler};
 use flick_domain::{ActionDescriptor, ActionId, InputType, PluginManifest, RouteItem};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -24,6 +24,8 @@ pub struct ActionRegistry {
     manifests: HashMap<String, PluginManifest>,
     /// 插件 id → Surface 交互处理器。
     surface_handlers: HashMap<String, Arc<dyn SurfaceHandler>>,
+    /// 插件 id → 生命周期句柄（仅在有提供时记录）。
+    lifecycles: HashMap<String, Arc<dyn PluginLifecycle>>,
 }
 
 impl ActionRegistry {
@@ -33,6 +35,7 @@ impl ActionRegistry {
             entries: HashMap::new(),
             manifests: HashMap::new(),
             surface_handlers: HashMap::new(),
+            lifecycles: HashMap::new(),
         }
     }
 
@@ -57,6 +60,7 @@ impl ActionRegistry {
     /// 校验全部通过后才写入，避免半写入状态。
     pub fn register_plugin(&mut self, plugin: &dyn Plugin) -> Result<(), PluginRegistrationError> {
         let manifest = plugin.manifest();
+        let lifecycle = plugin.lifecycle();
         if manifest.id.trim().is_empty() {
             return Err(PluginRegistrationError::InvalidManifest {
                 reason: "empty plugin id".into(),
@@ -116,8 +120,16 @@ impl ActionRegistry {
         if let Some(handler) = plugin.surface_handler() {
             self.surface_handlers.insert(manifest.id.clone(), handler);
         }
+        if let Some(lifecycle) = lifecycle {
+            self.lifecycles.insert(manifest.id.clone(), lifecycle);
+        }
         self.manifests.insert(manifest.id.clone(), manifest);
         Ok(())
+    }
+
+    /// 返回已注册插件的生命周期句柄（用于启动时统一 activate）。
+    pub fn plugin_lifecycles(&self) -> Vec<Arc<dyn PluginLifecycle>> {
+        self.lifecycles.values().cloned().collect()
     }
 
     /// 按 id 查找单个动作。

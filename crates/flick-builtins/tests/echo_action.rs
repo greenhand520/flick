@@ -89,11 +89,12 @@ async fn echo_plugin_registers_and_routes() {
 
 #[tokio::test]
 async fn echo_registered_in_runtime_is_findable() {
-    use flick_builtins::register_phase0_builtins;
+    use flick_builtins::register_builtin;
     use flick_domain::ActionId;
 
     let runtime = flick_runtime::ActionRuntime::new();
-    register_phase0_builtins(&runtime).await;
+    register_builtin(&runtime).await;
+    runtime.activate_all_plugins().await;
 
     let id = ActionId::from_static(ECHO_ACTION_ID);
     let results = runtime

@@ -66,7 +66,8 @@ pub trait PluginLifecycle: Send + Sync {
 pub trait Plugin: Send + Sync {
     fn manifest(&self) -> PluginManifest;
     fn actions(&self) -> Vec<ActionSpec>;
-    fn lifecycle(&self) -> Option<&dyn PluginLifecycle> {
+    /// 返回插件生命周期句柄，供运行时在启动时统一激活。
+    fn lifecycle(&self) -> Option<Arc<dyn PluginLifecycle>> {
         None
     }
     fn ui(&self) -> Option<&dyn PluginUiFactory> {

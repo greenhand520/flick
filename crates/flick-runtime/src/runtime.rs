@@ -78,6 +78,19 @@ impl ActionRuntime {
         registry.register_plugin(plugin)
     }
 
+    /// 启动时统一激活所有有生命周期的插件；单个失败只记录，不阻止其它插件。
+    pub async fn activate_all_plugins(&self) {
+        let lifecycles = {
+            let reg = self.registry.read().await;
+            reg.plugin_lifecycles()
+        };
+        for lifecycle in lifecycles {
+            if let Err(error) = lifecycle.activate().await {
+                tracing::warn!(?error, "plugin activate failed");
+            }
+        }
+    }
+
     /// 为搜索查询返回匹配的 [`RouteItem`]s。
     ///
     /// 返回前会释放注册表锁。

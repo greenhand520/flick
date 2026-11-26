@@ -68,8 +68,8 @@ impl Plugin for HostPlugin {
             handler: Arc::new(HostHandler),
         }]
     }
-    fn lifecycle(&self) -> Option<&dyn PluginLifecycle> {
-        Some(&HOST_LIFECYCLE)
+    fn lifecycle(&self) -> Option<Arc<dyn PluginLifecycle>> {
+        Some(Arc::new(HostLifecycle))
     }
 }
 
@@ -101,8 +101,6 @@ impl ActionHandler for HostHandler {
         Ok(ActionOutcome::open_surface("info", content))
     }
 }
-
-static HOST_LIFECYCLE: HostLifecycle = HostLifecycle;
 
 struct HostLifecycle;
 #[async_trait]
