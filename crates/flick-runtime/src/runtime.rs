@@ -253,7 +253,13 @@ impl ActionRuntime {
         };
 
         // ── 3.5 若返回 OpenSurface，则生成会话并回填 ──────────────
-        let outcome = self.backfill_open_surface(outcome, &request).await;
+        // 搜索阶段（SearchRoute）必须只读、无副作用：跳过会话创建与 on_open，
+        // 原样返回 outcome，由 `execution_route_items` 记录并丢弃 OpenSurface。
+        let outcome = if request.source == flick_domain::ActionSource::SearchRoute {
+            outcome
+        } else {
+            self.backfill_open_surface(outcome, &request).await
+        };
 
         // ── 4. 清理 ────────────────────────────────────────────
         {
@@ -389,7 +395,7 @@ fn execution_route_items(parent_action_id: ActionId, outcome: ActionOutcome) -> 
             .and_then(|o| o.get("id"))
             .and_then(|v| v.as_str())
             .map(str::to_string)
-            .unwrap_or_else(|| format!("index:{index}"));
+            .unwrap_or_else(|| format!("{parent_action_id}:index:{index}"));
         let title = object
             .and_then(|o| {
                 o.get("title")
@@ -441,7 +447,7 @@ fn execution_route_items(parent_action_id: ActionId, outcome: ActionOutcome) -> 
             0,
         ),
         ActionOutcome::Error(error) => {
-            tracing::debug!(?error, "search_invoke error dropped");
+            tracing::warn!(?error, "search_invoke error dropped");
         }
         ActionOutcome::OpenSurface { .. } => {
             tracing::warn!("search_invoke returned OpenSurface; dropped");
