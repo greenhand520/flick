@@ -103,7 +103,6 @@ impl DemoClipboardPlugin {
             ActionId::from_static(CLIPBOARD_ACTION_ID),
             "剪贴板",
             vec!["clipboard".into(), "剪贴板".into(), "paste".into()],
-            Matcher::prefix_command("clipboard"),
             ConcurrencyPolicy::Parallel,
         );
         d.output_types = vec![OutputType::Surface];
@@ -116,8 +115,10 @@ impl Plugin for DemoClipboardPlugin {
         PluginManifest {
             id: "demo.builtin.clipboard".into(),
             name: "Demo Clipboard".into(),
+            author: "Flick Demo".into(),
             version: "1.0.0".into(),
             kind: PluginKind::BuiltInRust,
+            icon: None,
             keywords: vec!["clipboard".into(), "剪贴板".into(), "paste".into()],
             profile: PluginProfile {
                 description: "演示可搜索 / 可交互的剪贴板 Surface".into(),
@@ -127,7 +128,7 @@ impl Plugin for DemoClipboardPlugin {
                 execution: ExecutionMode::Local,
                 data_handling: None,
             },
-            capabilities: vec![],
+            permissions: vec![],
             plugin_dependencies: vec![],
             settings: vec![],
             surfaces: vec![UiSurfaceDecl {

@@ -15,14 +15,15 @@ pub struct ActionDescriptor {
     pub title: String,
     /// 用于纯文本搜索召回的关键词。
     pub keywords: Vec<String>,
-    pub matcher: Matcher,
     pub concurrency: ConcurrencyPolicy,
     pub supported_inputs: Vec<InputType>,
     /// 仅 `InputType::File` 有效；小写、不带点。
     pub file_extensions: Vec<String>,
     pub output_types: Vec<OutputType>,
     pub visibility: ActionVisibility,
-    pub risk_level: RiskLevel,
+    /// 动作额外声明的权限；实际生效权限 = 插件权限 ∪ 动作权限。
+    #[serde(default)]
+    pub permissions: Vec<String>,
     pub invocation_policy: InvocationPolicy,
 }
 
@@ -31,49 +32,31 @@ impl ActionDescriptor {
         id: ActionId,
         title: impl Into<String>,
         keywords: Vec<String>,
-        matcher: Matcher,
         concurrency: ConcurrencyPolicy,
     ) -> Self {
         Self {
             id,
             title: title.into(),
             keywords,
-            matcher,
             concurrency,
             supported_inputs: vec![InputType::PlainText],
             file_extensions: Vec::new(),
             output_types: vec![OutputType::Data],
             visibility: ActionVisibility::Public,
-            risk_level: RiskLevel::ReadOnly,
+            permissions: Vec::new(),
             invocation_policy: InvocationPolicy::NonInteractive,
         }
     }
-}
 
-/// 此动作如何与用户输入进行匹配。
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub enum Matcher {
-    /// 基于关键词从纯文本输入中召回。
-    Keyword,
-    /// 精确前缀命令，采用词边界匹配。
-    /// 例如，`echo` 匹配 "echo hello"，但不匹配 "echohello"。
-    PrefixCommand { command: String },
-}
-
-impl Matcher {
-    /// 前缀命令匹配器的便捷构造函数。
-    pub fn prefix_command(command: &str) -> Self {
-        Self::PrefixCommand {
-            command: command.to_owned(),
+    /// 计算动作实际拥有的权限：插件声明的权限自动继承，再与动作自身权限合并去重。
+    pub fn effective_permissions(&self, plugin_permissions: &[String]) -> Vec<String> {
+        let mut result = Vec::new();
+        for permission in plugin_permissions.iter().chain(self.permissions.iter()) {
+            if !result.iter().any(|existing| existing == permission) {
+                result.push(permission.clone());
+            }
         }
-    }
-
-    /// 如果这是 `PrefixCommand` 匹配器，则返回命令字符串。
-    pub fn as_prefix_command(&self) -> Option<&str> {
-        match self {
-            Self::PrefixCommand { command } => Some(command),
-            _ => None,
-        }
+        result
     }
 }
 
@@ -93,6 +76,9 @@ pub enum ConcurrencyPolicy {
 pub struct ActionInput {
     pub kind: InputType,
     pub text: String,
+    /// 仅当 `kind == ClipboardImage` 时携带；图片字节来自剪贴板，不要求是磁盘文件。
+    #[serde(default)]
+    pub image: Option<ImageData>,
 }
 
 impl ActionInput {
@@ -100,8 +86,37 @@ impl ActionInput {
         Self {
             kind: InputType::PlainText,
             text: text.into(),
+            image: None,
         }
     }
+
+    /// 构造一张来自剪贴板的图片输入。图片不要求落盘为文件。
+    pub fn clipboard_image(mime: impl Into<String>, bytes: Vec<u8>) -> Self {
+        Self {
+            kind: InputType::ClipboardImage,
+            text: String::new(),
+            image: Some(ImageData {
+                mime: mime.into(),
+                bytes,
+            }),
+        }
+    }
+
+    /// 构造“无输入”的归一化输入（供 `InputType::None` 的动作使用）。
+    pub fn none() -> Self {
+        Self {
+            kind: InputType::None,
+            text: String::new(),
+            image: None,
+        }
+    }
+}
+
+/// 图片输入数据。`mime` 为 MIME 类型，`bytes` 为原始图片字节。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ImageData {
+    pub mime: String,
+    pub bytes: Vec<u8>,
 }
 
 /// Phase 1 输入类型分类。
@@ -113,6 +128,8 @@ pub enum InputType {
     PathCandidate,
     MathExpression,
     File,
+    /// 剪贴板中的临时图片（例如截图后复制），不要求对应磁盘文件。
+    ClipboardImage,
     /// 没有输入类型（动作不接受输入）
     None,
 }
@@ -144,15 +161,6 @@ pub enum ActionVisibility {
     #[default]
     Public,
     Internal,
-}
-
-/// 动作的风险等级。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-pub enum RiskLevel {
-    #[default]
-    ReadOnly,
-    SideEffecting,
-    Destructive,
 }
 
 /// 动作的调用策略（是否需要交互）。
@@ -272,6 +280,45 @@ mod tests {
     use crate::caller::CallerKind;
 
     #[test]
+    fn effective_permissions_inherit_plugin_permissions_and_dedupe() {
+        let mut descriptor = ActionDescriptor::new(
+            ActionId::from_static("demo.action"),
+            "Demo",
+            vec!["demo".into()],
+            ConcurrencyPolicy::Parallel,
+        );
+        descriptor.permissions = vec!["fs.read".into(), "network.http".into()];
+        let effective =
+            descriptor.effective_permissions(&["fs.read".into(), "clipboard.read".into()]);
+        assert_eq!(
+            effective,
+            vec![
+                "fs.read".to_string(),
+                "clipboard.read".to_string(),
+                "network.http".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn clipboard_image_input_round_trips() {
+        let input = ActionInput::clipboard_image("image/png", vec![1, 2, 3, 4]);
+        assert_eq!(input.kind, InputType::ClipboardImage);
+        assert_eq!(input.image.as_ref().unwrap().mime, "image/png");
+        assert_eq!(input.image.as_ref().unwrap().bytes, vec![1, 2, 3, 4]);
+        let json = serde_json::to_string(&input).unwrap();
+        let back: ActionInput = serde_json::from_str(&json).unwrap();
+        assert_eq!(input, back);
+    }
+
+    #[test]
+    fn old_action_input_without_image_still_decodes() {
+        let input: ActionInput =
+            serde_json::from_value(serde_json::json!({"kind":"PlainText","text":"hi"})).unwrap();
+        assert_eq!(input, ActionInput::plain_text("hi"));
+    }
+
+    #[test]
     fn action_request_echo_has_ui_caller() {
         let req = ActionRequest::new_echo("hello", Caller::ui("search-panel"));
         assert_eq!(req.caller.kind, CallerKind::Ui);
@@ -307,15 +354,6 @@ mod tests {
             // 调试比较
             assert_eq!(format!("{outcome:?}"), format!("{back:?}"));
         }
-    }
-
-    #[test]
-    fn matcher_prefix_command_round_trips() {
-        let m = Matcher::prefix_command("echo");
-        let json = serde_json::to_string(&m).unwrap();
-        assert!(json.contains("echo"));
-        let back: Matcher = serde_json::from_str(&json).unwrap();
-        assert_eq!(back.as_prefix_command(), Some("echo"));
     }
 
     fn empty_surface() -> crate::surface::SurfaceContent {

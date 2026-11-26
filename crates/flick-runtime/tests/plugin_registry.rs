@@ -35,9 +35,9 @@ impl ActionHandler for NoopHandler {
 
 fn manifest(id: &str) -> PluginManifest {
     PluginManifest {
-        id: id.into(), name: "P".into(), version: "1.0.0".into(),
-        kind: PluginKind::BuiltInRust, keywords: vec![], profile: PluginProfile::default(),
-        capabilities: vec![], plugin_dependencies: vec![], settings: vec![], surfaces: vec![],
+        id: id.into(), name: "P".into(), author: "Flick".into(), version: "1.0.0".into(),
+        kind: PluginKind::BuiltInRust, keywords: vec![], icon: None, profile: PluginProfile::default(),
+        permissions: vec![], plugin_dependencies: vec![], settings: vec![], surfaces: vec![],
         supported_os: vec![], supported_architectures: vec![],
         needs_search: false,
     }
@@ -46,7 +46,7 @@ fn manifest(id: &str) -> PluginManifest {
 fn spec(id: &str) -> ActionSpec {
     ActionSpec {
         descriptor: ActionDescriptor::new(
-            ActionId::new(id).unwrap(), "T", vec![], Matcher::prefix_command("x"),
+            ActionId::new(id).unwrap(), "T", vec!["x".into()],
             ConcurrencyPolicy::Parallel,
         ),
         handler: Arc::new(NoopHandler),
@@ -69,6 +69,18 @@ fn register_plugin_success() {
     let p = P { m: manifest("demo.plugin"), a: vec![spec("demo.plugin.run")] };
     reg.register_plugin(&p).unwrap();
     assert!(reg.find_by_id(&ActionId::from_static("demo.plugin.run")).is_some());
+}
+
+#[test]
+fn register_plugin_rejects_empty_author() {
+    let mut reg = ActionRegistry::new();
+    let mut m = manifest("demo.plugin");
+    m.author = "   ".into();
+    let p = P { m, a: vec![spec("demo.plugin.run")] };
+    match reg.register_plugin(&p).unwrap_err() {
+        PluginRegistrationError::InvalidManifest { reason } => assert!(reason.contains("author")),
+        e => panic!("expected invalid manifest, got {e:?}"),
+    }
 }
 
 #[test]
@@ -138,7 +150,7 @@ async fn runtime_register_plugin_routes_and_invokes() {
     let rt = flick_runtime::ActionRuntime::default();
     let p = P { m: manifest("demo.plugin"), a: vec![spec("demo.plugin.run")] };
     rt.register_plugin(&p).await.unwrap();
-    // 该测试插件 matcher 为 prefix "x"，用 "x" 触发
+    // 该测试插件以关键词 "x" 召回
     let routes = rt.route("x", InputType::PlainText).await;
     assert_eq!(routes.len(), 1);
     // 用真实 id 构造请求（new_echo 返回 Self，非 async）

@@ -56,7 +56,6 @@ impl Plugin for SurfacePlugin {
                 ActionId::new("demo.surface.open").unwrap(),
                 "Open",
                 vec![],
-                Matcher::prefix_command("open"),
                 ConcurrencyPolicy::Parallel,
             ),
             handler: Arc::new(OpenHandler),
@@ -71,11 +70,13 @@ fn manifest(needs_search: bool) -> PluginManifest {
     PluginManifest {
         id: "demo.surface".into(),
         name: "Surface".into(),
+        author: "Flick".into(),
         version: "1.0.0".into(),
         kind: PluginKind::BuiltInRust,
         keywords: vec![],
+        icon: None,
         profile: PluginProfile::default(),
-        capabilities: vec![],
+        permissions: vec![],
         plugin_dependencies: vec![],
         settings: vec![],
         surfaces: vec![UiSurfaceDecl {

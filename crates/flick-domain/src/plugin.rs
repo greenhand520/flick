@@ -114,11 +114,19 @@ pub struct UiSurfaceDecl {
 pub struct PluginManifest {
     pub id: String,
     pub name: String,
+    /// 插件作者（必填；建议使用可展示的单一作者名）。
+    pub author: String,
     pub version: String,
     pub kind: PluginKind,
     pub keywords: Vec<String>,
+    /// 插件图标。内置 Rust 插件可填内嵌 SVG 或相对可执行文件的图片路径；
+    /// 推荐 SVG 或 `.svg` 文件，可省略。WASM 插件的图标规则后续定义。
+    #[serde(default)]
+    pub icon: Option<String>,
     pub profile: PluginProfile,
-    pub capabilities: Vec<String>,
+    /// 插件声明的权限。当前仅作声明，具体鉴权由宿主执行。
+    #[serde(default)]
+    pub permissions: Vec<String>,
     pub plugin_dependencies: Vec<PluginDependency>,
     pub settings: Vec<SettingDecl>,
     pub surfaces: Vec<UiSurfaceDecl>,
@@ -151,11 +159,13 @@ mod tests {
         PluginManifest {
             id: "demo.plugin".into(),
             name: "Demo".into(),
+            author: "Demo Author".into(),
             version: "1.0.0".into(),
             kind: PluginKind::BuiltInRust,
             keywords: vec![],
+            icon: None,
             profile: PluginProfile::default(),
-            capabilities: vec![],
+            permissions: vec![],
             plugin_dependencies: vec![],
             settings: vec![],
             surfaces: vec![],
@@ -173,6 +183,18 @@ mod tests {
         let back: PluginManifest =
             serde_json::from_value(serde_json::Value::Object(object)).unwrap();
         assert!(!back.needs_search);
+    }
+
+    #[test]
+    fn icon_and_permissions_default_when_missing() {
+        let value = serde_json::to_value(sample()).unwrap();
+        let mut object = value.as_object().unwrap().clone();
+        object.remove("icon");
+        object.remove("permissions");
+        let back: PluginManifest =
+            serde_json::from_value(serde_json::Value::Object(object)).unwrap();
+        assert!(back.icon.is_none());
+        assert!(back.permissions.is_empty());
     }
 
     #[test]

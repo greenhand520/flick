@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use flick_domain::{
     ActionContext, ActionDescriptor, ActionError, ActionId, ActionOutcome, ActionRequest, Category,
-    ConcurrencyPolicy, InputType, Matcher, PluginKind, PluginManifest, PluginProfile,
+    ConcurrencyPolicy, InputType, PluginKind, PluginManifest, PluginProfile,
 };
 use flick_runtime::{ActionHandler, ActionSpec, Plugin};
 
@@ -43,7 +43,6 @@ pub fn echo_descriptor() -> ActionDescriptor {
         ActionId::from_static(ECHO_ACTION_ID),
         "Echo",
         vec!["echo".into(), "回显".into(), "repeater".into()],
-        Matcher::prefix_command("echo"),
         ConcurrencyPolicy::Parallel,
     )
 }
@@ -56,8 +55,10 @@ impl Plugin for EchoPlugin {
         PluginManifest {
             id: "flick.builtin.echo".into(),
             name: "Echo".into(),
+            author: "Flick".into(),
             version: "1.0.0".into(),
             kind: PluginKind::BuiltInRust,
+            icon: None,
             keywords: vec!["echo".into(), "回显".into(), "repeater".into()],
             profile: PluginProfile {
                 description: "Echo 内置动作：将输入原样回显为结构化数据。".into(),
@@ -65,7 +66,7 @@ impl Plugin for EchoPlugin {
                 tags: vec!["echo".into(), "text".into()],
                 ..Default::default()
             },
-            capabilities: vec![],
+            permissions: vec![],
             plugin_dependencies: vec![],
             settings: vec![],
             surfaces: vec![],

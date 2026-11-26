@@ -55,23 +55,23 @@ impl ActionRegistry {
     /// 注册一个插件提供的全部动作，并做命名空间/冲突/元数据校验。
     ///
     /// 校验全部通过后才写入，避免半写入状态。
-    pub fn register_plugin(
-        &mut self,
-        plugin: &dyn Plugin,
-    ) -> Result<(), PluginRegistrationError> {
+    pub fn register_plugin(&mut self, plugin: &dyn Plugin) -> Result<(), PluginRegistrationError> {
         let manifest = plugin.manifest();
         if manifest.id.trim().is_empty() {
             return Err(PluginRegistrationError::InvalidManifest {
                 reason: "empty plugin id".into(),
             });
         }
+        if manifest.author.trim().is_empty() {
+            return Err(PluginRegistrationError::InvalidManifest {
+                reason: "empty plugin author".into(),
+            });
+        }
         // 设置 key 唯一
         let mut seen_keys = std::collections::HashSet::new();
         for s in &manifest.settings {
             if !seen_keys.insert(s.key.as_str()) {
-                return Err(PluginRegistrationError::DuplicateSettingKey {
-                    key: s.key.clone(),
-                });
+                return Err(PluginRegistrationError::DuplicateSettingKey { key: s.key.clone() });
             }
         }
         // surface id 唯一
@@ -114,8 +114,7 @@ impl ActionRegistry {
             );
         }
         if let Some(handler) = plugin.surface_handler() {
-            self.surface_handlers
-                .insert(manifest.id.clone(), handler);
+            self.surface_handlers.insert(manifest.id.clone(), handler);
         }
         self.manifests.insert(manifest.id.clone(), manifest);
         Ok(())
@@ -142,14 +141,8 @@ impl ActionRegistry {
 
     /// 搜索匹配的动作。
     ///
-    /// 依次执行两种匹配策略：
-    ///
-    /// 1. **前缀命令匹配** — 如果 `query` 以已注册的
-    ///    `PrefixCommand { command }` 开头，**并且**紧接在命令
-    ///    之后的字符是字符串结尾或空白字符
-    ///    （词边界），则该动作会以高分返回。
-    /// 2. **关键字匹配** — 将查询词元与每个描述符的关键字
-    ///    进行不区分大小写的比较。
+    /// 当前过渡实现只做关键词召回：将查询词元与每个描述符的关键字
+    /// 进行不区分大小写比较。前缀命令匹配将随输入搜索/路由重构另行设计。
     ///
     /// 结果按分数降序排列。
     pub fn search(&self, query: &str, _input_kind: InputType) -> Vec<RouteItem> {
@@ -159,51 +152,31 @@ impl ActionRegistry {
         }
 
         let query_lower = query_trimmed.to_ascii_lowercase();
+        let tokens: Vec<&str> = query_lower.split_whitespace().collect();
         let mut results: Vec<RouteItem> = Vec::new();
 
         for entry in self.entries.values() {
-            // ── 1. 前缀命令匹配 ──────────────────────────
-            if let flick_domain::Matcher::PrefixCommand { command } = &entry.descriptor.matcher {
-                let cmd_lower = command.to_ascii_lowercase();
-                if query_lower.starts_with(&cmd_lower) {
-                    // 词边界检查：下一个字符必须是空格或字符串结尾
-                    let rest = &query_lower[cmd_lower.len()..];
-                    if rest.is_empty() || rest.starts_with(char::is_whitespace) {
-                        results.push(RouteItem {
-                            action_id: entry.descriptor.id.clone(),
-                            title: entry.descriptor.title.clone(),
-                            score: 1.0, // 最高优先级
-                        });
-                        continue;
-                    }
+            let kw_lower: Vec<String> = entry
+                .descriptor
+                .keywords
+                .iter()
+                .map(|k| k.to_ascii_lowercase())
+                .collect();
+
+            let mut matched = 0usize;
+            for token in &tokens {
+                if kw_lower.iter().any(|kw| kw.contains(token)) {
+                    matched += 1;
                 }
             }
 
-            // ── 2. 关键字匹配 ─────────────────────────────────
-            if matches!(entry.descriptor.matcher, flick_domain::Matcher::Keyword) {
-                let tokens: Vec<&str> = query_lower.split_whitespace().collect();
-                let kw_lower: Vec<String> = entry
-                    .descriptor
-                    .keywords
-                    .iter()
-                    .map(|k| k.to_ascii_lowercase())
-                    .collect();
-
-                let mut matched = 0usize;
-                for token in &tokens {
-                    if kw_lower.iter().any(|kw| kw.contains(token)) {
-                        matched += 1;
-                    }
-                }
-
-                if matched > 0 {
-                    let score = matched as f64 / tokens.len() as f64;
-                    results.push(RouteItem {
-                        action_id: entry.descriptor.id.clone(),
-                        title: entry.descriptor.title.clone(),
-                        score,
-                    });
-                }
+            if matched > 0 {
+                let score = matched as f64 / tokens.len() as f64;
+                results.push(RouteItem {
+                    action_id: entry.descriptor.id.clone(),
+                    title: entry.descriptor.title.clone(),
+                    score,
+                });
             }
         }
 
@@ -225,7 +198,7 @@ impl Default for ActionRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flick_domain::{ActionDescriptor, ActionId, ConcurrencyPolicy, Matcher};
+    use flick_domain::{ActionDescriptor, ActionId, ConcurrencyPolicy};
 
     /// 用于测试的空操作处理器。
     struct NoopHandler;
@@ -248,7 +221,6 @@ mod tests {
             ActionId::from_static("flick.builtin.echo.v1.echo"),
             "Echo",
             vec!["echo".into(), "repeat".into()],
-            Matcher::prefix_command("echo"),
             ConcurrencyPolicy::Parallel,
         )
     }
@@ -258,7 +230,6 @@ mod tests {
             ActionId::from_static("flick.builtin.notes.v1.search"),
             "Search Notes",
             vec!["note".into(), "notes".into(), "search".into()],
-            Matcher::Keyword,
             ConcurrencyPolicy::Parallel,
         )
     }
@@ -279,7 +250,7 @@ mod tests {
     }
 
     #[test]
-    fn prefix_command_matches_with_word_boundary() {
+    fn keyword_matches_query_tokens() {
         let mut reg = ActionRegistry::new();
         reg.register(echo_descriptor(), Arc::new(NoopHandler));
 
@@ -291,9 +262,12 @@ mod tests {
             ActionId::from_static("flick.builtin.echo.v1.echo")
         );
 
-        // "echohello" 不应匹配（无词边界）
+        // "echohello" 不含关键词 "echo"（关键词方向是 kw.contains(token)）
         let results = reg.search("echohello", InputType::PlainText);
-        assert!(results.is_empty(), "echohello should not match echo prefix");
+        assert!(
+            results.is_empty(),
+            "echohello should not match echo keyword"
+        );
     }
 
     #[test]

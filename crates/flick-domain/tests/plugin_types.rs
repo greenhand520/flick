@@ -5,9 +5,11 @@ fn plugin_manifest_roundtrips_via_json() {
     let manifest = PluginManifest {
         id: "io.github.demo.notes".into(),
         name: "Notes".into(),
+        author: "Demo Author".into(),
         version: "1.0.0".into(),
         kind: PluginKind::BuiltInRust,
         keywords: vec!["notes".into()],
+        icon: None,
         profile: PluginProfile {
             description: "demo".into(),
             categories: vec![Category::Productivity],
@@ -16,7 +18,7 @@ fn plugin_manifest_roundtrips_via_json() {
             execution: ExecutionMode::Local,
             data_handling: None,
         },
-        capabilities: vec![],
+        permissions: vec![],
         plugin_dependencies: vec![PluginDependency {
             plugin_id: "flick.builtin.host".into(),
             requirement: DependencyRequirement::Optional,
@@ -61,14 +63,12 @@ fn action_descriptor_new_fills_phase1_defaults() {
         ActionId::from_static("flick.builtin.host.show_info"),
         "系统信息",
         vec!["host".into(), "系统".into()],
-        Matcher::prefix_command("host"),
         ConcurrencyPolicy::Parallel,
     );
     assert_eq!(d.supported_inputs, vec![InputType::PlainText]);
     assert!(d.file_extensions.is_empty());
     assert_eq!(d.output_types, vec![OutputType::Data]);
     assert_eq!(d.visibility, ActionVisibility::Public);
-    assert_eq!(d.risk_level, RiskLevel::ReadOnly);
     assert_eq!(d.invocation_policy, InvocationPolicy::NonInteractive);
 }
 
@@ -101,11 +101,13 @@ fn manifest_supports_platform_treats_empty_as_wildcard() {
     let m = PluginManifest {
         id: "demo.plugin".into(),
         name: "Demo".into(),
+        author: "Demo Author".into(),
         version: "1.0.0".into(),
         kind: PluginKind::BuiltInRust,
         keywords: vec![],
+        icon: None,
         profile: PluginProfile::default(),
-        capabilities: vec![],
+        permissions: vec![],
         plugin_dependencies: vec![],
         settings: vec![],
         surfaces: vec![],

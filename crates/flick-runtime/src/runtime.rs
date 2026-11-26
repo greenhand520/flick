@@ -4,8 +4,8 @@ use crate::handler::ActionHandler;
 use crate::plugin::{Plugin, PluginRegistrationError, SurfaceError, SurfaceSession};
 use crate::registry::ActionRegistry;
 use flick_domain::{
-    ActionContext, ActionDescriptor, ActionError, ActionInput, ActionOutcome, ActionRequest, InputType,
-    InvocationId, RouteItem, SurfaceContent, SurfaceEventKind, SurfaceSessionId,
+    ActionContext, ActionDescriptor, ActionError, ActionInput, ActionOutcome, ActionRequest,
+    InputType, InvocationId, RouteItem, SurfaceContent, SurfaceEventKind, SurfaceSessionId,
 };
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -70,7 +70,10 @@ impl ActionRuntime {
     ///
     /// 获取注册表上的写锁，在注册期间持有，注册完成后立即释放。
     /// 返回注册过程中出现的任何 [`PluginRegistrationError`]。
-    pub async fn register_plugin(&self, plugin: &dyn Plugin) -> Result<(), PluginRegistrationError> {
+    pub async fn register_plugin(
+        &self,
+        plugin: &dyn Plugin,
+    ) -> Result<(), PluginRegistrationError> {
         let mut registry = self.registry.write().await;
         registry.register_plugin(plugin)
     }
@@ -118,10 +121,7 @@ impl ActionRuntime {
         };
         // 注册表的读锁在此处释放
         if accepts_no_input && request.input.kind != InputType::None {
-            request.input = ActionInput {
-                kind: InputType::None,
-                text: String::new(),
-            };
+            request.input = ActionInput::none();
         }
 
         // ── 2. 准备取消令牌并生成任务 ───────────────────

@@ -4,7 +4,7 @@
 
 use flick_domain::{
     ActionContext, ActionDescriptor, ActionError, ActionId, ActionOutcome, ActionRequest, Caller,
-    ConcurrencyPolicy, Deadline, InputType, Matcher,
+    ConcurrencyPolicy, Deadline, InputType,
 };
 use flick_runtime::{ActionHandler, ActionRuntime};
 use std::sync::Arc;
@@ -58,7 +58,6 @@ fn echo_descriptor() -> ActionDescriptor {
         ActionId::from_static("flick.builtin.echo.v1.echo"),
         "Echo",
         vec!["echo".into(), "repeat".into()],
-        Matcher::prefix_command("echo"),
         ConcurrencyPolicy::Parallel,
     )
 }
@@ -117,14 +116,14 @@ async fn runtime_routes_echo_for_plain_text_and_executes_for_ui_and_cli() {
     }
 }
 
-/// 场景："echo hello" 通过前缀命令匹配（去掉 "echo "
-/// 前缀 → "hello"），而 "echohello" 不匹配，因为
-/// "echo" 之后没有词边界。
+/// 场景："echo hello" 通过 `echo` 关键词命中；运行时把完整 query
+/// 交给 Action，Action 自行解析（测试 handler 自行剥离 `echo ` 前缀）。
+/// "echohello" 不命中，因为关键词召回不是任意子串匹配。
 #[tokio::test]
-async fn exact_echo_prefix_binds_remaining_text_without_special_ui_path() {
+async fn echo_keyword_routes_and_action_receives_full_query() {
     let rt = runtime_with_echo().await;
 
-    // "echo hello" → 匹配，剩余部分为 "hello"
+    // "echo hello" → 关键词 "echo" 命中
     let routes = rt.route("echo hello", InputType::PlainText).await;
     assert_eq!(
         routes.len(),
@@ -136,7 +135,7 @@ async fn exact_echo_prefix_binds_remaining_text_without_special_ui_path() {
         ActionId::from_static("flick.builtin.echo.v1.echo")
     );
 
-    // 调用以确认文本被正确去掉前缀
+    // 运行时传完整 query；测试 handler 自行剥离前缀
     let req = echo_request("echo hello", Caller::cli("test"));
     let outcome = rt.invoke(req).await;
     match outcome {
@@ -146,11 +145,11 @@ async fn exact_echo_prefix_binds_remaining_text_without_special_ui_path() {
         other => panic!("expected Data with 'hello', got {other:?}"),
     }
 
-    // "echohello" → 必须不匹配（无词边界）
+    // "echohello" → 不命中关键词 "echo"
     let routes = rt.route("echohello", InputType::PlainText).await;
     assert!(
         routes.is_empty(),
-        "'echohello' must not match echo prefix — no word boundary"
+        "'echohello' must not match the echo keyword"
     );
 }
 
@@ -167,7 +166,6 @@ async fn cancelling_an_invocation_returns_cancelled_outcome_or_stops_work() {
             slow_id.clone(),
             "Slow",
             vec!["slow".into()],
-            Matcher::Keyword,
             ConcurrencyPolicy::Parallel,
         ),
         Arc::new(SlowHandler {

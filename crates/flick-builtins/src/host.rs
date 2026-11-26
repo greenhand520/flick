@@ -16,7 +16,6 @@ impl HostPlugin {
             ActionId::from_static(HOST_ACTION_ID),
             "系统信息",
             vec!["host".into(), "系统".into(), "info".into()],
-            Matcher::prefix_command("host"),
             ConcurrencyPolicy::Parallel,
         );
         d.supported_inputs = vec![InputType::None];
@@ -30,8 +29,10 @@ impl Plugin for HostPlugin {
         PluginManifest {
             id: "flick.builtin.host".into(),
             name: "Host Info".into(),
+            author: "Flick".into(),
             version: "1.0.0".into(),
             kind: PluginKind::BuiltInRust,
+            icon: None,
             keywords: vec![
                 "host".into(),
                 "系统信息".into(),
@@ -46,7 +47,7 @@ impl Plugin for HostPlugin {
                 execution: ExecutionMode::Local,
                 data_handling: None,
             },
-            capabilities: vec![],
+            permissions: vec![],
             plugin_dependencies: vec![],
             settings: vec![],
             surfaces: vec![UiSurfaceDecl {
