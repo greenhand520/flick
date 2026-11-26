@@ -9,12 +9,17 @@
 //! `remove_window` 销毁窗口。因此隐藏时没有窗口、不会在任务栏留图标；再次唤起是全新映射的窗口，GNOME
 //! 会把新窗口带到前台，从而规避「后台应用无法抢焦点」的问题。
 
+use std::cell::Cell;
 use std::collections::HashMap;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
-use flick_domain::{ActionOutcome, HostToUi, SurfaceEventKind, SurfaceNode, UiToHost};
-use flick_ui::render::{col, render_surface_with_inputs, InputWidgetSpec};
+use flick_domain::{
+    ActionOutcome, FileInput, HostToUi, ImageData, InputSource, SearchInputSnapshot,
+    SurfaceEventKind, SurfaceNode, UiInputKind, UiToHost,
+};
+use flick_ui::render::{InputWidgetSpec, col, render_surface_with_inputs};
 use flick_ui::style::SurfaceStyle;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::label::Label;
@@ -22,19 +27,21 @@ use gpui_kit::component::{Icon, IconName, Sizable};
 use gpui_kit::*;
 use tokio::sync::mpsc;
 
-use crate::app::{
-    desired_size, AppState, DetachPayload, Effect, UiEvent, DEBOUNCE_MILLIS,
-};
+use crate::app::{AppState, DEBOUNCE_MILLIS, DetachPayload, Effect, UiEvent, desired_size};
+use crate::clipboard_watch::ClipboardWatch;
 use crate::theme::{self, Metrics, ThemeMode};
 
-actions!(flick_shell, [
-    HidePanel,
-    SelectNext,
-    SelectPrev,
-    ToggleThemeAction,
-    DetachSurface,
-    CloseDetached
-]);
+actions!(
+    flick_shell,
+    [
+        HidePanel,
+        SelectNext,
+        SelectPrev,
+        ToggleThemeAction,
+        DetachSurface,
+        CloseDetached
+    ]
+);
 
 /// 搜索面板视图，持有纯状态 + 输入实体 + 焦点 + 通道。
 pub struct AppView {
@@ -67,37 +74,81 @@ pub struct AppView {
     drag_origin: Option<(f32, f32)>,
     /// 面板相对默认位置的偏移（overlay 内拖动）。
     panel_offset: (f32, f32),
+    /// 当前搜索框的文件/图片附件（文本不重复存附件）。
+    attachments: Attachments,
+    /// 应用级剪贴板观察器（窗口重建后仍可用）。
+    clipboard_watch: ClipboardWatch,
+    /// 从 `on_paste`/`on_drop` 闭包回到视图的弱引用。
+    weak_self: WeakEntity<AppView>,
+    /// 文本粘贴标记：由 `Input::on_paste` 设置，随后 `InputEvent::Change` 消费。
+    paste_text_pending: Rc<Cell<bool>>,
+}
+
+/// 搜索框附带的非文本内容。
+#[derive(Default)]
+struct Attachments {
+    files: Vec<FileInput>,
+    image: Option<ImageData>,
+}
+
+impl Attachments {
+    /// 用完整快照替换附件；文本快照会清空附件。
+    fn replace(&mut self, snapshot: &SearchInputSnapshot) {
+        self.files = snapshot.files.clone();
+        self.image = snapshot.image.clone();
+    }
+
+    /// 是否为空（决定是否需要 chip 行）。
+    fn is_empty(&self) -> bool {
+        self.files.is_empty() && self.image.is_none()
+    }
 }
 
 impl AppView {
     /// 创建窗口内容。宿主事件不再由本视图订阅通道，而是由 `lib.rs` 的事件泵通过
     /// [`AppView::on_host`] 转发（这样窗口销毁后事件泵仍存活，可再开新窗口）。
-    pub fn new(
+    pub(crate) fn new(
         host_tx: mpsc::UnboundedSender<UiToHost>,
         hide_tx: mpsc::UnboundedSender<()>,
         detach_tx: mpsc::UnboundedSender<(DetachPayload, ThemeMode)>,
         theme_tx: mpsc::UnboundedSender<ThemeMode>,
+        clipboard_watch: ClipboardWatch,
         initial: ThemeMode,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        let weak_self = cx.entity().downgrade();
+        let paste_text_pending = Rc::new(Cell::new(false));
         let input = cx.new(|cx| InputState::new(window, cx).placeholder("搜索"));
         let focus = cx.focus_handle();
         // 输入框自身的焦点句柄：既用于「打开即聚焦」，也用于失焦隐藏（blur→hide）。
         let input_focus = input.focus_handle(cx);
 
-        let input_sub = cx.subscribe_in(&input, window, |this, state, event, window, cx| {
-            match event {
+        let input_sub = cx.subscribe_in(
+            &input,
+            window,
+            |this, state, event, window, cx| match event {
                 InputEvent::Change => {
                     let text = state.read(cx).value().to_string();
-                    this.dispatch(UiEvent::InputChanged(text), window, cx);
+                    if this.paste_text_pending.replace(false) {
+                        this.dispatch(
+                            UiEvent::InputCaptured(SearchInputSnapshot::text(
+                                text,
+                                InputSource::Paste,
+                            )),
+                            window,
+                            cx,
+                        );
+                    } else {
+                        this.dispatch(UiEvent::InputChanged(text), window, cx);
+                    }
                 }
                 InputEvent::PressEnter { .. } => {
                     this.dispatch(UiEvent::Submitted, window, cx);
                 }
                 _ => {}
-            }
-        });
+            },
+        );
 
         let mut view = Self {
             state: AppState::new(initial),
@@ -117,6 +168,10 @@ impl AppView {
             suppress_surface_closed: false,
             drag_origin: None,
             panel_offset: (0.0, 0.0),
+            attachments: Attachments::default(),
+            clipboard_watch,
+            weak_self,
+            paste_text_pending,
         };
         // 打开即聚焦输入框，用户可直接输入。
         window.focus(&input_focus, cx);
@@ -126,6 +181,7 @@ impl AppView {
                 view.dispatch(UiEvent::InputChanged(q), window, cx);
             }
         }
+        view.try_import_recent_clipboard(window, cx);
         view
     }
 
@@ -145,7 +201,68 @@ impl AppView {
         self.dispatch(UiEvent::Host(event), window, cx);
     }
 
+    /// 应用完整输入快照：同步受控 Input 文本，再进入统一的 dispatch 流程。
+    fn apply_captured_input(
+        &mut self,
+        snapshot: SearchInputSnapshot,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.input.update(cx, |state, input_cx| {
+            state.set_value(snapshot.text.clone(), window, input_cx);
+        });
+        self.dispatch(UiEvent::InputCaptured(snapshot), window, cx);
+    }
+
+    /// 开窗时若剪贴板在最近 5 秒内变化，自动带入并立刻触发路由。
+    fn try_import_recent_clipboard(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(item) = cx.read_from_clipboard() else {
+            return;
+        };
+        let now = std::time::Instant::now();
+        self.clipboard_watch.observe(&item, now);
+        let within_window = self
+            .clipboard_watch
+            .recent_at(now)
+            .is_some_and(|recent| {
+                now.saturating_duration_since(recent.changed_at)
+                    <= ClipboardWatch::RECENT_WINDOW
+            });
+        if !within_window {
+            return;
+        }
+        let Some(snapshot) =
+            crate::input_capture::snapshot_from_clipboard_item(&item, InputSource::ClipboardRecent)
+        else {
+            return;
+        };
+        if snapshot.kind == UiInputKind::Text {
+            self.input.update(cx, |state, input_cx| {
+                state.set_value(snapshot.text.clone(), window, input_cx);
+            });
+        }
+        self.dispatch(UiEvent::InputCaptured(snapshot), window, cx);
+    }
+
+    /// 外部路径拖入：转为文件快照并同步输入。
+    fn apply_dropped_paths(
+        &mut self,
+        paths: &[std::path::PathBuf],
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(snapshot) =
+            crate::input_capture::snapshot_from_paths(paths, InputSource::DragDrop)
+        else {
+            return;
+        };
+        self.apply_captured_input(snapshot, window, cx);
+    }
+
     fn dispatch(&mut self, event: UiEvent, window: &mut Window, cx: &mut Context<Self>) {
+        if let UiEvent::InputCaptured(snapshot) = &event {
+            self.attachments.replace(snapshot);
+        }
         let effects = self.state.update(event);
         self.apply(effects, window, cx);
         // 面板已隐藏时窗口即将被应用级泵销毁，不再为它 resize/调度下一帧，
@@ -364,7 +481,15 @@ impl Render for AppView {
                 cx.listener(|this, _ev: &MouseUpEvent, _window, _cx| {
                     this.drag_origin = None;
                 }),
-            );
+            )
+            .on_drop::<ExternalPaths>({
+                let weak = self.weak_self.clone();
+                move |paths: &ExternalPaths, window, cx| {
+                    let _ = weak.update(cx, |view, view_cx| {
+                        view.apply_dropped_paths(paths.paths(), window, view_cx);
+                    });
+                }
+            });
 
         let (ui, _metrics) = theme::resolve(self.state.theme);
         let (_, target_h) = desired_size(&self.state.panel, &self.metrics);
@@ -432,10 +557,36 @@ impl Render for AppView {
                                 // 覆盖 gpui Input Large 默认的 12px 左右内边距，
                                 // 保留字号，只把图标/文字拉近卡片边缘。
                                 .px(px(self.metrics.input_padding_h))
-                                .prefix(Icon::new(IconName::Search)),
+                                .prefix(Icon::new(IconName::Search))
+                                .on_paste({
+                                    let weak = self.weak_self.clone();
+                                    let pending = Rc::clone(&self.paste_text_pending);
+                                    move |item: &ClipboardItem, window, cx| {
+                                        let Some(snapshot) =
+                                            crate::input_capture::snapshot_from_clipboard_item(
+                                                item,
+                                                InputSource::Paste,
+                                            )
+                                        else {
+                                            return false;
+                                        };
+                                        if snapshot.kind == UiInputKind::Text {
+                                            pending.set(true);
+                                            return false;
+                                        }
+                                        let _ = weak.update(cx, |view, view_cx| {
+                                            view.apply_captured_input(snapshot, window, view_cx);
+                                        });
+                                        true
+                                    }
+                                }),
                         ),
                 ),
         );
+
+        if let Some(chips) = render_attachment_chips(&self.attachments, &ui, &self.metrics) {
+            panel = panel.child(chips);
+        }
 
         // 仅覆盖主题颜色与行圆角；高度相关字段（pad/row_gap/line_height/
         // section_gap）保持 `SurfaceStyle::default()`，与 `app.rs` 中
@@ -617,6 +768,51 @@ impl Render for AppView {
         root = root.child(panel);
         root.into_any_element()
     }
+}
+
+/// 渲染文件/图片附件 chip；没有附件时返回 `None`（完全不占高度）。
+fn render_attachment_chips(
+    attachments: &Attachments,
+    ui: &theme::UiTheme,
+    metrics: &Metrics,
+) -> Option<AnyElement> {
+    if attachments.is_empty() {
+        return None;
+    }
+    let mut row = div()
+        .w_full()
+        .flex()
+        .flex_wrap()
+        .items_center()
+        .gap(px(6.0))
+        .px(px(metrics.input_padding_h))
+        .pb(px(metrics.content_gap));
+    for file in &attachments.files {
+        row = row.child(
+            div()
+                .rounded_full()
+                .px_2()
+                .py(px(2.0))
+                .bg(col(ui.surface))
+                .text_color(col(ui.text))
+                .child(Label::new(crate::input_capture::display_label(file))),
+        );
+    }
+    if let Some(image) = &attachments.image {
+        row = row.child(
+            div()
+                .rounded_full()
+                .px_2()
+                .py(px(2.0))
+                .bg(col(ui.surface))
+                .text_color(col(ui.text))
+                .child(Label::new(format!(
+                    "图片 {}",
+                    image.mime
+                ))),
+        );
+    }
+    Some(row.into_any_element())
 }
 
 /// Surface 内一个可编辑文本节点的值快照（用于建立/同步控件）。

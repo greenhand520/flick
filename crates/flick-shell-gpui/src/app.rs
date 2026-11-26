@@ -16,6 +16,8 @@ pub const DEBOUNCE_MILLIS: u64 = 150;
 #[derive(Debug, Clone)]
 pub enum UiEvent {
     InputChanged(String),
+    /// UI 采集到完整输入快照（粘贴/拖拽/图片）。
+    InputCaptured(SearchInputSnapshot),
     Submitted,
     EscapePressed,
     SelectionUp,
@@ -115,6 +117,10 @@ impl AppState {
             UiEvent::InputChanged(text) => {
                 self.surface_error = None;
                 self.apply_panel_event(PanelEvent::InputChanged(text))
+            }
+            UiEvent::InputCaptured(snapshot) => {
+                self.surface_error = None;
+                self.apply_panel_event(PanelEvent::InputCaptured(snapshot))
             }
             UiEvent::Submitted => self.apply_panel_event(PanelEvent::Submitted),
             UiEvent::EscapePressed => self.apply_panel_event(PanelEvent::EscapePressed),
@@ -465,5 +471,28 @@ mod tests {
             message: "ignored".into(),
         }));
         assert_eq!(s.surface_error(), None);
+    }
+
+    #[test]
+    fn captured_snapshot_dispatches_input_captured_event() {
+        use flick_domain::{FileInput, InputSource};
+
+        let mut s = state();
+        let file = FileInput {
+            uri: "file:///tmp/a.png".into(),
+            display_name: "a.png".into(),
+            extension: Some("png".into()),
+            is_dir: false,
+            mime: Some("image/png".into()),
+        };
+        let snapshot = SearchInputSnapshot::files(vec![file], InputSource::Paste);
+        let effects = s.update(UiEvent::InputCaptured(snapshot.clone()));
+
+        assert_eq!(s.panel.input, snapshot);
+        assert!(
+            effects
+                .iter()
+                .any(|e| matches!(e, Effect::StartDebounce { .. }))
+        );
     }
 }

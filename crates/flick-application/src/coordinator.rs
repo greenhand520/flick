@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use flick_domain::{
-    ActionRequest, Caller, Deadline, HostToUi, InputType, RouteItem, RouteItemKind, UiIntent,
+    ActionRequest, Caller, Deadline, HostToUi, RouteItem, RouteItemKind, UiIntent,
     UiToHost,
 };
 

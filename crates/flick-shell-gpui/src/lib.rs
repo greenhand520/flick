@@ -188,6 +188,7 @@ fn open_panel_window(
     hide_tx: mpsc::UnboundedSender<()>,
     detach_tx: mpsc::UnboundedSender<(DetachPayload, ThemeMode)>,
     theme_tx: mpsc::UnboundedSender<ThemeMode>,
+    clipboard_watch: crate::clipboard_watch::ClipboardWatch,
     initial: ThemeMode,
 ) -> Result<AnyWindowHandle, String> {
     // GNOME/Wayland 下 `primary_display()` 在窗口创建前可能返回 None；此时退回
@@ -228,6 +229,7 @@ fn open_panel_window(
     let hide_tx1 = hide_tx.clone();
     let detach_tx1 = detach_tx.clone();
     let theme_tx1 = theme_tx.clone();
+    let clipboard_watch1 = clipboard_watch.clone();
     let result = app.open_window(options, move |window, cx| {
         cx.new(|cx| {
             AppView::new(
@@ -235,6 +237,7 @@ fn open_panel_window(
                 hide_tx1,
                 detach_tx1,
                 theme_tx1,
+                clipboard_watch1,
                 initial,
                 window,
                 cx,
@@ -260,13 +263,24 @@ fn open_panel_window(
             };
             app.open_window(fallback, move |window, cx| {
                 cx.new(|cx| {
-                    AppView::new(host_tx, hide_tx, detach_tx, theme_tx, initial, window, cx)
+                    AppView::new(
+                        host_tx,
+                        hide_tx,
+                        detach_tx,
+                        theme_tx,
+                        clipboard_watch,
+                        initial,
+                        window,
+                        cx,
+                    )
                 })
             })
         }
         Err(err) => Err(err),
     };
-    result.map(|handle| handle.into()).map_err(|err| err.to_string())
+    result
+        .map(|handle| handle.into())
+        .map_err(|err| err.to_string())
 }
 
 /// 打开一个独立 Surface 窗口（快照渲染 + 会话交互）。
@@ -358,6 +372,8 @@ pub fn run_with_theme(
         .with_quit_mode(QuitMode::Explicit)
         .run(move |cx| {
             init(cx);
+            // 应用级启动剪贴板轮询；窗口销毁/重建时通过克隆句柄继续复用同一观察状态。
+            let clipboard_watch = crate::clipboard_watch::ClipboardWatch::start(cx);
             // 让 gpui-kit 组件（Input/Label 等）使用与面板一致的暗/亮主题。
             gpui_kit::component::Theme::change(
                 match initial {
@@ -438,6 +454,7 @@ pub fn run_with_theme(
                                                 hide_tx_open.clone(),
                                                 detach_tx_open.clone(),
                                                 theme_tx_open.clone(),
+                                                clipboard_watch.clone(),
                                                 current_theme,
                                             )
                                         }) {
