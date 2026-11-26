@@ -63,7 +63,10 @@ pub(crate) fn snapshot_from_paths(
     paths: &[PathBuf],
     source: InputSource,
 ) -> Option<SearchInputSnapshot> {
-    let files: Vec<FileInput> = paths.iter().filter_map(|p| file_input_from_path(p)).collect();
+    let files: Vec<FileInput> = paths
+        .iter()
+        .filter_map(|p| file_input_from_path(p))
+        .collect();
     (!files.is_empty()).then(|| SearchInputSnapshot::files(files, source))
 }
 
@@ -121,15 +124,42 @@ pub(crate) fn clipboard_fingerprint(item: &ClipboardItem) -> u64 {
     hasher.finish()
 }
 
-/// 附件 chip 的短标签：最多 12 个字符，超出用 `…` 截断。
+/// 附件 chip 的短标签：文件名主体最多 10 个 Unicode 字符，超出用 `…` 截断；
+/// 有扩展名时保留 `.ext`，文件夹不追加扩展名。
+///
+/// 例：`flick-搜索匹配算法.pdf` → `flick-搜索匹配….pdf`（前 10 个字符）。
 pub(crate) fn display_label(file: &FileInput) -> String {
-    let mut chars = file.display_name.chars();
-    let prefix: String = chars.by_ref().take(12).collect();
+    const NAME_PREFIX_CHARS: usize = 10;
+
+    let extension = file
+        .extension
+        .as_deref()
+        .filter(|ext| !ext.is_empty() && !file.is_dir);
+    // 文件名的展示主体不含扩展名；若 `display_name` 末尾不是期望扩展名，
+    // 仍按扩展名切出可读主体，避免出现 `….pdf.pdf`。
+    let stem = extension
+        .and_then(|ext| {
+            let suffix = format!(".{ext}");
+            file.display_name.strip_suffix(&suffix).or_else(|| {
+                file.display_name
+                    .rsplit_once('.')
+                    .filter(|(_, actual)| actual.eq_ignore_ascii_case(ext))
+                    .map(|(stem, _)| stem)
+            })
+        })
+        .unwrap_or(&file.display_name);
+
+    let mut chars = stem.chars();
+    let prefix: String = chars.by_ref().take(NAME_PREFIX_CHARS).collect();
+    let mut label = prefix;
     if chars.next().is_some() {
-        format!("{prefix}…")
-    } else {
-        prefix
+        label.push('…');
     }
+    if let Some(ext) = extension {
+        label.push('.');
+        label.push_str(ext);
+    }
+    label
 }
 
 #[cfg(test)]
@@ -178,14 +208,26 @@ mod tests {
     }
 
     #[test]
-    fn display_label_truncates() {
+    fn display_label_truncates_stem_and_keeps_extension() {
         let file = FileInput {
             uri: "file:///tmp/x".into(),
-            display_name: "01234567890123456789".into(),
-            extension: None,
+            display_name: "flick-搜索匹配算法.pdf".into(),
+            extension: Some("pdf".into()),
             is_dir: false,
+            mime: Some("application/pdf".into()),
+        };
+        assert_eq!(display_label(&file), "flick-搜索匹配….pdf");
+    }
+
+    #[test]
+    fn display_label_truncates_folder_without_extension() {
+        let folder = FileInput {
+            uri: "file:///tmp/x".into(),
+            display_name: "一个非常非常长的文件夹名字".into(),
+            extension: None,
+            is_dir: true,
             mime: None,
         };
-        assert_eq!(display_label(&file), "012345678901…");
+        assert_eq!(display_label(&folder), "一个非常非常长的文件…");
     }
 }

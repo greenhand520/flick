@@ -8,8 +8,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use flick_domain::{
-    ActionRequest, Caller, Deadline, HostToUi, RouteItem, RouteItemKind, UiIntent,
-    UiToHost,
+    ActionRequest, Caller, Deadline, HostToUi, RouteItem, RouteItemKind, UiIntent, UiToHost,
 };
 
 use crate::ports::{HostEventSink, RuntimePort};
@@ -87,7 +86,8 @@ impl ApplicationCoordinator {
                 // 后者的结果作为 Execution 项排在各自父 Action 之后。
                 let (action_items, execution_items) = tokio::join!(
                     self.runtime.route(&action_input.text, action_input.kind),
-                    self.runtime.search_invoke(&action_input.text, action_input.kind),
+                    self.runtime
+                        .search_invoke(&action_input.text, action_input.kind),
                 );
                 let items = merge_search_results(action_items, execution_items);
 

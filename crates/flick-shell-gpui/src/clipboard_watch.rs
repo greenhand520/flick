@@ -35,22 +35,33 @@ impl ClipboardWatch {
     const POLL_INTERVAL: Duration = Duration::from_secs(1);
 
     /// 启动应用级轮询任务；任务随 `Application` 生命周期结束。
+    ///
+    /// 启动时先把当前剪贴板作为基线（只记指纹、不记变化时刻），避免应用启动前
+    /// 早已存在的旧内容被误判为“最近 5 秒变化”；之后真正的变化才更新时间。
     pub(crate) fn start(cx: &mut App) -> Self {
+        let baseline = cx
+            .read_from_clipboard()
+            .map(|item| clipboard_fingerprint(&item));
         let watch = Self {
-            state: Arc::new(Mutex::new(WatchState::default())),
+            state: Arc::new(Mutex::new(WatchState {
+                last_fingerprint: baseline,
+                last_change_at: None,
+            })),
         };
         let state = Arc::clone(&watch.state);
-        cx.spawn(async move |cx: &mut AsyncApp| loop {
-            cx.background_executor().timer(Self::POLL_INTERVAL).await;
-            let Some(item) = cx.update(|app| app.read_from_clipboard()) else {
-                continue;
-            };
-            let now = Instant::now();
-            let fingerprint = clipboard_fingerprint(&item);
-            let mut guard = state.lock().unwrap();
-            if guard.last_fingerprint != Some(fingerprint) {
-                guard.last_fingerprint = Some(fingerprint);
-                guard.last_change_at = Some(now);
+        cx.spawn(async move |cx: &mut AsyncApp| {
+            loop {
+                cx.background_executor().timer(Self::POLL_INTERVAL).await;
+                let Some(item) = cx.update(|app| app.read_from_clipboard()) else {
+                    continue;
+                };
+                let now = Instant::now();
+                let fingerprint = clipboard_fingerprint(&item);
+                let mut guard = state.lock().unwrap();
+                if guard.last_fingerprint != Some(fingerprint) {
+                    guard.last_fingerprint = Some(fingerprint);
+                    guard.last_change_at = Some(now);
+                }
             }
         })
         .detach();

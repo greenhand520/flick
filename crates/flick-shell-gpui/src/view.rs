@@ -208,8 +208,15 @@ impl AppView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // 文件/图片以附件 chip 展示，输入框保持空白，避免重复显示 file:// URI；
+        // 只有文本快照才同步到受控 Input。
+        let input_text = if snapshot.kind == UiInputKind::Text {
+            snapshot.text.clone()
+        } else {
+            String::new()
+        };
         self.input.update(cx, |state, input_cx| {
-            state.set_value(snapshot.text.clone(), window, input_cx);
+            state.set_value(input_text, window, input_cx);
         });
         self.dispatch(UiEvent::InputCaptured(snapshot), window, cx);
     }
@@ -221,13 +228,9 @@ impl AppView {
         };
         let now = std::time::Instant::now();
         self.clipboard_watch.observe(&item, now);
-        let within_window = self
-            .clipboard_watch
-            .recent_at(now)
-            .is_some_and(|recent| {
-                now.saturating_duration_since(recent.changed_at)
-                    <= ClipboardWatch::RECENT_WINDOW
-            });
+        let within_window = self.clipboard_watch.recent_at(now).is_some_and(|recent| {
+            now.saturating_duration_since(recent.changed_at) <= ClipboardWatch::RECENT_WINDOW
+        });
         if !within_window {
             return;
         }
@@ -236,11 +239,14 @@ impl AppView {
         else {
             return;
         };
-        if snapshot.kind == UiInputKind::Text {
-            self.input.update(cx, |state, input_cx| {
-                state.set_value(snapshot.text.clone(), window, input_cx);
-            });
-        }
+        let input_text = if snapshot.kind == UiInputKind::Text {
+            snapshot.text.clone()
+        } else {
+            String::new()
+        };
+        self.input.update(cx, |state, input_cx| {
+            state.set_value(input_text, window, input_cx);
+        });
         self.dispatch(UiEvent::InputCaptured(snapshot), window, cx);
     }
 
@@ -260,8 +266,12 @@ impl AppView {
     }
 
     fn dispatch(&mut self, event: UiEvent, window: &mut Window, cx: &mut Context<Self>) {
-        if let UiEvent::InputCaptured(snapshot) = &event {
-            self.attachments.replace(snapshot);
+        match &event {
+            UiEvent::InputCaptured(snapshot) => self.attachments.replace(snapshot),
+            // 用户开始手动键入时，立即清空自动带入/粘贴的附件，source 由 presenter
+            // 同步切回 Manual；键入内容不再因为看起来像路径而变成 Files。
+            UiEvent::InputChanged(_) => self.attachments = Attachments::default(),
+            _ => {}
         }
         let effects = self.state.update(event);
         self.apply(effects, window, cx);
@@ -785,39 +795,80 @@ fn render_attachment_chips(
     if attachments.is_empty() {
         return None;
     }
+    let row_height = if attachments.image.is_some() {
+        crate::app::ATTACHMENT_IMAGE_HEIGHT
+    } else {
+        crate::app::ATTACHMENT_ROW_HEIGHT
+    };
     let mut row = div()
         .w_full()
-        .h(px(crate::app::ATTACHMENT_ROW_HEIGHT))
+        .h(px(row_height))
         .flex()
         .items_center()
         .gap(px(6.0))
         .px(px(metrics.input_padding_h));
-    for file in &attachments.files {
-        row = row.child(
-            div()
-                .rounded_full()
-                .px_2()
-                .py(px(2.0))
-                .bg(col(ui.surface))
-                .text_color(col(ui.text))
-                .child(Label::new(crate::input_capture::display_label(file))),
-        );
+    // 多文件只展示第一个（规则同单文件），总数放在右上角徽标里。
+    if let Some(file) = attachments.files.first() {
+        row = row.child(render_file_chip(file, attachments.files.len(), ui));
     }
     if let Some(image) = &attachments.image {
-        row = row.child(
-            div()
-                .rounded_full()
-                .px_2()
-                .py(px(2.0))
-                .bg(col(ui.surface))
-                .text_color(col(ui.text))
-                .child(Label::new(format!(
-                    "图片 {}",
-                    image.mime
-                ))),
-        );
+        row = row.child(render_image_preview(image, ui));
     }
     Some(row.into_any_element())
+}
+
+/// 单个文件/文件夹 chip：图标 + 截断文件名（扩展名保留）。
+fn render_file_chip(file: &FileInput, total: usize, ui: &theme::UiTheme) -> AnyElement {
+    let icon = if file.is_dir {
+        IconName::Folder
+    } else {
+        IconName::FileText
+    };
+    let mut chip = div()
+        .relative()
+        .flex()
+        .items_center()
+        .gap(px(4.0))
+        .rounded_full()
+        .px_2()
+        .py(px(2.0))
+        .bg(col(ui.surface))
+        .text_color(col(ui.text))
+        .child(Icon::new(icon).small().text_color(col(ui.text_muted)))
+        .child(Label::new(crate::input_capture::display_label(file)));
+    if total > 1 {
+        chip = chip.child(
+            div()
+                .absolute()
+                .top(px(-6.0))
+                .right(px(-6.0))
+                .min_w(px(16.0))
+                .h(px(16.0))
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded_full()
+                .bg(col(ui.selected_fg))
+                .text_color(col(ui.panel_bg))
+                .text_size(px(10.0))
+                .child(total.to_string()),
+        );
+    }
+    chip.into_any_element()
+}
+
+/// 剪贴板图片预览：最大 96×64 逻辑像素，等比缩放（gpui 默认 ObjectFit::Contain）。
+fn render_image_preview(image: &ImageData, ui: &theme::UiTheme) -> AnyElement {
+    let format = ImageFormat::from_mime_type(&image.mime).unwrap_or(ImageFormat::Png);
+    let source = Arc::new(Image::from_bytes(format, image.bytes.clone()));
+    div()
+        .w(px(96.0))
+        .h(px(64.0))
+        .rounded(px(8.0))
+        .overflow_hidden()
+        .bg(col(ui.surface))
+        .child(gpui_kit::img(source).w_full().h_full())
+        .into_any_element()
 }
 
 /// Surface 内一个可编辑文本节点的值快照（用于建立/同步控件）。

@@ -22,7 +22,9 @@ pub enum UiEvent {
     EscapePressed,
     SelectionUp,
     SelectionDown,
-    DebounceElapsed { revision: u64 },
+    DebounceElapsed {
+        revision: u64,
+    },
     Host(HostToUi),
     WindowClosed,
     ToggleTheme,
@@ -185,23 +187,29 @@ pub fn active_surface(panel: &PanelState) -> Option<&SurfaceContent> {
 
 /// 附件 chip 行固定高度（文件/图片存在时占用）。
 pub const ATTACHMENT_ROW_HEIGHT: f32 = 24.0;
+/// 剪贴板图片预览的最大高度（逻辑像素）；宽度在 view 层按 96 等比布局。
+pub const ATTACHMENT_IMAGE_HEIGHT: f32 = 64.0;
+
+/// 附件区应占的高度：图片预览优先使用 64px，普通文件 chip 使用 24px。
+pub(crate) fn attachment_height(panel: &PanelState) -> f32 {
+    if panel.input.image.is_some() {
+        ATTACHMENT_IMAGE_HEIGHT
+    } else if !panel.input.files.is_empty() {
+        ATTACHMENT_ROW_HEIGHT
+    } else {
+        0.0
+    }
+}
 
 /// 由内容计算逻辑窗口尺寸（宽, 高）。修复 iced 缺陷 #2/#4 的核心公式。
 pub fn desired_size(panel: &PanelState, m: &Metrics) -> (f32, f32) {
-    let attachments_h = if panel.input.files.is_empty() && panel.input.image.is_none() {
-        0.0
-    } else {
-        ATTACHMENT_ROW_HEIGHT
-    };
+    let attachments_h = attachment_height(panel);
     // Surface 优先：内容即当前动作的输出视图，替换结果列表。
     if let Some(surface) = active_surface(panel) {
         let content_h = estimate_height(surface, &SurfaceStyle::default());
-        let height = (m.input_height
-            + m.content_gap
-            + content_h
-            + m.padding_bottom
-            + attachments_h)
-            .min(m.panel_max_height);
+        let height =
+            (m.input_height + m.content_gap + content_h + m.padding_bottom + attachments_h)
+                .min(m.panel_max_height);
         return (m.width, height.max(m.input_height + attachments_h));
     }
     let has_results = !(panel.routes.is_empty() && panel.last_outcome.is_none());
@@ -218,8 +226,8 @@ pub fn desired_size(panel: &PanelState, m: &Metrics) -> (f32, f32) {
     } else {
         0.0
     };
-    let height = (m.input_height + gap + results_h + bottom + attachments_h)
-        .min(m.panel_max_height);
+    let height =
+        (m.input_height + gap + results_h + bottom + attachments_h).min(m.panel_max_height);
     (m.width, height.max(m.input_height + attachments_h))
 }
 
@@ -256,6 +264,22 @@ mod tests {
         s.panel.input = SearchInputSnapshot::files(vec![file], InputSource::Paste);
         let (_, h) = desired_size(&s.panel, &Metrics::default());
         assert_eq!(h, 64.0 + ATTACHMENT_ROW_HEIGHT);
+    }
+
+    #[test]
+    fn image_attachment_uses_preview_height() {
+        use flick_domain::{ImageData, InputSource};
+
+        let mut s = state();
+        s.panel.input = SearchInputSnapshot::clipboard_image(
+            ImageData {
+                mime: "image/png".into(),
+                bytes: vec![1, 2, 3],
+            },
+            InputSource::ClipboardRecent,
+        );
+        let (_, h) = desired_size(&s.panel, &Metrics::default());
+        assert_eq!(h, 64.0 + ATTACHMENT_IMAGE_HEIGHT);
     }
 
     #[test]

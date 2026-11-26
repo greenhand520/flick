@@ -251,9 +251,9 @@ impl PanelState {
         // 同一个事件轮次中更新，这样光标编辑和长时间按住 Backspace
         // 重复输入都不会观察到过期的模型文本。
         self.query = text;
-        if self.input.kind == UiInputKind::Text {
-            self.input.text = self.query.clone();
-        }
+        // 手动键入始终回到纯文本输入：立即清空此前的文件/图片附件，
+        // 并切换 `source: Manual`。不因为文本看起来像路径/URL 而变成 Files。
+        self.input = SearchInputSnapshot::text(self.query.clone(), InputSource::Manual);
         self.pending_query.clone_from(&self.query);
         self.debounce_revision = self.debounce_revision.wrapping_add(1);
         self.flushed_debounce_revision = None;
@@ -346,9 +346,8 @@ impl PanelState {
             })];
         }
 
-        let has_input = !self.query.is_empty()
-            || !self.input.files.is_empty()
-            || self.input.image.is_some();
+        let has_input =
+            !self.query.is_empty() || !self.input.files.is_empty() || self.input.image.is_some();
         if !has_input || self.routes.is_empty() {
             return vec![];
         }
@@ -678,7 +677,11 @@ mod tests {
         let actions = state.update_at(PanelEvent::InputCaptured(snapshot.clone()), Instant::now());
         assert_eq!(state.input, snapshot);
         assert_eq!(state.query, "file:///tmp/a.txt");
-        assert!(actions.iter().any(|a| matches!(a, PanelAction::StartDebounce { .. })));
+        assert!(
+            actions
+                .iter()
+                .any(|a| matches!(a, PanelAction::StartDebounce { .. }))
+        );
 
         let sent = state.update_at(
             PanelEvent::DebounceFlush {
@@ -700,5 +703,32 @@ mod tests {
         state.update_at(PanelEvent::InputChanged("abc".into()), Instant::now());
         assert_eq!(state.input.kind, UiInputKind::Text);
         assert_eq!(state.input.text, "abc");
+    }
+
+    #[test]
+    fn manual_typing_clears_attachment_and_switches_to_manual() {
+        let mut state = PanelState::new();
+        state.visible = true;
+        let file = flick_domain::FileInput {
+            uri: "file:///tmp/a.txt".into(),
+            display_name: "a.txt".into(),
+            extension: Some("txt".into()),
+            is_dir: false,
+            mime: Some("text/plain".into()),
+        };
+        state.update_at(
+            PanelEvent::InputCaptured(SearchInputSnapshot::files(
+                vec![file],
+                InputSource::ClipboardRecent,
+            )),
+            Instant::now(),
+        );
+        assert!(!state.input.files.is_empty());
+
+        state.update_at(PanelEvent::InputChanged("abc".into()), Instant::now());
+        assert_eq!(state.input.kind, UiInputKind::Text);
+        assert_eq!(state.input.source, InputSource::Manual);
+        assert!(state.input.files.is_empty());
+        assert!(state.input.image.is_none());
     }
 }
