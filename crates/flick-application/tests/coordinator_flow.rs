@@ -415,3 +415,148 @@ async fn surface_closed_forwards_to_runtime_without_emitting() {
     assert_eq!(*closed.lock().unwrap(), vec![session]);
     assert!(events.lock().unwrap().is_empty());
 }
+
+// ─── 搜索阶段 Execution 项 ─────────────────────────────────────────────
+
+/// 同时提供普通路由与搜索阶段执行结果的伪造 Runtime。
+struct ExecutionRuntime {
+    parent: ActionId,
+    execution: RouteItem,
+    calls: Arc<Mutex<Vec<(ActionId, String, ExecutionEventKind)>>>,
+}
+
+impl ExecutionRuntime {
+    fn new() -> Self {
+        let parent = ActionId::from_static("flick.builtin.apps.search");
+        let item = ExecutionItem {
+            item_id: "app:firefox".into(),
+            parent_action_id: parent.clone(),
+            invocation_id: InvocationId::new(),
+            title: "Firefox".into(),
+            subtitle: Some("firefox".into()),
+            icon: None,
+            badge: None,
+            output: Default::default(),
+        };
+        Self {
+            parent: parent.clone(),
+            execution: RouteItem::execution(item, 0.0),
+            calls: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+}
+
+#[async_trait]
+impl RuntimePort for ExecutionRuntime {
+    async fn route(&self, _query: &str, _input_kind: InputType) -> Vec<RouteItem> {
+        vec![RouteItem::action(self.parent.clone(), "应用搜索", 1.0)]
+    }
+
+    async fn search_invoke(&self, _query: &str, _input_kind: InputType) -> Vec<RouteItem> {
+        vec![self.execution.clone()]
+    }
+
+    async fn execution_event(
+        &self,
+        parent_action_id: ActionId,
+        item_id: &str,
+        event: ExecutionEventKind,
+    ) -> Option<ActionOutcome> {
+        self.calls
+            .lock()
+            .unwrap()
+            .push((parent_action_id, item_id.to_string(), event));
+        Some(ActionOutcome::Notice {
+            message: "已启动 Firefox".into(),
+        })
+    }
+
+    async fn invoke(&self, _request: ActionRequest) -> ActionOutcome {
+        ActionOutcome::Notice {
+            message: "unused".into(),
+        }
+    }
+
+    async fn cancel(&self, _invocation_id: InvocationId) -> bool {
+        false
+    }
+
+    async fn surface_event(
+        &self,
+        _session: SurfaceSessionId,
+        _kind: SurfaceEventKind,
+    ) -> Result<SurfaceContent, String> {
+        Err("unused".into())
+    }
+
+    async fn surface_closed(&self, _session: SurfaceSessionId) {}
+}
+
+#[tokio::test]
+async fn query_merges_execution_items_after_their_parent_action() {
+    let runtime = Arc::new(ExecutionRuntime::new());
+    let (sink, events) = FakeSink::new();
+    let coord = ApplicationCoordinator::new(runtime, Arc::new(sink));
+
+    coord
+        .handle_ui(UiToHost::QueryChanged {
+            generation: QueryGeneration::INITIAL,
+            text: "fire".into(),
+        })
+        .await;
+
+    let emitted = events.lock().unwrap();
+    match &emitted[0] {
+        HostToUi::Routes { items, .. } => {
+            assert_eq!(items.len(), 2);
+            assert_eq!(items[0].kind, RouteItemKind::Action);
+            assert_eq!(items[1].kind, RouteItemKind::Execution);
+            assert_eq!(items[1].title, "Firefox");
+        }
+        other => panic!("expected Routes, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn execution_activated_forwards_to_parent_and_emits_completion() {
+    let runtime = Arc::new(ExecutionRuntime::new());
+    let calls = runtime.calls.clone();
+    let parent = runtime.parent.clone();
+    let (sink, events) = FakeSink::new();
+    let coord = ApplicationCoordinator::new(runtime, Arc::new(sink));
+    let invocation_id = InvocationId::new();
+
+    // ExecutionActivated 只对当前查询代次有效，先建立一次查询代次。
+    coord
+        .handle_ui(UiToHost::QueryChanged {
+            generation: QueryGeneration::INITIAL,
+            text: "fire".into(),
+        })
+        .await;
+
+    coord
+        .handle_ui(UiToHost::ExecutionActivated {
+            generation: QueryGeneration::INITIAL,
+            parent_action_id: parent.clone(),
+            invocation_id,
+            item_id: Some("app:firefox".into()),
+            event: ExecutionEventKind::Activate,
+        })
+        .await;
+
+    assert_eq!(
+        *calls.lock().unwrap(),
+        vec![(parent, "app:firefox".into(), ExecutionEventKind::Activate)]
+    );
+    let emitted = events.lock().unwrap();
+    match emitted.last().expect("completion event") {
+        HostToUi::InvocationCompleted {
+            invocation_id: got,
+            outcome: ActionOutcome::Notice { message },
+        } => {
+            assert_eq!(*got, invocation_id);
+            assert!(message.contains("Firefox"));
+        }
+        other => panic!("expected InvocationCompleted, got {other:?}"),
+    }
+}

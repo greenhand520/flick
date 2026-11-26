@@ -319,6 +319,32 @@ impl PanelState {
             return vec![];
         };
 
+        // 搜索阶段 Execution 项不是独立 Action：交给产出它的父 Action 处理。
+        if route.kind == RouteItemKind::Execution {
+            let invocation_id = route.invocation_id.unwrap_or_else(InvocationId::new);
+            let parent_action_id = route
+                .parent_action_id
+                .clone()
+                .or_else(|| route.execution.as_ref().map(|item| item.parent_action_id.clone()))
+                .unwrap_or_else(|| route.action_id.clone());
+            let item_id = if route.item_id.is_empty() {
+                route
+                    .execution
+                    .as_ref()
+                    .map(|item| item.item_id.clone())
+            } else {
+                Some(route.item_id.clone())
+            };
+            self.active_invocation = Some(invocation_id);
+            return vec![PanelAction::SendToHost(UiToHost::ExecutionActivated {
+                generation: self.generation,
+                parent_action_id,
+                invocation_id,
+                item_id,
+                event: ExecutionEventKind::Activate,
+            })];
+        }
+
         let invocation_id = InvocationId::new();
         self.active_invocation = Some(invocation_id);
         vec![PanelAction::SendToHost(UiToHost::Invoke {
@@ -534,6 +560,47 @@ mod tests {
                 },
             })]
         );
+    }
+
+    /// Execution 项按 Enter 必须发 `ExecutionActivated`，而不是把它当普通 Action Invoke。
+    #[test]
+    fn submitted_execution_item_emits_execution_activated() {
+        let mut st = PanelState::new();
+        st.visible = true;
+        st.query = "fire".into();
+        let parent = ActionId::from_static("flick.builtin.apps.search");
+        let invocation_id = InvocationId::new();
+        let item = ExecutionItem {
+            item_id: "app:firefox".into(),
+            parent_action_id: parent.clone(),
+            invocation_id,
+            title: "Firefox".into(),
+            subtitle: Some("firefox".into()),
+            icon: None,
+            badge: None,
+            output: Default::default(),
+        };
+        st.routes = vec![RouteItem::execution(item, 0.0)];
+        st.selection.set_total(1);
+
+        let actions = st.update(PanelEvent::Submitted);
+        assert_eq!(st.active_invocation, Some(invocation_id));
+        match actions.as_slice() {
+            [PanelAction::SendToHost(UiToHost::ExecutionActivated {
+                generation,
+                parent_action_id,
+                invocation_id: sent_invocation,
+                item_id,
+                event,
+            })] => {
+                assert_eq!(*generation, st.generation);
+                assert_eq!(parent_action_id, &parent);
+                assert_eq!(*sent_invocation, invocation_id);
+                assert_eq!(item_id.as_deref(), Some("app:firefox"));
+                assert_eq!(*event, ExecutionEventKind::Activate);
+            }
+            other => panic!("expected ExecutionActivated, got {other:?}"),
+        }
     }
 
     #[test]

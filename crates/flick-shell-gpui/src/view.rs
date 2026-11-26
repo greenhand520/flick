@@ -522,18 +522,45 @@ impl Render for AppView {
                     } else {
                         (ui.surface, ui.text)
                     };
-                    results = results.child(
-                        div()
-                            .h(px(self.metrics.row_height))
-                            .w_full()
-                            .flex()
-                            .items_center()
-                            .px_3()
-                            .rounded(px(self.metrics.radius_row))
-                            .bg(col(bg))
-                            .text_color(col(fg))
-                            .child(Label::new(item.title.clone())),
-                    );
+                    let mut row = div()
+                        .h(px(self.metrics.row_height))
+                        .w_full()
+                        .flex()
+                        .items_center()
+                        .px_3()
+                        .rounded(px(self.metrics.radius_row))
+                        .bg(col(bg))
+                        .text_color(col(fg))
+                        // 鼠标点击等同 Enter：先选中该行，再走统一的提交路径。
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |this, _, window, cx| {
+                                this.state.panel.selection.index = index;
+                                this.dispatch(UiEvent::Submitted, window, cx);
+                                cx.stop_propagation();
+                            }),
+                        )
+                        .child(Label::new(item.title.clone()));
+                    if let Some(subtitle) = &item.subtitle {
+                        row = row.child(
+                            div()
+                                .ml(px(8.0))
+                                .text_color(col(ui.text_muted))
+                                .child(Label::new(subtitle.clone())),
+                        );
+                    }
+                    if let Some(badge) = item.execution.as_ref().and_then(|e| e.badge.as_ref()) {
+                        row = row.child(
+                            div()
+                                .ml(px(8.0))
+                                .rounded_full()
+                                .px_2()
+                                .bg(col(ui.selected_bg))
+                                .text_color(col(ui.selected_fg))
+                                .child(Label::new(badge.clone())),
+                        );
+                    }
+                    results = results.child(row);
                 }
 
                 if let Some(outcome) = &self.state.panel.last_outcome {

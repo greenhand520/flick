@@ -31,6 +31,19 @@ impl RuntimePort for RuntimeAdapter {
     async fn route(&self, query: &str, input_kind: InputType) -> Vec<RouteItem> {
         self.runtime.route(query, input_kind).await
     }
+    async fn search_invoke(&self, query: &str, input_kind: InputType) -> Vec<RouteItem> {
+        self.runtime.search_invoke(query, input_kind).await
+    }
+    async fn execution_event(
+        &self,
+        parent_action_id: ActionId,
+        item_id: &str,
+        event: ExecutionEventKind,
+    ) -> Option<ActionOutcome> {
+        self.runtime
+            .execution_event(parent_action_id, item_id, event)
+            .await
+    }
     async fn invoke(&self, request: ActionRequest) -> ActionOutcome {
         self.runtime.invoke(request).await
     }

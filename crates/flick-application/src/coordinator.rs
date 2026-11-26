@@ -7,7 +7,10 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use flick_domain::{ActionRequest, Caller, Deadline, HostToUi, InputType, UiIntent, UiToHost};
+use flick_domain::{
+    ActionRequest, Caller, Deadline, HostToUi, InputType, RouteItem, RouteItemKind, UiIntent,
+    UiToHost,
+};
 
 use crate::ports::{HostEventSink, RuntimePort};
 use crate::query::QueryTracker;
@@ -23,6 +26,38 @@ pub struct ApplicationCoordinator {
     sink: Arc<dyn HostEventSink>,
     query_tracker: QueryTracker,
     panel_visible: AtomicBool,
+}
+
+/// 合并普通 Action 候选与搜索阶段 Execution 项。
+///
+/// 同一父 Action 的 Execution 项紧跟在该 Action 之后；若父 Action 本身
+/// 没有命中关键词（例如只靠 `search_invocable` 产出的结果），则追加在末尾。
+fn merge_search_results(
+    action_items: Vec<RouteItem>,
+    execution_items: Vec<RouteItem>,
+) -> Vec<RouteItem> {
+    let mut remaining: Vec<Option<RouteItem>> =
+        execution_items.into_iter().map(Some).collect();
+    let mut merged = Vec::with_capacity(action_items.len() + remaining.len());
+
+    for action in action_items {
+        let parent_id = action.action_id.clone();
+        merged.push(action);
+        for slot in &mut remaining {
+            let is_child = slot.as_ref().is_some_and(|item| {
+                item.kind == RouteItemKind::Execution
+                    && item.parent_action_id.as_ref() == Some(&parent_id)
+            });
+            if is_child {
+                if let Some(item) = slot.take() {
+                    merged.push(item);
+                }
+            }
+        }
+    }
+
+    merged.extend(remaining.into_iter().flatten());
+    merged
 }
 
 impl ApplicationCoordinator {
@@ -48,13 +83,44 @@ impl ApplicationCoordinator {
                 // 在调用运行时之前记录最新的代次。
                 self.query_tracker.set_current(generation);
 
-                let items = self.runtime.route(&text, InputType::PlainText).await;
+                // 首屏路由（纯内存）与搜索阶段执行（最多 150ms）并行进行；
+                // 后者的结果作为 Execution 项排在各自父 Action 之后。
+                let (action_items, execution_items) = tokio::join!(
+                    self.runtime.route(&text, InputType::PlainText),
+                    self.runtime.search_invoke(&text, InputType::PlainText),
+                );
+                let items = merge_search_results(action_items, execution_items);
 
                 // 仅当此代次仍为最新时才发出结果。
                 if self.query_tracker.is_current(generation) {
                     self.sink.send(HostToUi::Routes { generation, items });
                 }
                 // 否则：有更新的查询取代了此查询 —— 静默丢弃。
+            }
+
+            UiToHost::ExecutionActivated {
+                generation,
+                parent_action_id,
+                invocation_id,
+                item_id,
+                event,
+            } => {
+                // 旧代次的 Execution 项已被新搜索替换，激活事件直接丢弃。
+                if !self.query_tracker.is_current(generation) {
+                    return;
+                }
+                let item_id = item_id.unwrap_or_default();
+                if let Some(outcome) = self
+                    .runtime
+                    .execution_event(parent_action_id, &item_id, event)
+                    .await
+                {
+                    self.sink.send(HostToUi::InvocationCompleted {
+                        invocation_id,
+                        outcome,
+                    });
+                }
+                // `None` 表示父 Action 未实现该事件（no-op），无需回送错误。
             }
 
             UiToHost::Invoke {

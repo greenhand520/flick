@@ -230,6 +230,33 @@ impl SurfaceHandler for DemoClipboardPlugin {
     }
 }
 
+/// demo 用的合并逻辑：Execution 项紧跟其父 Action；父 Action 未命中时追加末尾。
+fn merge_demo_results(
+    action_items: Vec<RouteItem>,
+    execution_items: Vec<RouteItem>,
+) -> Vec<RouteItem> {
+    let mut remaining: Vec<Option<RouteItem>> =
+        execution_items.into_iter().map(Some).collect();
+    let mut merged = Vec::with_capacity(action_items.len() + remaining.len());
+    for action in action_items {
+        let parent_id = action.action_id.clone();
+        merged.push(action);
+        for slot in &mut remaining {
+            let is_child = slot.as_ref().is_some_and(|item| {
+                item.kind == RouteItemKind::Execution
+                    && item.parent_action_id.as_ref() == Some(&parent_id)
+            });
+            if is_child {
+                if let Some(item) = slot.take() {
+                    merged.push(item);
+                }
+            }
+        }
+    }
+    merged.extend(remaining.into_iter().flatten());
+    merged
+}
+
 async fn fake_host(
     host_tx: mpsc::UnboundedSender<HostToUi>,
     mut ui_rx: mpsc::UnboundedReceiver<UiToHost>,
@@ -253,7 +280,11 @@ async fn fake_host(
     while let Some(message) = ui_rx.recv().await {
         match message {
             UiToHost::QueryChanged { generation, text } => {
-                let items = runtime.route(&text, InputType::PlainText).await;
+                let (action_items, execution_items) = tokio::join!(
+                    runtime.route(&text, InputType::PlainText),
+                    runtime.search_invoke(&text, InputType::PlainText),
+                );
+                let items = merge_demo_results(action_items, execution_items);
                 let _ = host_tx.send(HostToUi::Routes { generation, items });
             }
             UiToHost::Invoke {
@@ -274,6 +305,24 @@ async fn fake_host(
                     invocation_id,
                     outcome,
                 });
+            }
+            UiToHost::ExecutionActivated {
+                generation: _,
+                parent_action_id,
+                invocation_id,
+                item_id,
+                event,
+            } => {
+                let item_id = item_id.unwrap_or_default();
+                if let Some(outcome) = runtime
+                    .execution_event(parent_action_id, &item_id, event)
+                    .await
+                {
+                    let _ = host_tx.send(HostToUi::InvocationCompleted {
+                        invocation_id,
+                        outcome,
+                    });
+                }
             }
             UiToHost::Cancel { .. } => {}
             UiToHost::SearchPanelClosed => {

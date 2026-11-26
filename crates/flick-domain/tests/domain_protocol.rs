@@ -113,6 +113,13 @@ fn ui_to_host_round_trips() {
         UiToHost::Cancel {
             invocation_id: InvocationId::new(),
         },
+        UiToHost::ExecutionActivated {
+            generation: QueryGeneration::INITIAL,
+            parent_action_id: ActionId::from_static("test.apps.search"),
+            invocation_id: InvocationId::new(),
+            item_id: Some("app:firefox".into()),
+            event: ExecutionEventKind::Activate,
+        },
     ];
     for msg in messages {
         let json = serde_json::to_string(&msg).unwrap();

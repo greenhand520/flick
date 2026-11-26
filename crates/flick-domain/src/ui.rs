@@ -1,6 +1,7 @@
 //! UI ↔ Host 通信协议。
 
 use crate::action::{ActionInput, ActionOutcome};
+use crate::execution::ExecutionEventKind;
 use crate::id::{ActionId, InvocationId, QueryGeneration, SurfaceSessionId};
 use crate::route::RouteItem;
 use crate::surface::{SurfaceContent, SurfaceEventKind};
@@ -43,6 +44,22 @@ pub enum UiToHost {
         invocation_id: InvocationId,
         action_id: ActionId,
         input: ActionInput,
+    },
+    /// 用户激活了一个搜索阶段 Execution 项。
+    ///
+    /// Execution 项不是独立 Action，UI 不自行解释它；宿主应把事件转交
+    /// 产出该条目的父 Action，由父 Action 的 `execution_event` 决定行为。
+    ExecutionActivated {
+        /// 产生该 Execution 项的查询代次。
+        generation: QueryGeneration,
+        /// 产出该 Execution 项的父 Action。
+        parent_action_id: ActionId,
+        /// 本次激活使用的调用标识，用于把完成结果对应回 UI。
+        invocation_id: InvocationId,
+        /// 父 Action 定义的结果项标识。
+        item_id: Option<String>,
+        /// 用户操作类型（当前仅 Activate）。
+        event: ExecutionEventKind,
     },
     /// 用户取消了一个进行中的调用。
     Cancel { invocation_id: InvocationId },

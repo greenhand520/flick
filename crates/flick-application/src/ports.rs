@@ -6,8 +6,8 @@
 
 use async_trait::async_trait;
 use flick_domain::{
-    ActionOutcome, ActionRequest, HostToUi, InputType, InvocationId, RouteItem, SurfaceContent,
-    SurfaceEventKind, SurfaceSessionId,
+    ActionId, ActionOutcome, ActionRequest, ExecutionEventKind, HostToUi, InputType, InvocationId,
+    RouteItem, SurfaceContent, SurfaceEventKind, SurfaceSessionId,
 };
 
 /// 对 Flick Runtime 的路由与调用能力的抽象。
@@ -18,6 +18,27 @@ use flick_domain::{
 pub trait RuntimePort: Send + Sync {
     /// 将用户查询路由到候选动作。
     async fn route(&self, query: &str, input_kind: InputType) -> Vec<RouteItem>;
+
+    /// 搜索阶段执行：调用所有 `search_invocable` Action 并把结果归一化为
+    /// `RouteItemKind::Execution` 候选。
+    ///
+    /// 默认实现返回空列表，便于只实现路由能力的测试替身；生产适配器应转发
+    /// Runtime 的 `search_invoke`。
+    async fn search_invoke(&self, _query: &str, _input_kind: InputType) -> Vec<RouteItem> {
+        Vec::new()
+    }
+
+    /// 把 Execution 项的激活事件交给父 Action 处理。
+    ///
+    /// 返回 `None` 表示父 Action 未实现该事件（no-op）。默认实现即 no-op。
+    async fn execution_event(
+        &self,
+        _parent_action_id: ActionId,
+        _item_id: &str,
+        _event: ExecutionEventKind,
+    ) -> Option<ActionOutcome> {
+        None
+    }
 
     /// 执行动作请求并返回结果。
     async fn invoke(&self, request: ActionRequest) -> ActionOutcome;
