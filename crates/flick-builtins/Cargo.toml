@@ -9,7 +9,9 @@ flick-runtime = { path = "../flick-runtime" }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 async-trait = { workspace = true }
+ib_pinyin = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true }
 tokio-util = { workspace = true }
+tempfile = { workspace = true }

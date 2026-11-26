@@ -31,7 +31,8 @@ tokio-util = { version = "0.7", features = ["rt"] }
 async-trait = "0.1"
 
 # Search
-ib_pinyin = {version = "0.3"}
+# 注意：crates.io 包名为 `ib-pinyin`，此处用 package 重命名以便代码内 `use ib_pinyin`。
+ib_pinyin = { package = "ib-pinyin", version = "0.3" }
 
 # Storage
 rusqlite = {version = "0.40"}

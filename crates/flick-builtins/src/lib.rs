@@ -2,6 +2,7 @@
 //!
 //! Phase 0 仅包含一个动作：**echo**。
 
+pub mod apps;
 pub mod echo;
 pub mod host;
 
