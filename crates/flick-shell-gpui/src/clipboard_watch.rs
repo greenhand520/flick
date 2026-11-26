@@ -20,9 +20,9 @@ pub(crate) struct ClipboardRecent {
 struct WatchState {
     last_fingerprint: Option<u64>,
     last_change_at: Option<Instant>,
-    /// 启动时的基线时刻：用户刚启动应用就开框时，把启动前已存在的剪贴板
-    /// 也视为“最近 5 秒内”，避免 demo/短生命周期进程读取不到启动前复制的内容。
-    baseline_at: Option<Instant>,
+    /// 是否已经建立过剪贴板基线。启动时读取剪贴板失败则首次成功读取只作为基线，
+    /// 不视为“刚变化”，避免把应用启动前很久的旧内容误判为最近 5 秒。
+    baseline_known: bool,
 }
 
 /// 剪贴板观察器句柄；可克隆并跨窗口重建使用。
@@ -49,7 +49,7 @@ impl ClipboardWatch {
             state: Arc::new(Mutex::new(WatchState {
                 last_fingerprint: baseline,
                 last_change_at: None,
-                baseline_at: Some(Instant::now()),
+                baseline_known: baseline.is_some(),
             })),
         };
         let state = Arc::clone(&watch.state);
@@ -62,7 +62,10 @@ impl ClipboardWatch {
                 let now = Instant::now();
                 let fingerprint = clipboard_fingerprint(&item);
                 let mut guard = state.lock().unwrap();
-                if guard.last_fingerprint != Some(fingerprint) {
+                if !guard.baseline_known {
+                    guard.last_fingerprint = Some(fingerprint);
+                    guard.baseline_known = true;
+                } else if guard.last_fingerprint != Some(fingerprint) {
                     guard.last_fingerprint = Some(fingerprint);
                     guard.last_change_at = Some(now);
                 }
@@ -76,20 +79,25 @@ impl ClipboardWatch {
     pub(crate) fn observe(&self, item: &ClipboardItem, now: Instant) -> ClipboardRecent {
         let fingerprint = clipboard_fingerprint(item);
         let mut guard = self.state.lock().unwrap();
-        if guard.last_fingerprint != Some(fingerprint) {
+        if !guard.baseline_known {
+            // 启动时没读到剪贴板（例如 Wayland 窗口尚未获得焦点）：首次成功读取
+            // 只建立基线，不能当作“刚刚变化”，否则旧剪贴板会在每次启动时被带入。
+            guard.last_fingerprint = Some(fingerprint);
+            guard.baseline_known = true;
+        } else if guard.last_fingerprint != Some(fingerprint) {
             guard.last_fingerprint = Some(fingerprint);
             guard.last_change_at = Some(now);
         }
         ClipboardRecent {
             fingerprint,
-            changed_at: guard.last_change_at.or(guard.baseline_at).unwrap_or(now),
+            changed_at: guard.last_change_at.unwrap_or(now),
         }
     }
 
     /// 若最近一次变化仍在 5 秒窗口内，返回其记录；否则返回 `None`。
     pub(crate) fn recent_at(&self, now: Instant) -> Option<ClipboardRecent> {
         let guard = self.state.lock().unwrap();
-        let changed_at = guard.last_change_at.or(guard.baseline_at)?;
+        let changed_at = guard.last_change_at?;
         let recent = now.saturating_duration_since(changed_at) <= Self::RECENT_WINDOW;
         recent.then(|| ClipboardRecent {
             fingerprint: guard.last_fingerprint.unwrap_or_default(),
@@ -106,7 +114,11 @@ mod tests {
     #[test]
     fn observe_tracks_change_and_recent_window() {
         let watch = ClipboardWatch {
-            state: Arc::new(Mutex::new(WatchState::default())),
+            state: Arc::new(Mutex::new(WatchState {
+                last_fingerprint: None,
+                last_change_at: None,
+                baseline_known: true,
+            })),
         };
         let base = Instant::now();
         let a = ClipboardItem::new_string("a".into());
@@ -124,16 +136,16 @@ mod tests {
     }
 
     #[test]
-    fn startup_baseline_is_recent_only_within_first_five_seconds() {
+    fn missing_startup_baseline_does_not_import_old_clipboard() {
         let base = Instant::now();
         let watch = ClipboardWatch {
-            state: Arc::new(Mutex::new(WatchState {
-                last_fingerprint: Some(1),
-                last_change_at: None,
-                baseline_at: Some(base),
-            })),
+            state: Arc::new(Mutex::new(WatchState::default())),
         };
-        assert!(watch.recent_at(base + Duration::from_secs(4)).is_some());
-        assert!(watch.recent_at(base + Duration::from_secs(6)).is_none());
+        let old = ClipboardItem::new_string("old".into());
+
+        let first = watch.observe(&old, base);
+        assert_eq!(first.changed_at, base);
+        // 首次成功读取只建立基线，不算“最近变化”。
+        assert!(watch.recent_at(base + Duration::from_secs(1)).is_none());
     }
 }

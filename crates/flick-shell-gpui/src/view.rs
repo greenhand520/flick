@@ -133,6 +133,9 @@ impl AppView {
                 InputEvent::Change => {
                     let text = state.read(cx).value().to_string();
                     if this.paste_text_pending.replace(false) {
+                        // 粘贴进来的整段文字默认全选，用户可直接输入替换或按
+                        // Backspace/Delete 一次清空。
+                        state.update(cx, |state, cx| state.select_all(window, cx));
                         this.dispatch(
                             UiEvent::InputCaptured(SearchInputSnapshot::text(
                                 text,
@@ -240,10 +243,34 @@ impl AppView {
         } else {
             String::new()
         };
-        self.input.update(cx, |state, input_cx| {
-            state.set_value(input_text, window, input_cx);
-        });
+        self.set_input_text(input_text, window, cx);
         self.dispatch(UiEvent::InputCaptured(snapshot), window, cx);
+    }
+
+    /// 同步受控输入框文本并全选；用于程序性带入（非用户键入），方便一键替换/删除。
+    fn set_input_text(&self, text: String, window: &mut Window, cx: &mut Context<Self>) {
+        self.input.update(cx, |state, input_cx| {
+            state.set_value(text, window, input_cx);
+            state.select_all(window, input_cx);
+        });
+    }
+
+    /// 附件存在且输入框为空时，Backspace/Delete 清空附件（图片/文件 chip）。
+    fn on_capture_key_down(
+        &mut self,
+        event: &KeyDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let key = event.keystroke.key.as_str();
+        if (key == "backspace" || key == "delete")
+            && !self.attachments.is_empty()
+            && self.input.read(cx).value().is_empty()
+        {
+            self.attachments = Attachments::default();
+            self.dispatch(UiEvent::InputChanged(String::new()), window, cx);
+            cx.stop_propagation();
+        }
     }
 
     /// 开窗时若剪贴板在最近 5 秒内变化，自动带入并立刻触发路由。
@@ -269,9 +296,7 @@ impl AppView {
         } else {
             String::new()
         };
-        self.input.update(cx, |state, input_cx| {
-            state.set_value(input_text, window, input_cx);
-        });
+        self.set_input_text(input_text, window, cx);
         self.dispatch(UiEvent::InputCaptured(snapshot), window, cx);
         true
     }
@@ -532,7 +557,8 @@ impl Render for AppView {
         let panel_h = target_h;
         let has_body = crate::app::active_surface(&self.state.panel).is_some()
             || !self.state.panel.routes.is_empty()
-            || self.state.panel.last_outcome.is_some();
+            || self.state.panel.last_outcome.is_some()
+            || !self.attachments.is_empty();
 
         let mut panel = div()
             .id("flick-panel")
@@ -550,6 +576,8 @@ impl Render for AppView {
             .on_action(cx.listener(Self::on_select_next))
             .on_action(cx.listener(Self::on_select_prev))
             .on_action(cx.listener(Self::on_toggle_theme))
+            // Backspace/Delete 在输入框为空时清空附件；输入框有文字时交给它自己处理。
+            .capture_key_down(cx.listener(Self::on_capture_key_down))
             // ctrl-d 用捕获阶段绑定：先于聚焦的 Input 处理，避免输入框吞掉该快捷键。
             .capture_action(cx.listener(Self::on_detach_surface))
             // overlay 内拖动面板（layer-shell 全屏窗口不能移动，记录偏移即可）。
@@ -831,11 +859,23 @@ fn render_attachment_chips(
         .h(px(row_height))
         .flex()
         .items_center()
-        .gap(px(6.0))
-        .px(px(metrics.input_padding_h));
-    // 多文件只展示第一个（规则同单文件），总数放在右上角徽标里。
-    if let Some(file) = attachments.files.first() {
-        row = row.child(render_file_chip(file, attachments.files.len(), ui));
+        .gap(px(CHIP_GAP))
+        .px(px(metrics.input_padding_h))
+        .overflow_hidden();
+
+    // 先估算图片占用的宽度，文件 chip 在剩余宽度里尽量逐个展示；放不下的
+    // 文件用末尾的 `+N` 角标表示，避免一行被撑爆或直接裁切无提示。
+    let mut available = metrics.width - metrics.padding_h * 2.0 - metrics.input_padding_h * 2.0;
+    if attachments.image.is_some() {
+        available -= ATTACHMENT_IMAGE_WIDTH + CHIP_GAP;
+    }
+    let visible = visible_file_count(&attachments.files, available);
+    for file in attachments.files.iter().take(visible) {
+        row = row.child(render_file_chip(file, ui));
+    }
+    let hidden = attachments.files.len().saturating_sub(visible);
+    if hidden > 0 {
+        row = row.child(render_overflow_chip(hidden, ui));
     }
     if let Some(image) = &attachments.image {
         row = row.child(render_image_preview(image, ui));
@@ -843,15 +883,57 @@ fn render_attachment_chips(
     Some(row.into_any_element())
 }
 
+/// 文件 chip 之间的间距。
+const CHIP_GAP: f32 = 6.0;
+/// 图片预览宽度上限（逻辑像素）。
+const ATTACHMENT_IMAGE_WIDTH: f32 = 96.0;
+/// chip 除文字外的固定开销（图标 + 左右内边距 + 内部间距）。
+const CHIP_BASE_WIDTH: f32 = 38.0;
+/// `+N` 角标的估算宽度。
+const OVERFLOW_BADGE_WIDTH: f32 = 34.0;
+
+/// 估算文本在 chip 里占用的宽度：ASCII 约 7px，CJK/全角约 14px。
+fn estimated_label_width(label: &str) -> f32 {
+    label
+        .chars()
+        .map(|ch| if ch.is_ascii() { 7.0 } else { 14.0 })
+        .sum()
+}
+
+/// 计算一行能完整展示多少个文件 chip；至少展示第一个。
+fn visible_file_count(files: &[FileInput], available_width: f32) -> usize {
+    if files.is_empty() {
+        return 0;
+    }
+    let mut used = 0.0;
+    let mut count = 0;
+    for (index, file) in files.iter().enumerate() {
+        let width =
+            CHIP_BASE_WIDTH + estimated_label_width(&crate::input_capture::display_label(file));
+        let gap = if count == 0 { 0.0 } else { CHIP_GAP };
+        // 后面还有文件时预留一个 `+N` 角标的位置。
+        let reserve = if index + 1 < files.len() {
+            OVERFLOW_BADGE_WIDTH + CHIP_GAP
+        } else {
+            0.0
+        };
+        if count > 0 && used + gap + width + reserve > available_width {
+            break;
+        }
+        used += gap + width;
+        count += 1;
+    }
+    count.max(1)
+}
+
 /// 单个文件/文件夹 chip：图标 + 截断文件名（扩展名保留）。
-fn render_file_chip(file: &FileInput, total: usize, ui: &theme::UiTheme) -> AnyElement {
+fn render_file_chip(file: &FileInput, ui: &theme::UiTheme) -> AnyElement {
     let icon = if file.is_dir {
         IconName::Folder
     } else {
         IconName::FileText
     };
-    let mut chip = div()
-        .relative()
+    div()
         .flex()
         .items_center()
         .gap(px(4.0))
@@ -861,26 +943,24 @@ fn render_file_chip(file: &FileInput, total: usize, ui: &theme::UiTheme) -> AnyE
         .bg(col(ui.surface))
         .text_color(col(ui.text))
         .child(Icon::new(icon).small().text_color(col(ui.text_muted)))
-        .child(Label::new(crate::input_capture::display_label(file)));
-    if total > 1 {
-        chip = chip.child(
-            div()
-                .absolute()
-                .top(px(-6.0))
-                .right(px(-6.0))
-                .min_w(px(16.0))
-                .h(px(16.0))
-                .flex()
-                .items_center()
-                .justify_center()
-                .rounded_full()
-                .bg(col(ui.selected_fg))
-                .text_color(col(ui.panel_bg))
-                .text_size(px(10.0))
-                .child(total.to_string()),
-        );
-    }
-    chip.into_any_element()
+        .child(Label::new(crate::input_capture::display_label(file)))
+        .into_any_element()
+}
+
+/// 超出一行时显示的 `+N` 角标。
+fn render_overflow_chip(hidden: usize, ui: &theme::UiTheme) -> AnyElement {
+    div()
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded_full()
+        .px_2()
+        .py(px(2.0))
+        .bg(col(ui.surface))
+        .text_color(col(ui.text_muted))
+        .text_size(px(12.0))
+        .child(format!("+{hidden}"))
+        .into_any_element()
 }
 
 /// 剪贴板图片预览：最大 96×64 逻辑像素，等比缩放（gpui 默认 ObjectFit::Contain）。
@@ -947,4 +1027,41 @@ fn persist_theme(mode: ThemeMode) {
         ThemeMode::Light => "light",
     };
     let _ = std::fs::write(path, format!("mode = \"{value}\"\n"));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{estimated_label_width, visible_file_count};
+    use flick_domain::FileInput;
+
+    fn file(name: &str) -> FileInput {
+        FileInput {
+            uri: format!("file:///tmp/{name}"),
+            display_name: name.into(),
+            extension: name.rsplit_once('.').map(|(_, ext)| ext.to_string()),
+            is_dir: false,
+            mime: None,
+        }
+    }
+
+    #[test]
+    fn visible_file_count_shows_all_when_width_allows() {
+        let files = vec![file("a.txt"), file("b.txt"), file("c.txt")];
+        assert_eq!(visible_file_count(&files, 800.0), 3);
+    }
+
+    #[test]
+    fn visible_file_count_keeps_first_and_reports_overflow() {
+        let files = vec![
+            file("a-very-long-file-name.txt"),
+            file("b-very-long-file-name.txt"),
+            file("c-very-long-file-name.txt"),
+        ];
+        assert_eq!(visible_file_count(&files, 120.0), 1);
+    }
+
+    #[test]
+    fn estimated_label_width_treats_cjk_as_double_width() {
+        assert!(estimated_label_width("截图.png") > estimated_label_width("ab.png"));
+    }
 }

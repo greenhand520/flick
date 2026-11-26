@@ -221,14 +221,15 @@ pub fn desired_size(panel: &PanelState, m: &Metrics) -> (f32, f32) {
         0.0
     };
     let gap = if results_h > 0.0 { m.content_gap } else { 0.0 };
-    let bottom = if results_h > 0.0 {
+    // 附件行（文件/图片）也需要底部内边距，否则 chip 会贴住面板底边。
+    let bottom = if results_h > 0.0 || attachments_h > 0.0 {
         m.padding_bottom
     } else {
         0.0
     };
     let height =
         (m.input_height + gap + results_h + bottom + attachments_h).min(m.panel_max_height);
-    (m.width, height.max(m.input_height + attachments_h))
+    (m.width, height.max(m.input_height + attachments_h + bottom))
 }
 
 #[cfg(test)]
@@ -263,7 +264,10 @@ mod tests {
         };
         s.panel.input = SearchInputSnapshot::files(vec![file], InputSource::Paste);
         let (_, h) = desired_size(&s.panel, &Metrics::default());
-        assert_eq!(h, 64.0 + ATTACHMENT_ROW_HEIGHT);
+        assert_eq!(
+            h,
+            64.0 + ATTACHMENT_ROW_HEIGHT + Metrics::default().padding_bottom
+        );
     }
 
     #[test]
@@ -279,7 +283,10 @@ mod tests {
             InputSource::ClipboardRecent,
         );
         let (_, h) = desired_size(&s.panel, &Metrics::default());
-        assert_eq!(h, 64.0 + ATTACHMENT_IMAGE_HEIGHT);
+        assert_eq!(
+            h,
+            64.0 + ATTACHMENT_IMAGE_HEIGHT + Metrics::default().padding_bottom
+        );
     }
 
     #[test]
