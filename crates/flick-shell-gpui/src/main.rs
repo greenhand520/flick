@@ -280,8 +280,9 @@ async fn fake_host(
         match message {
             UiToHost::QueryChanged { generation, input } => {
                 let action_input = input.to_action_input();
+                let context = InputContext::from_snapshot(generation, &input);
                 let (action_items, execution_items) = tokio::join!(
-                    runtime.route(&action_input.text, action_input.kind),
+                    runtime.route_input(&context),
                     runtime.search_invoke(&action_input.text, action_input.kind),
                 );
                 let items = merge_demo_results(action_items, execution_items);

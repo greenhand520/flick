@@ -19,6 +19,7 @@ pub mod invocation;
 pub mod plugin;
 pub mod registry;
 pub mod runtime;
+mod search;
 
 // 在 crate 根重新导出主要的公共 API。
 pub use handler::ActionHandler;

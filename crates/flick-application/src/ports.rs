@@ -6,8 +6,8 @@
 
 use async_trait::async_trait;
 use flick_domain::{
-    ActionId, ActionOutcome, ActionRequest, ExecutionEventKind, HostToUi, InputType, InvocationId,
-    RouteItem, SurfaceContent, SurfaceEventKind, SurfaceSessionId,
+    ActionId, ActionOutcome, ActionRequest, ExecutionEventKind, HostToUi, InputContext, InputFacet,
+    InputType, InvocationId, RouteItem, SurfaceContent, SurfaceEventKind, SurfaceSessionId,
 };
 
 /// 对 Flick Runtime 的路由与调用能力的抽象。
@@ -18,6 +18,25 @@ use flick_domain::{
 pub trait RuntimePort: Send + Sync {
     /// 将用户查询路由到候选动作。
     async fn route(&self, query: &str, input_kind: InputType) -> Vec<RouteItem>;
+
+    /// 按完整输入上下文路由；默认回退到旧的 `route`，便于测试替身逐步迁移。
+    async fn route_input(&self, context: &InputContext) -> Vec<RouteItem> {
+        let file_count = context
+            .facets
+            .iter()
+            .filter(|facet| matches!(facet, InputFacet::File { .. }))
+            .count();
+        let input_kind = if context.has_facet(flick_domain::InputFacetKind::ClipboardImage) {
+            InputType::ClipboardImage
+        } else if file_count > 1 {
+            InputType::Files
+        } else if file_count == 1 {
+            InputType::PathCandidate
+        } else {
+            InputType::PlainText
+        };
+        self.route(&context.raw_text, input_kind).await
+    }
 
     /// 搜索阶段执行：调用所有 `search_invocable` Action 并把结果归一化为
     /// `RouteItemKind::Execution` 候选。

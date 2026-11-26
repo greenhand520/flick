@@ -5,8 +5,8 @@ use crate::plugin::{Plugin, PluginRegistrationError, SurfaceError, SurfaceSessio
 use crate::registry::ActionRegistry;
 use flick_domain::{
     ActionContext, ActionDescriptor, ActionError, ActionId, ActionInput, ActionOutcome,
-    ActionRequest, InputType, InvocationId, RouteItem, SurfaceContent, SurfaceEventKind,
-    SurfaceSessionId,
+    ActionRequest, InputContext, InputType, InvocationId, RouteItem, SurfaceContent,
+    SurfaceEventKind, SurfaceSessionId,
 };
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -98,6 +98,14 @@ impl ActionRuntime {
     pub async fn route(&self, query: &str, input_kind: InputType) -> Vec<RouteItem> {
         let reg = self.registry.read().await;
         reg.search(query, input_kind)
+    }
+
+    /// 按完整输入上下文路由；使用 facet 过滤、分层匹配与确定性排序。
+    ///
+    /// 旧的 [`Self::route`] 保留给尚未迁移的调用方。
+    pub async fn route_input(&self, context: &InputContext) -> Vec<RouteItem> {
+        let reg = self.registry.read().await;
+        reg.search_input(context)
     }
 
     /// 搜索阶段执行：只调用 `search_invocable` Action，固定 150ms 超时。

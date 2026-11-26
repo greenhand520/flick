@@ -46,7 +46,8 @@ impl ActionDescriptor {
             keywords,
             concurrency,
             search_invocable: false,
-            supported_inputs: vec![InputType::PlainText],
+            // 空列表表示该动作接受全部输入类型；具体过滤由 Runtime 的 route_input 完成。
+            supported_inputs: Vec::new(),
             file_extensions: Vec::new(),
             output_types: vec![OutputType::Data],
             visibility: ActionVisibility::Public,

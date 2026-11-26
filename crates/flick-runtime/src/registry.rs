@@ -2,7 +2,11 @@
 
 use crate::handler::ActionHandler;
 use crate::plugin::{Plugin, PluginLifecycle, PluginRegistrationError, SurfaceHandler};
-use flick_domain::{ActionDescriptor, ActionId, InputType, PluginManifest, RouteItem};
+use crate::search::score_action;
+use flick_domain::{
+    ActionDescriptor, ActionId, ActionVisibility, InputContext, InputType, PluginManifest,
+    RouteItem,
+};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -11,6 +15,13 @@ struct Entry {
     descriptor: ActionDescriptor,
     handler: Arc<dyn ActionHandler>,
     plugin_id: Option<String>,
+}
+
+/// 搜索阶段的内部候选，保存排序所需的辅助字段。
+struct ScoredRoute {
+    item: RouteItem,
+    category_rank: u32,
+    title_len: usize,
 }
 
 /// 将 [`ActionId`] 映射到（[`ActionDescriptor`]，[`ActionHandler`]）。
@@ -216,6 +227,75 @@ impl ActionRegistry {
         });
         results
     }
+
+    /// 按完整输入上下文搜索候选。
+    ///
+    /// 与旧的 [`Self::search`] 不同，这里会应用 `visibility`、
+    /// `supported_inputs`、`file_extensions` 过滤，并使用分层匹配和
+    /// 确定性排序。为避免 `HashMap` 迭代顺序影响结果，先用
+    /// `(plugin_id, action_id)` 建立稳定的候选顺序。
+    pub fn search_input(&self, context: &InputContext) -> Vec<RouteItem> {
+        if context.raw_text.trim().is_empty() {
+            return Vec::new();
+        }
+
+        let mut entries: Vec<(&ActionId, &Entry)> = self.entries.iter().collect();
+        entries.sort_by(|(left_id, left), (right_id, right)| {
+            left.plugin_id
+                .as_deref()
+                .unwrap_or("")
+                .cmp(right.plugin_id.as_deref().unwrap_or(""))
+                .then_with(|| left_id.as_str().cmp(right_id.as_str()))
+        });
+
+        let mut scored: Vec<(usize, ScoredRoute)> = Vec::new();
+        for (candidate_order, (_, entry)) in entries.into_iter().enumerate() {
+            if entry.descriptor.visibility != ActionVisibility::Public {
+                continue;
+            }
+            let plugin = entry
+                .plugin_id
+                .as_ref()
+                .and_then(|plugin_id| self.manifests.get(plugin_id));
+            let Some(action_match) = score_action(&entry.descriptor, plugin, context) else {
+                continue;
+            };
+
+            let mut item = RouteItem::action(
+                entry.descriptor.id.clone(),
+                entry.descriptor.title.clone(),
+                action_match.score,
+            );
+            item.facet = action_match.facet;
+            item.matched_field = Some(action_match.matched_field);
+            item.matched_range = action_match.matched_range;
+
+            scored.push((
+                candidate_order,
+                ScoredRoute {
+                    item,
+                    category_rank: action_match.category_rank,
+                    title_len: action_match.title_len,
+                },
+            ));
+        }
+
+        // 当前还没有 last_used 存储；保留该排序位，先按 0 处理。
+        scored.sort_by(|(left_order, left), (right_order, right)| {
+            right
+                .item
+                .score
+                .total_cmp(&left.item.score)
+                .then_with(|| left.category_rank.cmp(&right.category_rank))
+                .then_with(|| left.title_len.cmp(&right.title_len))
+                .then_with(|| left_order.cmp(right_order))
+        });
+
+        scored
+            .into_iter()
+            .map(|(_, candidate)| candidate.item)
+            .collect()
+    }
 }
 
 impl Default for ActionRegistry {
@@ -314,5 +394,144 @@ mod tests {
         reg.register(echo_descriptor(), Arc::new(NoopHandler));
         assert!(reg.search("", InputType::PlainText).is_empty());
         assert!(reg.search("   ", InputType::PlainText).is_empty());
+    }
+
+    fn text_context(text: &str) -> flick_domain::InputContext {
+        flick_domain::InputContext::from_snapshot(
+            flick_domain::QueryGeneration::INITIAL,
+            &flick_domain::SearchInputSnapshot::text(text, flick_domain::InputSource::Manual),
+        )
+    }
+
+    #[test]
+    fn search_input_uses_title_match_and_reports_field() {
+        let mut reg = ActionRegistry::new();
+        reg.register(echo_descriptor(), Arc::new(NoopHandler));
+
+        let results = reg.search_input(&text_context("echo"));
+        assert_eq!(results.len(), 1);
+        assert_eq!(
+            results[0].matched_field,
+            Some(flick_domain::MatchField::Name)
+        );
+        assert!(results[0].score >= 800.0);
+    }
+
+    #[test]
+    fn search_input_filters_internal_and_supported_inputs() {
+        let mut internal = echo_descriptor();
+        internal.visibility = flick_domain::ActionVisibility::Internal;
+        let mut url_only = notes_descriptor();
+        url_only.title = "https://example.com".into();
+        url_only.keywords = vec!["example".into()];
+        url_only.supported_inputs = vec![InputType::Url];
+
+        let mut reg = ActionRegistry::new();
+        reg.register(internal, Arc::new(NoopHandler));
+        reg.register(url_only, Arc::new(NoopHandler));
+
+        assert!(reg.search_input(&text_context("echo")).is_empty());
+        assert!(reg.search_input(&text_context("notes")).is_empty());
+        // URL facet 存在时才允许 url-only 动作进入。
+        assert_eq!(
+            reg.search_input(&text_context("https://example.com")).len(),
+            1
+        );
+    }
+
+    #[test]
+    fn search_input_filters_file_extensions() {
+        let mut descriptor = echo_descriptor();
+        descriptor.title = "main".into();
+        descriptor.keywords = vec!["main".into()];
+        descriptor.supported_inputs = vec![InputType::File];
+        descriptor.file_extensions = vec!["rs".into()];
+
+        let file = flick_domain::FileInput {
+            uri: "file:///tmp/main.rs".into(),
+            display_name: "main.rs".into(),
+            extension: Some("rs".into()),
+            is_dir: false,
+            mime: Some("text/plain".into()),
+        };
+        let mut reg = ActionRegistry::new();
+        reg.register(descriptor, Arc::new(NoopHandler));
+        let context = flick_domain::InputContext::from_snapshot(
+            flick_domain::QueryGeneration::INITIAL,
+            &flick_domain::SearchInputSnapshot {
+                kind: flick_domain::UiInputKind::Files,
+                source: flick_domain::InputSource::DragDrop,
+                text: "main".into(),
+                files: vec![file],
+                image: None,
+            },
+        );
+        assert_eq!(reg.search_input(&context).len(), 1);
+    }
+
+    #[test]
+    fn search_input_plugin_keyword_expands_public_actions() {
+        let manifest = PluginManifest {
+            id: "demo.plugin".into(),
+            name: "Demo".into(),
+            author: "Demo".into(),
+            version: "1.0.0".into(),
+            kind: flick_domain::PluginKind::BuiltInRust,
+            keywords: vec!["demo".into()],
+            icon: None,
+            profile: flick_domain::PluginProfile::default(),
+            permissions: vec![],
+            plugin_dependencies: vec![],
+            settings: vec![],
+            surfaces: vec![],
+            supported_os: vec![],
+            supported_architectures: vec![],
+            needs_search: false,
+        };
+        let descriptor = ActionDescriptor::new(
+            ActionId::from_static("demo.plugin.v1.run"),
+            "Unrelated",
+            vec![],
+            ConcurrencyPolicy::Parallel,
+        );
+        let mut entries = HashMap::new();
+        entries.insert(
+            descriptor.id.clone(),
+            Entry {
+                descriptor,
+                handler: Arc::new(NoopHandler),
+                plugin_id: Some("demo.plugin".into()),
+            },
+        );
+        let mut manifests = HashMap::new();
+        manifests.insert("demo.plugin".into(), manifest);
+        let reg = ActionRegistry {
+            entries,
+            manifests,
+            surface_handlers: HashMap::new(),
+            lifecycles: HashMap::new(),
+        };
+
+        let results = reg.search_input(&text_context("demo"));
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].title, "Unrelated");
+    }
+
+    #[test]
+    fn search_input_orders_equal_scores_by_action_id() {
+        let mut reg = ActionRegistry::new();
+        for id in ["demo.plugin.v1.b", "demo.plugin.v1.a"] {
+            let descriptor = ActionDescriptor::new(
+                ActionId::from_static(id),
+                "Same",
+                vec!["same".into()],
+                ConcurrencyPolicy::Parallel,
+            );
+            reg.register(descriptor, Arc::new(NoopHandler));
+        }
+        let results = reg.search_input(&text_context("same"));
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].action_id.as_str(), "demo.plugin.v1.a");
+        assert_eq!(results[1].action_id.as_str(), "demo.plugin.v1.b");
     }
 }

@@ -74,7 +74,7 @@ fn action_descriptor_new_fills_phase1_defaults() {
         vec!["host".into(), "系统".into()],
         ConcurrencyPolicy::Parallel,
     );
-    assert_eq!(d.supported_inputs, vec![InputType::PlainText]);
+    assert!(d.supported_inputs.is_empty());
     assert!(d.file_extensions.is_empty());
     assert_eq!(d.output_types, vec![OutputType::Data]);
     assert_eq!(d.visibility, ActionVisibility::Public);

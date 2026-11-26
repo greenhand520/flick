@@ -8,7 +8,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use flick_domain::{
-    ActionRequest, Caller, Deadline, HostToUi, RouteItem, RouteItemKind, UiIntent, UiToHost,
+    ActionRequest, Caller, Deadline, HostToUi, InputContext, RouteItem, RouteItemKind, UiIntent,
+    UiToHost,
 };
 
 use crate::ports::{HostEventSink, RuntimePort};
@@ -82,10 +83,11 @@ impl ApplicationCoordinator {
                 self.query_tracker.set_current(generation);
 
                 let action_input = input.to_action_input();
+                let context = InputContext::from_snapshot(generation, &input);
                 // 首屏路由（纯内存）与搜索阶段执行（最多 150ms）并行进行；
                 // 后者的结果作为 Execution 项排在各自父 Action 之后。
                 let (action_items, execution_items) = tokio::join!(
-                    self.runtime.route(&action_input.text, action_input.kind),
+                    self.runtime.route_input(&context),
                     self.runtime
                         .search_invoke(&action_input.text, action_input.kind),
                 );
