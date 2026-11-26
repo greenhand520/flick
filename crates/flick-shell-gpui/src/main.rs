@@ -236,7 +236,9 @@ async fn fake_host(
 ) {
     // 使用与 daemon 相同的运行时与内置插件，让 demo 的路由/调用行为贴近真实。
     let runtime = Arc::new(ActionRuntime::default());
-    flick_builtins::register_builtin(&runtime).await;
+    flick_builtins::register_builtin(&runtime)
+        .await
+        .expect("register builtin plugins");
     let _ = runtime.register_plugin(&DemoClipboardPlugin::new()).await;
     runtime.activate_all_plugins().await;
     runtime.set_host_info(Arc::new(

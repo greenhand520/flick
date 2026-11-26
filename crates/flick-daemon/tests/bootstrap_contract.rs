@@ -203,7 +203,9 @@ async fn build_test_stack() -> (
     mpsc::UnboundedReceiver<HostToUi>,
 ) {
     let runtime = Arc::new(ActionRuntime::new());
-    flick_builtins::register_builtin(&runtime).await;
+    flick_builtins::register_builtin(&runtime)
+        .await
+        .expect("register builtin plugins");
     runtime.activate_all_plugins().await;
 
     let (event_tx, event_rx) = mpsc::unbounded_channel();

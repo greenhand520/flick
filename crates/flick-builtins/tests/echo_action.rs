@@ -93,7 +93,7 @@ async fn echo_registered_in_runtime_is_findable() {
     use flick_domain::ActionId;
 
     let runtime = flick_runtime::ActionRuntime::new();
-    register_builtin(&runtime).await;
+    register_builtin(&runtime).await.expect("register builtin plugins");
     runtime.activate_all_plugins().await;
 
     let id = ActionId::from_static(ECHO_ACTION_ID);

@@ -6,7 +6,9 @@ use flick_runtime::{ActionRuntime, Plugin};
 #[tokio::test]
 async fn phase0_builtins_register_and_route_host() {
     let rt = ActionRuntime::default();
-    flick_builtins::register_builtin(&rt).await;
+    flick_builtins::register_builtin(&rt)
+        .await
+        .expect("register builtin plugins");
     rt.activate_all_plugins().await;
     let info = flick_domain::HostInfo {
         os: flick_domain::OperatingSystem::Linux,

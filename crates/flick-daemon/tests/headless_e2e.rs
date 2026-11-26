@@ -164,7 +164,9 @@ async fn spawn_headless_daemon(tmpdir: &TempDir) -> (std::path::PathBuf, Arc<Tes
 
     // 创建运行时 + 内置动作
     let runtime = Arc::new(flick_runtime::ActionRuntime::new());
-    flick_builtins::register_builtin(&runtime).await;
+    flick_builtins::register_builtin(&runtime)
+        .await
+        .expect("register builtin plugins");
     runtime.activate_all_plugins().await;
 
     // 创建协调器
