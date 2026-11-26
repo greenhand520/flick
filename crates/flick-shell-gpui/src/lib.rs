@@ -1,8 +1,9 @@
 //! `flick-shell-gpui` — 基于 gpui-kit 的 Flick 搜索面板外壳。
 
 pub mod app;
-pub(crate) mod input_capture;
+pub(crate) mod clipboard_watch;
 pub mod detached;
+pub(crate) mod input_capture;
 pub mod theme;
 pub mod view;
 
