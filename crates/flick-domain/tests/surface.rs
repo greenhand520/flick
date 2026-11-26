@@ -1,5 +1,5 @@
 use flick_domain::{
-    BadgeTone, ListItem, SpacerSize, SurfaceContent, SurfaceNode, SURFACE_SCHEMA_VERSION,
+    BadgeTone, ListItem, SURFACE_SCHEMA_VERSION, SpacerSize, SurfaceContent, SurfaceNode,
 };
 
 fn sample() -> SurfaceContent {
@@ -7,14 +7,29 @@ fn sample() -> SurfaceContent {
         schema_version: SURFACE_SCHEMA_VERSION,
         title: Some("系统信息".into()),
         body: vec![
-            SurfaceNode::Heading { id: None, text: "概览".into() },
-            SurfaceNode::Text { id: Some("t1".into()), text: "hello".into(), muted: true },
+            SurfaceNode::Heading {
+                id: None,
+                text: "概览".into(),
+            },
+            SurfaceNode::Text {
+                id: Some("t1".into()),
+                text: "hello".into(),
+                muted: true,
+            },
             SurfaceNode::Section {
                 id: None,
                 title: Some("CPU".into()),
                 children: vec![
-                    SurfaceNode::KeyValue { id: None, key: "型号".into(), value: "x".into() },
-                    SurfaceNode::Badge { id: None, text: "ok".into(), tone: BadgeTone::Success },
+                    SurfaceNode::KeyValue {
+                        id: None,
+                        key: "型号".into(),
+                        value: "x".into(),
+                    },
+                    SurfaceNode::Badge {
+                        id: None,
+                        text: "ok".into(),
+                        tone: BadgeTone::Success,
+                    },
                 ],
             },
             SurfaceNode::List {
@@ -27,8 +42,17 @@ fn sample() -> SurfaceContent {
                     badge: Some("RAM".into()),
                 }],
             },
-            SurfaceNode::Row { id: None, children: vec![SurfaceNode::Divider { id: None }] },
-            SurfaceNode::Column { id: None, children: vec![SurfaceNode::Spacer { id: None, size: SpacerSize::Md }] },
+            SurfaceNode::Row {
+                id: None,
+                children: vec![SurfaceNode::Divider { id: None }],
+            },
+            SurfaceNode::Column {
+                id: None,
+                children: vec![SurfaceNode::Spacer {
+                    id: None,
+                    size: SpacerSize::Md,
+                }],
+            },
         ],
     }
 }

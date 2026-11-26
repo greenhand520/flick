@@ -7,10 +7,14 @@ use flick_runtime::ActionRuntime;
 async fn register_builtin_registers_apps_plugin() {
     let runtime = ActionRuntime::new();
     register_builtin(&runtime).await.unwrap();
-    let route = runtime.route("app", flick_domain::InputType::PlainText).await;
-    assert!(route
-        .iter()
-        .any(|item| item.action_id.as_str() == "flick.builtin.apps.search"));
+    let route = runtime
+        .route("app", flick_domain::InputType::PlainText)
+        .await;
+    assert!(
+        route
+            .iter()
+            .any(|item| item.action_id.as_str() == "flick.builtin.apps.search")
+    );
 }
 
 /// 端到端：搜索阶段返回 Execution 项，激活时交给父 Action 启动进程。
@@ -33,9 +37,7 @@ async fn apps_execution_item_activates_through_runtime() {
     runtime.register_plugin(&plugin).await.unwrap();
     runtime.activate_all_plugins().await;
 
-    let items = runtime
-        .search_invoke("true", InputType::PlainText)
-        .await;
+    let items = runtime.search_invoke("true", InputType::PlainText).await;
     assert_eq!(items.len(), 1);
     assert_eq!(items[0].title, "TrueApp");
     assert_eq!(items[0].item_id, "app:true");
@@ -48,5 +50,8 @@ async fn apps_execution_item_activates_through_runtime() {
         )
         .await
         .expect("activation outcome");
-    assert!(matches!(outcome, flick_domain::ActionOutcome::Notice { .. }));
+    assert!(matches!(
+        outcome,
+        flick_domain::ActionOutcome::Notice { .. }
+    ));
 }

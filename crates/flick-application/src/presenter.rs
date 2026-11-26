@@ -362,13 +362,15 @@ impl PanelState {
             let parent_action_id = route
                 .parent_action_id
                 .clone()
-                .or_else(|| route.execution.as_ref().map(|item| item.parent_action_id.clone()))
+                .or_else(|| {
+                    route
+                        .execution
+                        .as_ref()
+                        .map(|item| item.parent_action_id.clone())
+                })
                 .unwrap_or_else(|| route.action_id.clone());
             let item_id = if route.item_id.is_empty() {
-                route
-                    .execution
-                    .as_ref()
-                    .map(|item| item.item_id.clone())
+                route.execution.as_ref().map(|item| item.item_id.clone())
             } else {
                 Some(route.item_id.clone())
             };
@@ -525,10 +527,7 @@ mod tests {
         );
         // 关键：Surface 搜索模式下输入变化绝不清空当前结果。
         assert!(
-            matches!(
-                st.last_outcome,
-                Some(ActionOutcome::OpenSurface { .. })
-            ),
+            matches!(st.last_outcome, Some(ActionOutcome::OpenSurface { .. })),
             "surface input must not clear last_outcome"
         );
         assert_eq!(st.active_invocation, before_active);
@@ -539,9 +538,7 @@ mod tests {
             actions,
             vec![PanelAction::SendToHost(UiToHost::SurfaceEvent {
                 session_id: session,
-                kind: SurfaceEventKind::SearchChanged {
-                    text: "abc".into()
-                },
+                kind: SurfaceEventKind::SearchChanged { text: "abc".into() },
             })]
         );
     }
@@ -552,9 +549,11 @@ mod tests {
         let mut st = state_in_surface_search(session);
 
         let actions = st.update(PanelEvent::Hide);
-        assert!(actions.contains(&PanelAction::SendToHost(UiToHost::SurfaceClosed {
-            session_id: session,
-        })));
+        assert!(
+            actions.contains(&PanelAction::SendToHost(UiToHost::SurfaceClosed {
+                session_id: session,
+            }))
+        );
         assert!(actions.contains(&PanelAction::SendToHost(UiToHost::SearchPanelClosed)));
         assert_eq!(st.surface_session(), None);
         assert!(!st.surface_search());
@@ -572,7 +571,9 @@ mod tests {
         assert!(actions.is_empty());
         match st.last_outcome.as_ref().expect("last_outcome present") {
             ActionOutcome::OpenSurface {
-                content, session_id, ..
+                content,
+                session_id,
+                ..
             } => {
                 assert_eq!(*content, new_content);
                 assert_eq!(*session_id, Some(session));
@@ -625,13 +626,15 @@ mod tests {
         let actions = st.update(PanelEvent::Submitted);
         assert_eq!(st.active_invocation, Some(invocation_id));
         match actions.as_slice() {
-            [PanelAction::SendToHost(UiToHost::ExecutionActivated {
-                generation,
-                parent_action_id,
-                invocation_id: sent_invocation,
-                item_id,
-                event,
-            })] => {
+            [
+                PanelAction::SendToHost(UiToHost::ExecutionActivated {
+                    generation,
+                    parent_action_id,
+                    invocation_id: sent_invocation,
+                    item_id,
+                    event,
+                }),
+            ] => {
                 assert_eq!(*generation, st.generation);
                 assert_eq!(parent_action_id, &parent);
                 assert_eq!(*sent_invocation, invocation_id);

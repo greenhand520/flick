@@ -96,10 +96,9 @@ fn run_graphical(socket_path: PathBuf) -> Result<(), String> {
         tokio::spawn(async move {
             let trigger = flick_adapters_linux::session::show_search_preferred_trigger();
             match portal.configure_search_shortcut(trigger).await {
-                Ok(binding) => tracing::info!(
-                    ?binding,
-                    "Portal show-search shortcut bound at startup"
-                ),
+                Ok(binding) => {
+                    tracing::info!(?binding, "Portal show-search shortcut bound at startup")
+                }
                 Err(error) => tracing::warn!(
                     ?error,
                     "Portal startup binding failed; run `flick shortcuts configure` to bind manually"

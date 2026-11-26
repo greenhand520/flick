@@ -185,7 +185,10 @@ impl AshpdPortalClient {
                 .map_err(|error| ShortcutError::Unavailable {
                     reason: format!("Failed to connect to the session bus:{error}"),
                 })?;
-        let mut slot = self.connection.lock().expect("portal connection slot poisoned");
+        let mut slot = self
+            .connection
+            .lock()
+            .expect("portal connection slot poisoned");
         Ok(slot.get_or_insert(connection).clone())
     }
 

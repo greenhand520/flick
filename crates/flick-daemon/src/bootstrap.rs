@@ -143,10 +143,14 @@ impl flick_ipc::server::IpcDispatcher for DaemonIpcDispatcher {
                     }
                     ActionOutcome::Text(text) => IpcResult::Ok(serde_json::json!({ "text": text })),
                     ActionOutcome::Url(url) => IpcResult::Ok(serde_json::json!({ "url": url })),
-                    ActionOutcome::File(file) => {
-                        IpcResult::Ok(serde_json::to_value(&file).unwrap_or(serde_json::Value::Null))
-                    }
-                    ActionOutcome::OpenSurface { surface_id, content, .. } => IpcResult::Ok(
+                    ActionOutcome::File(file) => IpcResult::Ok(
+                        serde_json::to_value(&file).unwrap_or(serde_json::Value::Null),
+                    ),
+                    ActionOutcome::OpenSurface {
+                        surface_id,
+                        content,
+                        ..
+                    } => IpcResult::Ok(
                         serde_json::json!({ "surface_id": surface_id, "content": content }),
                     ),
                 }

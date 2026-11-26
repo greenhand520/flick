@@ -37,7 +37,11 @@ fn execution_item_round_trips_and_route_helper_marks_action() {
     assert_eq!(back.title, "Firefox");
     assert_eq!(back.output["exec"], "firefox");
 
-    let route = RouteItem::action(ActionId::from_static("flick.builtin.apps.search"), "应用搜索", 1.0);
+    let route = RouteItem::action(
+        ActionId::from_static("flick.builtin.apps.search"),
+        "应用搜索",
+        1.0,
+    );
     assert_eq!(route.kind, RouteItemKind::Action);
     assert_eq!(route.item_id, "action:flick.builtin.apps.search");
 }

@@ -19,7 +19,9 @@ impl HeadlessRuntime {
             .await
             .expect("register builtin plugins");
         runtime.activate_all_plugins().await;
-        runtime.set_host_info(Arc::new(flick_adapters_linux::host_info::collect_host_info()));
+        runtime.set_host_info(Arc::new(
+            flick_adapters_linux::host_info::collect_host_info(),
+        ));
         Self { runtime }
     }
 }

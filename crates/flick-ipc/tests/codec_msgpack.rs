@@ -1,7 +1,5 @@
-use flick_ipc::codec::{decode, encode, read_frame, CodecError, MAX_FRAME_SIZE};
-use flick_ipc::message::{
-    IpcCommand, IpcRequestEnvelope, IpcResult, IPC_PROTOCOL_VERSION,
-};
+use flick_ipc::codec::{CodecError, MAX_FRAME_SIZE, decode, encode, read_frame};
+use flick_ipc::message::{IPC_PROTOCOL_VERSION, IpcCommand, IpcRequestEnvelope, IpcResult};
 use std::io::Cursor;
 
 #[test]
@@ -9,7 +7,10 @@ fn envelope_roundtrips_over_msgpack() {
     let env = IpcRequestEnvelope {
         protocol_version: IPC_PROTOCOL_VERSION,
         request_id: "r1".into(),
-        command: IpcCommand::Trigger { action_id: "flick.builtin.echo.v1.echo".into(), text: "hi".into() },
+        command: IpcCommand::Trigger {
+            action_id: "flick.builtin.echo.v1.echo".into(),
+            text: "hi".into(),
+        },
     };
     let bytes = encode(&env).unwrap();
     let back: IpcRequestEnvelope = decode(&bytes[4..]).unwrap();

@@ -8,16 +8,16 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use flick_domain::{SurfaceContent, SurfaceEventKind, SurfaceSessionId, UiToHost};
-use flick_ui::render::{col, render_surface_with_inputs, InputWidgetSpec};
-use flick_ui::style::{estimate_height, SurfaceStyle};
+use flick_ui::render::{InputWidgetSpec, col, render_surface_with_inputs};
+use flick_ui::style::{SurfaceStyle, estimate_height};
+use gpui_kit::component::Sizable;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::label::Label;
-use gpui_kit::component::Sizable;
 use gpui_kit::*;
 use tokio::sync::mpsc;
 
 use crate::theme::{self, ThemeMode};
-use crate::view::{collect_inputs, CloseDetached};
+use crate::view::{CloseDetached, collect_inputs};
 
 /// 独立窗口逻辑宽度（与搜索面板一致，统一取 `theme::PANEL_WIDTH`）。
 pub const DETACHED_WIDTH: f32 = theme::PANEL_WIDTH;
@@ -164,29 +164,25 @@ impl DetachedSurfaceView {
         let mut widget_subs: Vec<Subscription> = Vec::new();
         let search_input = if needs_search {
             let input = cx.new(|cx| InputState::new(window, cx).placeholder("搜索"));
-            let sub = cx.subscribe_in(
-                &input,
-                window,
-                |this, state, event, _window, cx| {
-                    let text = state.read(cx).value().to_string();
-                    let kind = match event {
-                        InputEvent::Change => {
-                            Some(SurfaceEventKind::SearchChanged { text: text.clone() })
-                        }
-                        InputEvent::PressEnter { .. } => Some(SurfaceEventKind::Submitted {
-                            node_id: "__search__".into(),
-                            text: text.clone(),
-                        }),
-                        _ => None,
-                    };
-                    if let Some(kind) = kind {
-                        let _ = this.surface_tx.send(UiToHost::SurfaceEvent {
-                            session_id: this.session_id,
-                            kind,
-                        });
+            let sub = cx.subscribe_in(&input, window, |this, state, event, _window, cx| {
+                let text = state.read(cx).value().to_string();
+                let kind = match event {
+                    InputEvent::Change => {
+                        Some(SurfaceEventKind::SearchChanged { text: text.clone() })
                     }
-                },
-            );
+                    InputEvent::PressEnter { .. } => Some(SurfaceEventKind::Submitted {
+                        node_id: "__search__".into(),
+                        text: text.clone(),
+                    }),
+                    _ => None,
+                };
+                if let Some(kind) = kind {
+                    let _ = this.surface_tx.send(UiToHost::SurfaceEvent {
+                        session_id: this.session_id,
+                        kind,
+                    });
+                }
+            });
             widget_subs.push(sub);
             Some(input)
         } else {
@@ -231,10 +227,8 @@ impl DetachedSurfaceView {
                 });
                 self.widgets.insert(spec.id.clone(), entity.clone());
                 let node_id = spec.id.clone();
-                let sub = cx.subscribe_in(
-                    &entity,
-                    window,
-                    move |this, state, event, _window, cx| {
+                let sub =
+                    cx.subscribe_in(&entity, window, move |this, state, event, _window, cx| {
                         let text = state.read(cx).value().to_string();
                         let kind = match event {
                             InputEvent::Change => Some(SurfaceEventKind::TextChanged {
@@ -253,8 +247,7 @@ impl DetachedSurfaceView {
                                 kind,
                             });
                         }
-                    },
-                );
+                    });
                 self._widget_subs.push(sub);
             }
             if let Some(entity) = self.widgets.get(&spec.id).cloned() {
@@ -320,9 +313,10 @@ impl Render for DetachedSurfaceView {
                     .child(
                         div()
                             .w_full()
-                            .on_mouse_down(MouseButton::Left, cx.listener(|_, _, _, cx| {
-                                cx.stop_propagation()
-                            }))
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|_, _, _, cx| cx.stop_propagation()),
+                            )
                             .child(
                                 Input::new(&input)
                                     .appearance(false)
@@ -419,11 +413,11 @@ mod tests {
     // 作用域，令内置 `#[test]` 解析到 gpui 宏而递归爆栈（与 crate 根 `theme_config_tests`
     // 同因）。只显式引入被测项。
     use super::{
-        cascade_offset, detached_bounds, detached_size, DETACHED_MAX_HEIGHT, DETACHED_MIN_HEIGHT,
-        DETACHED_WIDTH,
+        DETACHED_MAX_HEIGHT, DETACHED_MIN_HEIGHT, DETACHED_WIDTH, cascade_offset, detached_bounds,
+        detached_size,
     };
     use crate::theme::ThemeMode;
-    use flick_domain::{SurfaceContent, SurfaceNode, SURFACE_SCHEMA_VERSION};
+    use flick_domain::{SURFACE_SCHEMA_VERSION, SurfaceContent, SurfaceNode};
     use flick_ui::style::SurfaceStyle;
 
     /// 1366x768 显示器：`(x, y, w, h)`。
@@ -483,13 +477,17 @@ mod tests {
             id: None,
             text: "系统信息".into(),
         }];
-        let (x, y, w, h) = detached_bounds(&content(one), ThemeMode::Dark, DISPLAY_1366X768, 0, false);
+        let (x, y, w, h) =
+            detached_bounds(&content(one), ThemeMode::Dark, DISPLAY_1366X768, 0, false);
         assert_eq!(w, DETACHED_WIDTH);
         assert_eq!(h, DETACHED_MIN_HEIGHT); // 小内容被夹到最小高度
         // 水平居中：(1366 - 666) / 2 = 350。
         assert_eq!(x, (1366.0 - DETACHED_WIDTH) / 2.0);
         // y = 0 + PANEL_TOP_MARGIN + PANEL_INPUT_HEIGHT + 24，未越界，保留基准。
-        assert_eq!(y, crate::PANEL_TOP_MARGIN + crate::PANEL_INPUT_HEIGHT + 24.0);
+        assert_eq!(
+            y,
+            crate::PANEL_TOP_MARGIN + crate::PANEL_INPUT_HEIGHT + 24.0
+        );
     }
 
     /// 超高内容在 1366x768 上：高度与 y 被夹取，窗口整体落在屏内（y + h <= 屏高）。
@@ -502,7 +500,8 @@ mod tests {
                 muted: false,
             })
             .collect();
-        let (x, y, w, h) = detached_bounds(&content(many), ThemeMode::Dark, DISPLAY_1366X768, 0, false);
+        let (x, y, w, h) =
+            detached_bounds(&content(many), ThemeMode::Dark, DISPLAY_1366X768, 0, false);
         assert_eq!(w, DETACHED_WIDTH);
         assert!(h <= DETACHED_MAX_HEIGHT);
         assert!(h <= 768.0);
@@ -519,11 +518,7 @@ mod tests {
         let (x, y, w, h) = detached_bounds(&content(vec![]), ThemeMode::Dark, display, 7, false);
         assert_eq!(w, DETACHED_WIDTH);
         assert!(x >= 0.0, "x {x} < left edge");
-        assert!(
-            x + w <= 800.0,
-            "window right {} exceeds 800",
-            x + w
-        );
+        assert!(x + w <= 800.0, "window right {} exceeds 800", x + w);
         assert!(y >= 0.0 && y + h <= 600.0);
     }
 

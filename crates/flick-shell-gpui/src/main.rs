@@ -235,8 +235,7 @@ fn merge_demo_results(
     action_items: Vec<RouteItem>,
     execution_items: Vec<RouteItem>,
 ) -> Vec<RouteItem> {
-    let mut remaining: Vec<Option<RouteItem>> =
-        execution_items.into_iter().map(Some).collect();
+    let mut remaining: Vec<Option<RouteItem>> = execution_items.into_iter().map(Some).collect();
     let mut merged = Vec::with_capacity(action_items.len() + remaining.len());
     for action in action_items {
         let parent_id = action.action_id.clone();

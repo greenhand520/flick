@@ -81,13 +81,26 @@ pub trait Plugin: Send + Sync {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PluginRegistrationError {
-    InvalidManifest { reason: String },
+    InvalidManifest {
+        reason: String,
+    },
     NoActions,
-    IdCollision { action_id: String },
-    NamespaceViolation { action_id: String, plugin_id: String },
-    DuplicateSettingKey { key: String },
-    SurfaceIdCollision { surface_id: String },
-    DependencyMissing { plugin_id: String },
+    IdCollision {
+        action_id: String,
+    },
+    NamespaceViolation {
+        action_id: String,
+        plugin_id: String,
+    },
+    DuplicateSettingKey {
+        key: String,
+    },
+    SurfaceIdCollision {
+        surface_id: String,
+    },
+    DependencyMissing {
+        plugin_id: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

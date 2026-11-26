@@ -293,37 +293,36 @@ impl AppView {
                 });
                 self.widgets.insert(spec.id.clone(), entity.clone());
                 let node_id = spec.id.clone();
-                let sub = cx.subscribe_in(
-                    &entity,
-                    window,
-                    move |this, state, event, _window, cx| match event {
-                        InputEvent::Change => {
-                            let text = state.read(cx).value().to_string();
-                            if let Some(session_id) = this.state.panel.surface_session() {
-                                let _ = this.host_tx.send(UiToHost::SurfaceEvent {
-                                    session_id,
-                                    kind: SurfaceEventKind::TextChanged {
-                                        node_id: node_id.clone(),
-                                        text,
-                                    },
-                                });
+                let sub =
+                    cx.subscribe_in(&entity, window, move |this, state, event, _window, cx| {
+                        match event {
+                            InputEvent::Change => {
+                                let text = state.read(cx).value().to_string();
+                                if let Some(session_id) = this.state.panel.surface_session() {
+                                    let _ = this.host_tx.send(UiToHost::SurfaceEvent {
+                                        session_id,
+                                        kind: SurfaceEventKind::TextChanged {
+                                            node_id: node_id.clone(),
+                                            text,
+                                        },
+                                    });
+                                }
                             }
-                        }
-                        InputEvent::PressEnter { .. } => {
-                            let text = state.read(cx).value().to_string();
-                            if let Some(session_id) = this.state.panel.surface_session() {
-                                let _ = this.host_tx.send(UiToHost::SurfaceEvent {
-                                    session_id,
-                                    kind: SurfaceEventKind::Submitted {
-                                        node_id: node_id.clone(),
-                                        text,
-                                    },
-                                });
+                            InputEvent::PressEnter { .. } => {
+                                let text = state.read(cx).value().to_string();
+                                if let Some(session_id) = this.state.panel.surface_session() {
+                                    let _ = this.host_tx.send(UiToHost::SurfaceEvent {
+                                        session_id,
+                                        kind: SurfaceEventKind::Submitted {
+                                            node_id: node_id.clone(),
+                                            text,
+                                        },
+                                    });
+                                }
                             }
+                            _ => {}
                         }
-                        _ => {}
-                    },
-                );
+                    });
                 self._widget_subs.push(sub);
             }
             if let Some(entity) = self.widgets.get(&spec.id).cloned() {
@@ -545,9 +544,10 @@ impl Render for AppView {
                     div()
                         .w_full()
                         // 让输入区吞掉鼠标按下，避免点击输入框时触发窗口拖动。
-                        .on_mouse_down(MouseButton::Left, cx.listener(|_, _, _, cx| {
-                            cx.stop_propagation()
-                        }))
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(|_, _, _, cx| cx.stop_propagation()),
+                        )
                         .child(
                             Input::new(&self.input)
                                 .appearance(false)
@@ -644,9 +644,10 @@ impl Render for AppView {
                     .max_h(px(self.metrics.results_max_height))
                     .overflow_y_scroll()
                     .pt(px(self.metrics.content_gap))
-                    .on_mouse_down(MouseButton::Left, cx.listener(|_, _, _, cx| {
-                        cx.stop_propagation()
-                    }))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|_, _, _, cx| cx.stop_propagation()),
+                    )
                     .child(rendered),
             );
         } else {
@@ -662,9 +663,10 @@ impl Render for AppView {
                     .max_h(px(self.metrics.results_max_height))
                     .overflow_y_scroll()
                     .pt(px(self.metrics.content_gap))
-                    .on_mouse_down(MouseButton::Left, cx.listener(|_, _, _, cx| {
-                        cx.stop_propagation()
-                    }));
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|_, _, _, cx| cx.stop_propagation()),
+                    );
 
                 for (index, item) in self.state.panel.routes.iter().enumerate() {
                     let selected = index == self.state.panel.selection.index;
@@ -726,7 +728,11 @@ impl Render for AppView {
                         // 兜底：`OpenSurface` 但 body 为空（故未走 Surface 渲染）时，
                         // 不再输出 "Surface: {id}" 纯文本；按 spec §4.4 用
                         // Badge("Surface") + Text(title 或 surface_id) 组合渲染。
-                        ActionOutcome::OpenSurface { surface_id, content, .. } => {
+                        ActionOutcome::OpenSurface {
+                            surface_id,
+                            content,
+                            ..
+                        } => {
                             let label = content.title.clone().unwrap_or_else(|| surface_id.clone());
                             results = results.child(
                                 row.flex()

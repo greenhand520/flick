@@ -27,24 +27,96 @@ pub struct SurfaceContent {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum SurfaceNode {
-    Section { #[serde(default, skip_serializing_if = "Option::is_none")] id: Option<String>, #[serde(default, skip_serializing_if = "Option::is_none")] title: Option<String>, #[serde(default)] children: Vec<SurfaceNode> },
-    Row { #[serde(default, skip_serializing_if = "Option::is_none")] id: Option<String>, #[serde(default)] children: Vec<SurfaceNode> },
-    Column { #[serde(default, skip_serializing_if = "Option::is_none")] id: Option<String>, #[serde(default)] children: Vec<SurfaceNode> },
-    Heading { #[serde(default, skip_serializing_if = "Option::is_none")] id: Option<String>, text: String },
-    Text { #[serde(default, skip_serializing_if = "Option::is_none")] id: Option<String>, text: String, #[serde(default)] muted: bool },
-    KeyValue { #[serde(default, skip_serializing_if = "Option::is_none")] id: Option<String>, key: String, value: String },
-    Badge { #[serde(default, skip_serializing_if = "Option::is_none")] id: Option<String>, text: String, #[serde(default)] tone: BadgeTone },
-    List { #[serde(default, skip_serializing_if = "Option::is_none")] id: Option<String>, #[serde(default)] items: Vec<ListItem> },
-    Divider { #[serde(default, skip_serializing_if = "Option::is_none")] id: Option<String> },
-    Spacer { #[serde(default, skip_serializing_if = "Option::is_none")] id: Option<String>, #[serde(default)] size: SpacerSize },
+    Section {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        title: Option<String>,
+        #[serde(default)]
+        children: Vec<SurfaceNode>,
+    },
+    Row {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+        #[serde(default)]
+        children: Vec<SurfaceNode>,
+    },
+    Column {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+        #[serde(default)]
+        children: Vec<SurfaceNode>,
+    },
+    Heading {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+        text: String,
+    },
+    Text {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+        text: String,
+        #[serde(default)]
+        muted: bool,
+    },
+    KeyValue {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+        key: String,
+        value: String,
+    },
+    Badge {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+        text: String,
+        #[serde(default)]
+        tone: BadgeTone,
+    },
+    List {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+        #[serde(default)]
+        items: Vec<ListItem>,
+    },
+    Divider {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+    },
+    Spacer {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+        #[serde(default)]
+        size: SpacerSize,
+    },
     /// 交互节点：单行文本输入。`id` 在同一个 `SurfaceContent` 内唯一。
-    Input { id: String, value: String, #[serde(default, skip_serializing_if = "Option::is_none")] placeholder: Option<String> },
+    Input {
+        id: String,
+        value: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        placeholder: Option<String>,
+    },
     /// 交互节点：多行文本输入。
-    TextArea { id: String, value: String, #[serde(default, skip_serializing_if = "Option::is_none")] placeholder: Option<String>, #[serde(default, skip_serializing_if = "Option::is_none")] rows: Option<u16> },
+    TextArea {
+        id: String,
+        value: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        placeholder: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        rows: Option<u16>,
+    },
     /// 交互节点：按钮。
-    Button { id: String, label: String, #[serde(default)] tone: ButtonTone },
+    Button {
+        id: String,
+        label: String,
+        #[serde(default)]
+        tone: ButtonTone,
+    },
     /// 交互节点：复选框。
-    Checkbox { id: String, checked: bool, label: String },
+    Checkbox {
+        id: String,
+        checked: bool,
+        label: String,
+    },
 }
 
 /// Badge 的语义色调。
@@ -170,11 +242,26 @@ mod tests {
     fn surface_event_kind_round_trips() {
         let events = vec![
             SurfaceEventKind::SearchChanged { text: "q".into() },
-            SurfaceEventKind::TextChanged { node_id: "n".into(), text: "v".into() },
-            SurfaceEventKind::Submitted { node_id: "n".into(), text: "v".into() },
-            SurfaceEventKind::Click { node_id: "n".into() },
-            SurfaceEventKind::Toggled { node_id: "n".into(), checked: true },
-            SurfaceEventKind::ContextMenu { node_id: "n".into(), x: 1.0, y: 2.0 },
+            SurfaceEventKind::TextChanged {
+                node_id: "n".into(),
+                text: "v".into(),
+            },
+            SurfaceEventKind::Submitted {
+                node_id: "n".into(),
+                text: "v".into(),
+            },
+            SurfaceEventKind::Click {
+                node_id: "n".into(),
+            },
+            SurfaceEventKind::Toggled {
+                node_id: "n".into(),
+                checked: true,
+            },
+            SurfaceEventKind::ContextMenu {
+                node_id: "n".into(),
+                x: 1.0,
+                y: 2.0,
+            },
         ];
         for e in events {
             let json = serde_json::to_string(&e).unwrap();

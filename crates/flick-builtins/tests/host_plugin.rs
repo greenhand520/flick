@@ -45,7 +45,10 @@ fn host_manifest_is_valid() {
     assert_eq!(m.surfaces.len(), 1);
     let a = flick_builtins::host::HostPlugin.actions();
     assert_eq!(a.len(), 1);
-    assert_eq!(a[0].descriptor.id.as_str(), flick_builtins::host::HOST_ACTION_ID);
+    assert_eq!(
+        a[0].descriptor.id.as_str(),
+        flick_builtins::host::HOST_ACTION_ID
+    );
 }
 
 #[tokio::test]
@@ -73,7 +76,11 @@ async fn host_action_returns_open_surface() {
         deadline: Deadline::from_secs(30),
     };
     match rt.invoke(req).await {
-        ActionOutcome::OpenSurface { surface_id, content, .. } => {
+        ActionOutcome::OpenSurface {
+            surface_id,
+            content,
+            ..
+        } => {
             assert_eq!(surface_id, "info");
             assert_eq!(content.schema_version, flick_domain::SURFACE_SCHEMA_VERSION);
             assert!(!content.body.is_empty());

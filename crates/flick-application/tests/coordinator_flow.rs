@@ -108,10 +108,7 @@ impl RuntimePort for FakeRuntime {
         session: SurfaceSessionId,
         kind: SurfaceEventKind,
     ) -> Result<SurfaceContent, String> {
-        self.surface_events
-            .lock()
-            .unwrap()
-            .push((session, kind));
+        self.surface_events.lock().unwrap().push((session, kind));
         self.surface_event_result.lock().unwrap().clone()
     }
 

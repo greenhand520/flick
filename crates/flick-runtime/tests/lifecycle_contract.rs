@@ -1,6 +1,6 @@
 use std::sync::{
-    atomic::{AtomicUsize, Ordering},
     Arc,
+    atomic::{AtomicUsize, Ordering},
 };
 
 use async_trait::async_trait;
@@ -67,7 +67,11 @@ struct NoopHandler;
 
 #[async_trait]
 impl ActionHandler for NoopHandler {
-    async fn invoke(&self, _: ActionRequest, _: ActionContext) -> Result<ActionOutcome, ActionError> {
+    async fn invoke(
+        &self,
+        _: ActionRequest,
+        _: ActionContext,
+    ) -> Result<ActionOutcome, ActionError> {
         Ok(ActionOutcome::Notice {
             message: "ok".into(),
         })

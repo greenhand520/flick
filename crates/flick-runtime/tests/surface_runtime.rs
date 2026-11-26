@@ -116,7 +116,10 @@ async fn invoke_open_surface_creates_session_with_needs_search() {
             needs_search,
             ..
         } => {
-            assert!(needs_search, "needs_search should be backfilled from manifest");
+            assert!(
+                needs_search,
+                "needs_search should be backfilled from manifest"
+            );
             assert!(session_id.is_some(), "runtime should generate a session id");
         }
         other => panic!("unexpected outcome: {other:?}"),
@@ -143,7 +146,12 @@ async fn surface_event_routes_to_handler() {
         other => panic!("unexpected outcome: {other:?}"),
     };
     let content = rt
-        .surface_event(sid, SurfaceEventKind::Click { node_id: "n".into() })
+        .surface_event(
+            sid,
+            SurfaceEventKind::Click {
+                node_id: "n".into(),
+            },
+        )
         .await
         .expect("event should route");
     assert!(content.title.as_deref().unwrap_or("").contains("Click"));
@@ -155,7 +163,9 @@ async fn surface_event_unknown_session_errors() {
     let err = rt
         .surface_event(
             SurfaceSessionId::new(),
-            SurfaceEventKind::Click { node_id: "n".into() },
+            SurfaceEventKind::Click {
+                node_id: "n".into(),
+            },
         )
         .await
         .unwrap_err();
@@ -177,7 +187,12 @@ async fn surface_closed_is_idempotent_and_removes_session() {
     rt.surface_closed(sid).await;
     // 关闭后会话已移除，事件应返回 not found。
     let err = rt
-        .surface_event(sid, SurfaceEventKind::Click { node_id: "n".into() })
+        .surface_event(
+            sid,
+            SurfaceEventKind::Click {
+                node_id: "n".into(),
+            },
+        )
         .await
         .unwrap_err();
     assert_eq!(err.message, "surface session not found");

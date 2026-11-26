@@ -70,14 +70,13 @@ async fn echo_does_not_vary_by_caller_kind() {
 async fn echo_plugin_registers_and_routes() {
     use flick_runtime::ActionRuntime;
     let rt = ActionRuntime::default();
-    rt.register_plugin(&flick_builtins::EchoPlugin).await.unwrap();
+    rt.register_plugin(&flick_builtins::EchoPlugin)
+        .await
+        .unwrap();
     let routes = rt
         .route("echo hello", flick_domain::InputType::PlainText)
         .await;
-    assert_eq!(
-        routes[0].action_id.as_str(),
-        flick_builtins::ECHO_ACTION_ID
-    );
+    assert_eq!(routes[0].action_id.as_str(), flick_builtins::ECHO_ACTION_ID);
 
     // 端到端：经插件注册后的运行时 invoke 仍返回同样的 Data 载荷。
     let req = ActionRequest::new_echo("hi there", Caller::cli("test"));
@@ -93,7 +92,9 @@ async fn echo_registered_in_runtime_is_findable() {
     use flick_domain::ActionId;
 
     let runtime = flick_runtime::ActionRuntime::new();
-    register_builtin(&runtime).await.expect("register builtin plugins");
+    register_builtin(&runtime)
+        .await
+        .expect("register builtin plugins");
     runtime.activate_all_plugins().await;
 
     let id = ActionId::from_static(ECHO_ACTION_ID);

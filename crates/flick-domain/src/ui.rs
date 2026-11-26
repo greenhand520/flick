@@ -17,7 +17,9 @@ use serde::{Deserialize, Serialize};
 /// `HostToUi::ShowSearchPanel` 消息。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum UiIntent {
-    ShowSearchPanel { activation_token: Option<String> },
+    ShowSearchPanel {
+        activation_token: Option<String>,
+    },
     HideSearchPanel,
     /// 切换搜索面板：不可见则唤起、可见则收起。全局快捷键使用此语义。
     ToggleSearchPanel,

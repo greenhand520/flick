@@ -7,7 +7,7 @@ pub(crate) mod input_capture;
 pub mod theme;
 pub mod view;
 
-pub use app::{desired_size, AppState, Effect, UiEvent};
+pub use app::{AppState, Effect, UiEvent, desired_size};
 pub use detached::DetachedSurfaceView;
 pub use flick_application::presenter::{PanelAction, PanelEvent, PanelState, SelectionState};
 pub use theme::{Metrics, ThemeMode, UiTheme};
@@ -671,7 +671,7 @@ pub fn run_with_theme(
 mod theme_config_tests {
     // 注意：不要 `use super::*`——crate 根的 `use gpui_kit::*` 会把 gpui 的 `test` 宏
     // 带进作用域，令内置 `#[test]` 解析到 gpui 宏而递归爆栈。只显式引入所需项。
-    use super::{parse_theme_toml, ThemeMode};
+    use super::{ThemeMode, parse_theme_toml};
 
     #[test]
     fn parse_theme_toml_reads_mode() {

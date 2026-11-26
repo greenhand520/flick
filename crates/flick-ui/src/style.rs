@@ -1,6 +1,6 @@
 //! Surface 样式（纯数据，不依赖 gpui）与高度估算。
 
-use flick_domain::{ButtonTone, SurfaceContent, SurfaceNode, SpacerSize};
+use flick_domain::{ButtonTone, SpacerSize, SurfaceContent, SurfaceNode};
 
 /// 一套 Surface 呈现样式（颜色 + 尺寸）。默认值仅为高度估算服务时使用。
 #[derive(Debug, Clone, Copy)]
@@ -52,10 +52,7 @@ impl Default for SurfaceStyle {
 
 impl SurfaceStyle {
     /// 按按钮语义色调解析出（背景色, 前景色）。
-    pub fn button_colors(
-        &self,
-        tone: ButtonTone,
-    ) -> ((u8, u8, u8, u8), (u8, u8, u8, u8)) {
+    pub fn button_colors(&self, tone: ButtonTone) -> ((u8, u8, u8, u8), (u8, u8, u8, u8)) {
         match tone {
             ButtonTone::Primary => (self.primary, self.primary_fg),
             ButtonTone::Danger => (self.badge_danger, self.panel_bg),
@@ -107,7 +104,11 @@ fn node_height(node: &SurfaceNode, style: &SurfaceStyle) -> f32 {
                 .iter()
                 .map(|it| {
                     style.line_height * if it.subtitle.is_some() { 1.6 } else { 1.0 }
-                        + if it.badge.is_some() { style.line_height } else { 0.0 }
+                        + if it.badge.is_some() {
+                            style.line_height
+                        } else {
+                            0.0
+                        }
                 })
                 .sum();
             rows + (items.len().saturating_sub(1) as f32) * style.row_gap
@@ -118,7 +119,9 @@ fn node_height(node: &SurfaceNode, style: &SurfaceStyle) -> f32 {
             SpacerSize::Md => 12.0,
             SpacerSize::Lg => 24.0,
         },
-        SurfaceNode::Section { title, children, .. } => {
+        SurfaceNode::Section {
+            title, children, ..
+        } => {
             let mut h = 0.0;
             if title.is_some() {
                 h += style.line_height * 1.1 + style.section_gap;
@@ -139,9 +142,9 @@ fn node_height(node: &SurfaceNode, style: &SurfaceStyle) -> f32 {
             children.iter().map(|c| node_height(c, style)).sum::<f32>()
                 + (children.len().saturating_sub(1) as f32) * style.section_gap
         }
-        SurfaceNode::Input { .. }
-        | SurfaceNode::Button { .. }
-        | SurfaceNode::Checkbox { .. } => 40.0,
+        SurfaceNode::Input { .. } | SurfaceNode::Button { .. } | SurfaceNode::Checkbox { .. } => {
+            40.0
+        }
         SurfaceNode::TextArea { rows, .. } => {
             style.line_height * ((*rows).unwrap_or(3).max(1) as f32)
         }
@@ -154,7 +157,11 @@ mod tests {
     use flick_domain::{SurfaceContent, SurfaceNode};
 
     fn content(body: Vec<SurfaceNode>) -> SurfaceContent {
-        SurfaceContent { schema_version: 1, title: None, body }
+        SurfaceContent {
+            schema_version: 1,
+            title: None,
+            body,
+        }
     }
 
     #[test]
@@ -191,16 +198,33 @@ mod tests {
 
     #[test]
     fn empty_content_is_zero_height() {
-        assert_eq!(estimate_height(&content(vec![]), &SurfaceStyle::default()), 0.0);
+        assert_eq!(
+            estimate_height(&content(vec![]), &SurfaceStyle::default()),
+            0.0
+        );
     }
 
     #[test]
     fn more_items_are_taller() {
-        let one = content(vec![SurfaceNode::Heading { id: None, text: "a".into() }]);
+        let one = content(vec![SurfaceNode::Heading {
+            id: None,
+            text: "a".into(),
+        }]);
         let three = content(vec![
-            SurfaceNode::Heading { id: None, text: "a".into() },
-            SurfaceNode::KeyValue { id: None, key: "k".into(), value: "v".into() },
-            SurfaceNode::Text { id: None, text: "hello".into(), muted: false },
+            SurfaceNode::Heading {
+                id: None,
+                text: "a".into(),
+            },
+            SurfaceNode::KeyValue {
+                id: None,
+                key: "k".into(),
+                value: "v".into(),
+            },
+            SurfaceNode::Text {
+                id: None,
+                text: "hello".into(),
+                muted: false,
+            },
         ]);
         let s = SurfaceStyle::default();
         assert!(estimate_height(&three, &s) > estimate_height(&one, &s));
@@ -209,18 +233,42 @@ mod tests {
     #[test]
     fn list_grows_per_item() {
         let s = SurfaceStyle::default();
-        let item = flick_domain::ListItem { id: None, title: "t".into(), subtitle: None, value: None, badge: None };
-        let a = content(vec![SurfaceNode::List { id: None, items: vec![item.clone()] }]);
-        let b = content(vec![SurfaceNode::List { id: None, items: vec![item.clone(), item] }]);
+        let item = flick_domain::ListItem {
+            id: None,
+            title: "t".into(),
+            subtitle: None,
+            value: None,
+            badge: None,
+        };
+        let a = content(vec![SurfaceNode::List {
+            id: None,
+            items: vec![item.clone()],
+        }]);
+        let b = content(vec![SurfaceNode::List {
+            id: None,
+            items: vec![item.clone(), item],
+        }]);
         assert!(estimate_height(&b, &s) > estimate_height(&a, &s));
     }
 
     #[test]
     fn interactive_nodes_have_sensible_heights() {
         let s = SurfaceStyle::default();
-        let input = SurfaceNode::Input { id: "i".into(), value: String::new(), placeholder: None };
-        let button = SurfaceNode::Button { id: "b".into(), label: "ok".into(), tone: ButtonTone::Neutral };
-        let check = SurfaceNode::Checkbox { id: "c".into(), checked: true, label: "x".into() };
+        let input = SurfaceNode::Input {
+            id: "i".into(),
+            value: String::new(),
+            placeholder: None,
+        };
+        let button = SurfaceNode::Button {
+            id: "b".into(),
+            label: "ok".into(),
+            tone: ButtonTone::Neutral,
+        };
+        let check = SurfaceNode::Checkbox {
+            id: "c".into(),
+            checked: true,
+            label: "x".into(),
+        };
         assert_eq!(estimate_height(&content(vec![input]), &s), 40.0);
         assert_eq!(estimate_height(&content(vec![button]), &s), 40.0);
         assert_eq!(estimate_height(&content(vec![check]), &s), 40.0);
@@ -229,15 +277,26 @@ mod tests {
     #[test]
     fn textarea_height_uses_rows() {
         let s = SurfaceStyle::default();
-        let ta = SurfaceNode::TextArea { id: "t".into(), value: String::new(), placeholder: None, rows: Some(4) };
+        let ta = SurfaceNode::TextArea {
+            id: "t".into(),
+            value: String::new(),
+            placeholder: None,
+            rows: Some(4),
+        };
         assert_eq!(estimate_height(&content(vec![ta]), &s), s.line_height * 4.0);
     }
 
     #[test]
     fn button_colors_follow_tone() {
         let s = SurfaceStyle::default();
-        assert_eq!(s.button_colors(ButtonTone::Primary), (s.primary, s.primary_fg));
-        assert_eq!(s.button_colors(ButtonTone::Danger), (s.badge_danger, s.panel_bg));
+        assert_eq!(
+            s.button_colors(ButtonTone::Primary),
+            (s.primary, s.primary_fg)
+        );
+        assert_eq!(
+            s.button_colors(ButtonTone::Danger),
+            (s.badge_danger, s.panel_bg)
+        );
         assert_eq!(s.button_colors(ButtonTone::Neutral), (s.surface, s.text));
     }
 }

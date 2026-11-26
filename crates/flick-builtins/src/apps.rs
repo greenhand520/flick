@@ -30,7 +30,11 @@ pub struct DesktopApp {
 /// `XDG_DATA_HOME`/`HOME` 与 `XDG_DATA_DIRS`。
 pub(crate) fn desktop_dirs_from_env() -> Vec<PathBuf> {
     if let Ok(raw) = std::env::var("FLICK_APPS_DIRS") {
-        return raw.split(':').filter(|s| !s.is_empty()).map(PathBuf::from).collect();
+        return raw
+            .split(':')
+            .filter(|s| !s.is_empty())
+            .map(PathBuf::from)
+            .collect();
     }
     let mut dirs = Vec::new();
     if let Ok(home) = std::env::var("XDG_DATA_HOME") {
@@ -38,8 +42,8 @@ pub(crate) fn desktop_dirs_from_env() -> Vec<PathBuf> {
     } else if let Ok(home) = std::env::var("HOME") {
         dirs.push(PathBuf::from(home).join(".local/share/applications"));
     }
-    let data_dirs = std::env::var("XDG_DATA_DIRS")
-        .unwrap_or_else(|_| "/usr/local/share:/usr/share".into());
+    let data_dirs =
+        std::env::var("XDG_DATA_DIRS").unwrap_or_else(|_| "/usr/local/share:/usr/share".into());
     dirs.extend(
         data_dirs
             .split(':')
@@ -66,7 +70,9 @@ pub(crate) fn scan_apps_from_dirs(dirs: &[PathBuf]) -> Vec<DesktopApp> {
 
 /// 递归扫描单个目录并收集应用。
 fn scan_dir(dir: &Path, out: &mut Vec<DesktopApp>) {
-    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {
@@ -106,7 +112,9 @@ fn parse_desktop(path: &Path) -> Option<DesktopApp> {
         if !in_entry {
             continue;
         }
-        let Some((key, value)) = line.split_once('=') else { continue };
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
         match key.trim() {
             "Type" => is_application = value.trim() == "Application",
             "Name" => name = Some(value.trim().to_string()),
@@ -134,7 +142,13 @@ fn parse_desktop(path: &Path) -> Option<DesktopApp> {
     }
     let stem = path.file_stem()?.to_string_lossy();
     let id = format!("app:{stem}");
-    Some(DesktopApp { id, name, exec, icon, keywords })
+    Some(DesktopApp {
+        id,
+        name,
+        exec,
+        icon,
+        keywords,
+    })
 }
 
 /// 去掉 Exec 中的 field codes（以 `%` 开头的 token，如 `%u`、`%f`、`%F`）。
@@ -171,10 +185,7 @@ impl AppsPlugin {
         let state = Arc::new(RwLock::new(Vec::new()));
         Self {
             state: state.clone(),
-            lifecycle: Arc::new(AppsLifecycle {
-                state,
-                dirs,
-            }),
+            lifecycle: Arc::new(AppsLifecycle { state, dirs }),
         }
     }
 }
@@ -347,8 +358,16 @@ mod tests {
     fn scans_visible_application_entries() {
         let dir = tempfile::tempdir().unwrap();
         let apps_dir = dir.path().join("applications");
-        write_desktop(&apps_dir, "firefox.desktop", "[Desktop Entry]\nType=Application\nName=Firefox\nExec=firefox %u\nIcon=firefox\nKeywords=web;browser;\n");
-        write_desktop(&apps_dir, "hidden.desktop", "[Desktop Entry]\nType=Application\nName=Hidden\nExec=hidden\nNoDisplay=true\n");
+        write_desktop(
+            &apps_dir,
+            "firefox.desktop",
+            "[Desktop Entry]\nType=Application\nName=Firefox\nExec=firefox %u\nIcon=firefox\nKeywords=web;browser;\n",
+        );
+        write_desktop(
+            &apps_dir,
+            "hidden.desktop",
+            "[Desktop Entry]\nType=Application\nName=Hidden\nExec=hidden\nNoDisplay=true\n",
+        );
         let apps = scan_apps_from_dirs(&[apps_dir]);
         assert_eq!(apps.len(), 1);
         assert_eq!(apps[0].name, "Firefox");
@@ -379,9 +398,21 @@ mod tests {
         let high = dir.path().join("high/applications");
         let low = dir.path().join("low/applications");
         // 名称故意与目录顺序相反：若「先排序后 dedup」则低优先级会胜出，本测试可捕获。
-        write_desktop(&high, "aaa.desktop", "[Desktop Entry]\nType=Application\nName=Zeta\nExec=first\n");
-        write_desktop(&low, "aaa.desktop", "[Desktop Entry]\nType=Application\nName=Alpha\nExec=second\n");
-        write_desktop(&low, "bbb.desktop", "[Desktop Entry]\nType=Application\nName=Bbb\nExec=bbb\n");
+        write_desktop(
+            &high,
+            "aaa.desktop",
+            "[Desktop Entry]\nType=Application\nName=Zeta\nExec=first\n",
+        );
+        write_desktop(
+            &low,
+            "aaa.desktop",
+            "[Desktop Entry]\nType=Application\nName=Alpha\nExec=second\n",
+        );
+        write_desktop(
+            &low,
+            "bbb.desktop",
+            "[Desktop Entry]\nType=Application\nName=Bbb\nExec=bbb\n",
+        );
         let apps = scan_apps_from_dirs(&[high, low]);
         assert_eq!(apps.len(), 2);
         let aaa = apps.iter().find(|a| a.id == "app:aaa").unwrap();
@@ -395,8 +426,16 @@ mod tests {
     async fn app_search_matches_literal_and_pinyin() {
         let dir = tempfile::tempdir().unwrap();
         let apps_dir = dir.path().join("applications");
-        write_desktop(&apps_dir, "firefox.desktop", "[Desktop Entry]\nType=Application\nName=Firefox\nExec=firefox %u\nIcon=firefox\n");
-        write_desktop(&apps_dir, "huohu.desktop", "[Desktop Entry]\nType=Application\nName=火狐浏览器\nExec=firefox\n");
+        write_desktop(
+            &apps_dir,
+            "firefox.desktop",
+            "[Desktop Entry]\nType=Application\nName=Firefox\nExec=firefox %u\nIcon=firefox\n",
+        );
+        write_desktop(
+            &apps_dir,
+            "huohu.desktop",
+            "[Desktop Entry]\nType=Application\nName=火狐浏览器\nExec=firefox\n",
+        );
         let plugin = AppsPlugin::with_dirs(vec![apps_dir]);
         plugin.lifecycle.activate().await.unwrap();
         let handler = AppsSearchHandler::from_state(plugin.state.clone());
@@ -418,8 +457,16 @@ mod tests {
             )
             .await
             .unwrap();
-        let ActionOutcome::Data(value) = outcome else { panic!("expected Data") };
-        assert!(value.as_array().unwrap().iter().any(|v| v["title"] == "Firefox"));
+        let ActionOutcome::Data(value) = outcome else {
+            panic!("expected Data")
+        };
+        assert!(
+            value
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|v| v["title"] == "Firefox")
+        );
 
         let request = ActionRequest {
             invocation_id: InvocationId::new(),
@@ -439,8 +486,16 @@ mod tests {
             )
             .await
             .unwrap();
-        let ActionOutcome::Data(value) = outcome else { panic!("expected Data") };
-        assert!(value.as_array().unwrap().iter().any(|v| v["title"] == "火狐浏览器"));
+        let ActionOutcome::Data(value) = outcome else {
+            panic!("expected Data")
+        };
+        assert!(
+            value
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|v| v["title"] == "火狐浏览器")
+        );
     }
 
     /// `Hidden=true` 与非 Application 条目应被跳过。
@@ -448,9 +503,21 @@ mod tests {
     fn skips_hidden_and_non_application() {
         let dir = tempfile::tempdir().unwrap();
         let apps_dir = dir.path().join("applications");
-        write_desktop(&apps_dir, "visible.desktop", "[Desktop Entry]\nType=Application\nName=Visible\nExec=visible\n");
-        write_desktop(&apps_dir, "hidden.desktop", "[Desktop Entry]\nType=Application\nName=Hidden\nExec=hidden\nHidden=true\n");
-        write_desktop(&apps_dir, "link.desktop", "[Desktop Entry]\nType=Link\nName=Link\nExec=link\n");
+        write_desktop(
+            &apps_dir,
+            "visible.desktop",
+            "[Desktop Entry]\nType=Application\nName=Visible\nExec=visible\n",
+        );
+        write_desktop(
+            &apps_dir,
+            "hidden.desktop",
+            "[Desktop Entry]\nType=Application\nName=Hidden\nExec=hidden\nHidden=true\n",
+        );
+        write_desktop(
+            &apps_dir,
+            "link.desktop",
+            "[Desktop Entry]\nType=Link\nName=Link\nExec=link\n",
+        );
         let apps = scan_apps_from_dirs(&[apps_dir]);
         assert_eq!(apps.len(), 1);
         assert_eq!(apps[0].name, "Visible");

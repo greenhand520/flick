@@ -35,8 +35,19 @@ pub enum Architecture {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Category {
-    System, Apps, Files, Developer, Productivity, Media, Network,
-    Text, Translation, Capture, Window, Security, Other,
+    System,
+    Apps,
+    Files,
+    Developer,
+    Productivity,
+    Media,
+    Network,
+    Text,
+    Translation,
+    Capture,
+    Window,
+    Security,
+    Other,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -145,8 +156,8 @@ impl PluginManifest {
     /// 语义与 `file_extensions` 一致：**空列表 = 不限**。
     pub fn supports_platform(&self, os: OperatingSystem, arch: Architecture) -> bool {
         let os_ok = self.supported_os.is_empty() || self.supported_os.contains(&os);
-        let arch_ok = self.supported_architectures.is_empty()
-            || self.supported_architectures.contains(&arch);
+        let arch_ok =
+            self.supported_architectures.is_empty() || self.supported_architectures.contains(&arch);
         os_ok && arch_ok
     }
 }

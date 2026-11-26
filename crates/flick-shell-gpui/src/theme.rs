@@ -111,26 +111,26 @@ pub fn resolve(mode: ThemeMode) -> (UiTheme, Metrics) {
     let metrics = Metrics::default();
     let theme = match mode {
         ThemeMode::Dark => UiTheme {
-            panel_bg: (20, 20, 24, 250),      // 近不透明深色（圆角矩形，无模糊）
-            surface: (255, 255, 255, 10),     // rgba(255,255,255,.04)
-            text: (230, 225, 229, 255),       // #E6E1E5
-            text_muted: (154, 154, 160, 255), // #9A9AA0
-            selected_bg: (208, 188, 255, 71), // rgba(208,188,255,.28)
-            selected_fg: (234, 221, 255, 255),// #EADDFF
-            hover_bg: (255, 255, 255, 20),    // rgba(255,255,255,.08)
-            border: (255, 255, 255, 26),      // rgba(255,255,255,.10)
-            shadow: (0, 0, 0, 87),            // rgba(0,0,0,.34)
+            panel_bg: (20, 20, 24, 250),       // 近不透明深色（圆角矩形，无模糊）
+            surface: (255, 255, 255, 10),      // rgba(255,255,255,.04)
+            text: (230, 225, 229, 255),        // #E6E1E5
+            text_muted: (154, 154, 160, 255),  // #9A9AA0
+            selected_bg: (208, 188, 255, 71),  // rgba(208,188,255,.28)
+            selected_fg: (234, 221, 255, 255), // #EADDFF
+            hover_bg: (255, 255, 255, 20),     // rgba(255,255,255,.08)
+            border: (255, 255, 255, 26),       // rgba(255,255,255,.10)
+            shadow: (0, 0, 0, 87),             // rgba(0,0,0,.34)
         },
         ThemeMode::Light => UiTheme {
-            panel_bg: (250, 250, 252, 250),   // 近不透明浅色
-            surface: (255, 255, 255, 140),    // rgba(255,255,255,.55)
-            text: (28, 27, 31, 255),          // #1C1B1F
-            text_muted: (90, 90, 102, 255),   // #5A5A66
-            selected_bg: (103, 80, 164, 41),  // rgba(103,80,164,.16)
-            selected_fg: (33, 0, 93, 255),    // #21005D
-            hover_bg: (0, 0, 0, 13),          // rgba(0,0,0,.05)
-            border: (0, 0, 0, 26),            // rgba(0,0,0,.10)
-            shadow: (0, 0, 0, 51),            // rgba(0,0,0,.20)
+            panel_bg: (250, 250, 252, 250),  // 近不透明浅色
+            surface: (255, 255, 255, 140),   // rgba(255,255,255,.55)
+            text: (28, 27, 31, 255),         // #1C1B1F
+            text_muted: (90, 90, 102, 255),  // #5A5A66
+            selected_bg: (103, 80, 164, 41), // rgba(103,80,164,.16)
+            selected_fg: (33, 0, 93, 255),   // #21005D
+            hover_bg: (0, 0, 0, 13),         // rgba(0,0,0,.05)
+            border: (0, 0, 0, 26),           // rgba(0,0,0,.10)
+            shadow: (0, 0, 0, 51),           // rgba(0,0,0,.20)
         },
     };
     (theme, metrics)

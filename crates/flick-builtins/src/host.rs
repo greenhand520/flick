@@ -204,25 +204,50 @@ fn arch_label(arch: Architecture) -> &'static str {
 }
 
 /// 把 HostInfo + fastfetch 风格 extras 组织成数据驱动的 Surface。
-fn build_surface(
-    info: &HostInfo,
-    extras: &serde_json::Value,
-) -> SurfaceContent {
+fn build_surface(info: &HostInfo, extras: &serde_json::Value) -> SurfaceContent {
     let mut body = vec![
         // SurfaceNode::Heading { id: None, text: "系统信息".into() },
-        SurfaceNode::KeyValue { id: None, key: "系统".into(), value: os_label(info.os).into() },
-        SurfaceNode::KeyValue { id: None, key: "架构".into(), value: arch_label(info.arch).into() },
-        SurfaceNode::KeyValue { id: None, key: "内核".into(), value: info.kernel.clone() },
-        SurfaceNode::KeyValue { id: None, key: "语言".into(), value: info.locale.clone() },
-        SurfaceNode::KeyValue { id: None, key: "Shell".into(), value: info.shell.clone() },
+        SurfaceNode::KeyValue {
+            id: None,
+            key: "系统".into(),
+            value: os_label(info.os).into(),
+        },
+        SurfaceNode::KeyValue {
+            id: None,
+            key: "架构".into(),
+            value: arch_label(info.arch).into(),
+        },
+        SurfaceNode::KeyValue {
+            id: None,
+            key: "内核".into(),
+            value: info.kernel.clone(),
+        },
+        SurfaceNode::KeyValue {
+            id: None,
+            key: "语言".into(),
+            value: info.locale.clone(),
+        },
+        SurfaceNode::KeyValue {
+            id: None,
+            key: "Shell".into(),
+            value: info.shell.clone(),
+        },
     ];
     if let Some(wm) = &info.window_manager {
         if !wm.is_empty() {
-            body.push(SurfaceNode::KeyValue { id: None, key: "窗口管理器".into(), value: wm.clone() });
+            body.push(SurfaceNode::KeyValue {
+                id: None,
+                key: "窗口管理器".into(),
+                value: wm.clone(),
+            });
         }
     }
     if let Some(ip) = &info.lan_ip {
-        body.push(SurfaceNode::KeyValue { id: None, key: "IP".into(), value: ip.clone() });
+        body.push(SurfaceNode::KeyValue {
+            id: None,
+            key: "IP".into(),
+            value: ip.clone(),
+        });
     }
     body.push(SurfaceNode::Divider { id: None });
     for (label, key) in [
@@ -246,7 +271,11 @@ fn build_surface(
         if value.is_empty() {
             continue;
         }
-        body.push(SurfaceNode::KeyValue { id: None, key: label.into(), value });
+        body.push(SurfaceNode::KeyValue {
+            id: None,
+            key: label.into(),
+            value,
+        });
     }
     SurfaceContent {
         schema_version: SURFACE_SCHEMA_VERSION,

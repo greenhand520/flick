@@ -6,7 +6,7 @@ use flick_domain::{BadgeTone, SurfaceContent, SurfaceEventKind, SurfaceNode};
 use gpui_kit::component::label::Label;
 use gpui_kit::*;
 
-use crate::style::{truncate_chars, SurfaceStyle};
+use crate::style::{SurfaceStyle, truncate_chars};
 
 /// 普通文本（正文 / value / subtitle）的字符上限。
 const TEXT_MAX_CHARS: usize = 200;
@@ -37,7 +37,11 @@ fn tone_color(style: &SurfaceStyle, tone: BadgeTone) -> (u8, u8, u8, u8) {
 fn badge_fg(style: &SurfaceStyle, tone: BadgeTone) -> (u8, u8, u8, u8) {
     let (r, g, b, _) = tone_color(style, tone);
     let luma = 0.299 * r as f32 + 0.587 * g as f32 + 0.114 * b as f32;
-    if luma > 140.0 { style.panel_bg } else { style.text }
+    if luma > 140.0 {
+        style.panel_bg
+    } else {
+        style.text
+    }
 }
 
 /// 渲染一个徽标（Badge 节点与 List item 共用）。
@@ -144,15 +148,11 @@ fn render_node(node: &SurfaceNode, style: &SurfaceStyle) -> AnyElement {
             let mut el = div().flex().flex_col().w_full().gap(px(style.row_gap));
             for item in items {
                 let mut entry = div().flex().flex_col().w_full();
-                let mut top = div()
-                    .flex()
-                    .w_full()
-                    .justify_between()
-                    .child(
-                        div()
-                            .text_color(col(style.text))
-                            .child(Label::new(truncate_chars(&item.title, TITLE_MAX_CHARS))),
-                    );
+                let mut top = div().flex().w_full().justify_between().child(
+                    div()
+                        .text_color(col(style.text))
+                        .child(Label::new(truncate_chars(&item.title, TITLE_MAX_CHARS))),
+                );
                 if let Some(v) = &item.value {
                     top = top.child(
                         div()
@@ -189,7 +189,9 @@ fn render_node(node: &SurfaceNode, style: &SurfaceStyle) -> AnyElement {
             };
             div().h(px(h)).w_full().into_any_element()
         }
-        SurfaceNode::Section { title, children, .. } => {
+        SurfaceNode::Section {
+            title, children, ..
+        } => {
             let mut el = div().flex().flex_col().w_full().gap(px(style.section_gap));
             if let Some(t) = title {
                 el = el.child(
@@ -288,9 +290,7 @@ fn render_node(node: &SurfaceNode, style: &SurfaceStyle) -> AnyElement {
                 .child(Label::new(truncate_chars(label, TITLE_MAX_CHARS)))
                 .into_any_element()
         }
-        SurfaceNode::Checkbox {
-            label, checked, ..
-        } => {
+        SurfaceNode::Checkbox { label, checked, .. } => {
             let mark = if *checked { "☑" } else { "☐" };
             div()
                 .flex()
@@ -299,11 +299,7 @@ fn render_node(node: &SurfaceNode, style: &SurfaceStyle) -> AnyElement {
                 .w_full()
                 .h(px(40.0))
                 .text_color(col(style.text))
-                .child(
-                    div()
-                        .text_color(col(style.text))
-                        .child(Label::new(mark)),
-                )
+                .child(div().text_color(col(style.text)).child(Label::new(mark)))
                 .child(
                     div()
                         .text_color(col(style.text))
@@ -380,11 +376,7 @@ fn render_node_with(
                 })
                 .into_any_element()
         }
-        SurfaceNode::Checkbox {
-            id,
-            label,
-            checked,
-        } => {
+        SurfaceNode::Checkbox { id, label, checked } => {
             let mark = if *checked { "☑" } else { "☐" };
             let events = events.clone();
             let node_id = id.clone();
@@ -396,11 +388,7 @@ fn render_node_with(
                 .w_full()
                 .h(px(40.0))
                 .text_color(col(style.text))
-                .child(
-                    div()
-                        .text_color(col(style.text))
-                        .child(Label::new(mark)),
-                )
+                .child(div().text_color(col(style.text)).child(Label::new(mark)))
                 .child(
                     div()
                         .text_color(col(style.text))
@@ -418,15 +406,11 @@ fn render_node_with(
             let mut el = div().flex().flex_col().w_full().gap(px(style.row_gap));
             for item in items {
                 let mut entry = div().flex().flex_col().w_full();
-                let mut top = div()
-                    .flex()
-                    .w_full()
-                    .justify_between()
-                    .child(
-                        div()
-                            .text_color(col(style.text))
-                            .child(Label::new(truncate_chars(&item.title, TITLE_MAX_CHARS))),
-                    );
+                let mut top = div().flex().w_full().justify_between().child(
+                    div()
+                        .text_color(col(style.text))
+                        .child(Label::new(truncate_chars(&item.title, TITLE_MAX_CHARS))),
+                );
                 if let Some(v) = &item.value {
                     top = top.child(
                         div()
@@ -449,18 +433,19 @@ fn render_node_with(
                 if let Some(id) = &item.id {
                     let events = events.clone();
                     let node_id = id.clone();
-                    entry =
-                        entry.on_mouse_down(MouseButton::Left, move |_ev, _window, _cx| {
-                            events(SurfaceEventKind::Click {
-                                node_id: node_id.clone(),
-                            });
+                    entry = entry.on_mouse_down(MouseButton::Left, move |_ev, _window, _cx| {
+                        events(SurfaceEventKind::Click {
+                            node_id: node_id.clone(),
                         });
+                    });
                 }
                 el = el.child(entry);
             }
             el.into_any_element()
         }
-        SurfaceNode::Section { title, children, .. } => {
+        SurfaceNode::Section {
+            title, children, ..
+        } => {
             let mut el = div().flex().flex_col().w_full().gap(px(style.section_gap));
             if let Some(t) = title {
                 el = el.child(

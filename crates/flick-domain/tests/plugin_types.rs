@@ -49,9 +49,18 @@ fn plugin_manifest_roundtrips_via_json() {
 #[test]
 fn category_is_closed_enum() {
     let cats = [
-        Category::System, Category::Apps, Category::Files, Category::Developer,
-        Category::Productivity, Category::Media, Category::Network, Category::Text,
-        Category::Translation, Category::Capture, Category::Window, Category::Security,
+        Category::System,
+        Category::Apps,
+        Category::Files,
+        Category::Developer,
+        Category::Productivity,
+        Category::Media,
+        Category::Network,
+        Category::Text,
+        Category::Translation,
+        Category::Capture,
+        Category::Window,
+        Category::Security,
         Category::Other,
     ];
     assert_eq!(cats.len(), 13);
@@ -77,7 +86,11 @@ fn action_outcome_new_variants_roundtrip() {
     let cases = vec![
         ActionOutcome::Text("hello".into()),
         ActionOutcome::Url("https://example.com".into()),
-        ActionOutcome::File(FileRef { uri: "file:///tmp/a.txt".into(), display_name: "a.txt".into(), mime: Some("text/plain".into()) }),
+        ActionOutcome::File(FileRef {
+            uri: "file:///tmp/a.txt".into(),
+            display_name: "a.txt".into(),
+            mime: Some("text/plain".into()),
+        }),
         ActionOutcome::OpenSurface {
             surface_id: "info".into(),
             content: flick_domain::SurfaceContent {
@@ -121,14 +134,29 @@ fn manifest_supports_platform_treats_empty_as_wildcard() {
     // 明确的 OS 列表之外不支持。
     assert!(!m.supports_platform(OperatingSystem::Windows, Architecture::X86_64));
 
-    let all = PluginManifest { supported_os: vec![], ..m };
+    let all = PluginManifest {
+        supported_os: vec![],
+        ..m
+    };
     assert!(all.supports_platform(OperatingSystem::MacOs, Architecture::Other));
 }
 
 #[test]
 fn operating_system_and_architecture_serde_names() {
-    assert_eq!(serde_json::to_string(&OperatingSystem::MacOs).unwrap(), "\"macos\"");
-    assert_eq!(serde_json::to_string(&OperatingSystem::Linux).unwrap(), "\"Linux\"");
-    assert_eq!(serde_json::to_string(&Architecture::X86_64).unwrap(), "\"x86_64\"");
-    assert_eq!(serde_json::to_string(&Architecture::Aarch64).unwrap(), "\"aarch64\"");
+    assert_eq!(
+        serde_json::to_string(&OperatingSystem::MacOs).unwrap(),
+        "\"macos\""
+    );
+    assert_eq!(
+        serde_json::to_string(&OperatingSystem::Linux).unwrap(),
+        "\"Linux\""
+    );
+    assert_eq!(
+        serde_json::to_string(&Architecture::X86_64).unwrap(),
+        "\"x86_64\""
+    );
+    assert_eq!(
+        serde_json::to_string(&Architecture::Aarch64).unwrap(),
+        "\"aarch64\""
+    );
 }

@@ -78,9 +78,9 @@ fn ensure_icons_into(data_home: &Path, app_id: &str) -> io::Result<Vec<PathBuf>>
         );
 
         let path = dir.join(format!("{app_id}.png"));
-        pixmap.save_png(&path).map_err(|error| {
-            io::Error::other(format!("写出 {} 失败: {error}", path.display()))
-        })?;
+        pixmap
+            .save_png(&path)
+            .map_err(|error| io::Error::other(format!("写出 {} 失败: {error}", path.display())))?;
         written.push(path);
     }
 
@@ -237,10 +237,7 @@ mod tests {
                 path.display()
             );
             assert!(
-                png.pixel(size / 2, size / 2)
-                    .expect("center pixel")
-                    .alpha()
-                    > 0,
+                png.pixel(size / 2, size / 2).expect("center pixel").alpha() > 0,
                 "{} 中心应不透明",
                 path.display()
             );

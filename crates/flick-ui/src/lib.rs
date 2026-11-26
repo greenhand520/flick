@@ -8,4 +8,4 @@ pub mod style;
 pub mod render;
 
 pub use flick_domain::surface::*;
-pub use style::{estimate_height, SurfaceStyle};
+pub use style::{SurfaceStyle, estimate_height};

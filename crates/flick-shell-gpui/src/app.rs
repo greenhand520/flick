@@ -94,7 +94,10 @@ impl AppState {
                         outcome,
                     },
                     HostToUi::RuntimeStatus(status) => PanelEvent::RuntimeStatus(status),
-                    HostToUi::SurfaceUpdated { session_id, content } => {
+                    HostToUi::SurfaceUpdated {
+                        session_id,
+                        content,
+                    } => {
                         // 仅当更新属于面板当前会话时才进入面板状态；
                         // 分离窗口的更新由 lib.rs 的窗口泵处理。
                         if self.panel.surface_session() == Some(session_id) {
@@ -104,7 +107,10 @@ impl AppState {
                             return Vec::new();
                         }
                     }
-                    HostToUi::SurfaceFailed { session_id, message } => {
+                    HostToUi::SurfaceFailed {
+                        session_id,
+                        message,
+                    } => {
                         if self.panel.surface_session() == Some(session_id) {
                             self.surface_error = Some(message);
                         }
@@ -160,9 +166,7 @@ impl AppState {
             .into_iter()
             .map(|action| match action {
                 PanelAction::SendToHost(message) => Effect::Send(message),
-                PanelAction::StartDebounce { revision } => {
-                    Effect::StartDebounce { revision }
-                }
+                PanelAction::StartDebounce { revision } => Effect::StartDebounce { revision },
             })
             .collect()
     }
@@ -209,16 +213,21 @@ pub fn desired_size(panel: &PanelState, m: &Metrics) -> (f32, f32) {
         0.0
     };
     let gap = if results_h > 0.0 { m.content_gap } else { 0.0 };
-    let bottom = if results_h > 0.0 { m.padding_bottom } else { 0.0 };
-    let height = (m.input_height + gap + results_h + bottom).min(m.panel_max_height);
-    (m.width, height)
+    let bottom = if results_h > 0.0 {
+        m.padding_bottom
+    } else {
+        0.0
+    };
+    let height = (m.input_height + gap + results_h + bottom + attachments_h)
+        .min(m.panel_max_height);
+    (m.width, height.max(m.input_height + attachments_h))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use flick_domain::{ActionId, RouteItem};
-    use flick_domain::{ActionOutcome, SurfaceContent, SurfaceNode, SURFACE_SCHEMA_VERSION};
+    use flick_domain::{ActionOutcome, SURFACE_SCHEMA_VERSION, SurfaceContent, SurfaceNode};
 
     fn state() -> AppState {
         AppState::new(ThemeMode::Dark)
@@ -281,9 +290,11 @@ mod tests {
             activation_token: None,
         }));
         let effects = s.update(UiEvent::EscapePressed);
-        assert!(effects
-            .iter()
-            .any(|e| matches!(e, Effect::Send(UiToHost::SearchPanelClosed))));
+        assert!(
+            effects
+                .iter()
+                .any(|e| matches!(e, Effect::Send(UiToHost::SearchPanelClosed)))
+        );
     }
 
     #[test]
@@ -324,7 +335,10 @@ mod tests {
             content: SurfaceContent {
                 schema_version: 1,
                 title: None,
-                body: vec![SurfaceNode::Heading { id: None, text: "系统信息".into() }],
+                body: vec![SurfaceNode::Heading {
+                    id: None,
+                    text: "系统信息".into(),
+                }],
             },
             session_id: None,
             needs_search: false,
@@ -362,7 +376,10 @@ mod tests {
         let content = SurfaceContent {
             schema_version: SURFACE_SCHEMA_VERSION,
             title: Some("系统信息".into()),
-            body: vec![SurfaceNode::Heading { id: None, text: "系统信息".into() }],
+            body: vec![SurfaceNode::Heading {
+                id: None,
+                text: "系统信息".into(),
+            }],
         };
         let session_id = SurfaceSessionId::new();
         s.panel.last_outcome = Some(ActionOutcome::OpenSurface {
