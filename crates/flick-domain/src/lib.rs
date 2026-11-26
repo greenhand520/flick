@@ -32,7 +32,10 @@ pub use error::ActionError;
 pub use execution::{ActionSource, ExecutionEventKind, ExecutionItem};
 pub use host::HostInfo;
 pub use id::{ActionId, InvocationId, QueryGeneration, SurfaceSessionId};
-pub use input::SearchQuery;
+pub use input::{
+    InputContext, InputFacet, InputFacetKind, InputSource, PathLikeKind, SearchInputSnapshot,
+    SearchQuery, UiInputKind,
+};
 pub use plugin::*;
 pub use route::{RouteItem, RouteItemKind};
 pub use surface::{
