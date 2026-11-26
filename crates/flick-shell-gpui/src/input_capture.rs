@@ -43,6 +43,69 @@ fn file_uri(path: &Path) -> String {
     format!("file://{encoded}")
 }
 
+/// 解析 `file://` URI 为本地路径，并处理 `%20` 等 percent-encode。
+fn path_from_file_uri(uri: &str) -> Option<PathBuf> {
+    let rest = uri.strip_prefix("file://")?;
+    // `file://localhost/mnt/x` 与 `file:///mnt/x` 都应解析为 `/mnt/x`；
+    // 其他 host 形式（如 `file://server/share`）在 Linux 本地文件场景不处理。
+    let rest = rest.strip_prefix("localhost").unwrap_or(rest);
+    if !rest.starts_with('/') {
+        return None;
+    }
+    Some(PathBuf::from(percent_decode(rest)))
+}
+
+/// 轻量 percent-decode（仅用于 `file://` URI；非法序列原样保留）。
+fn percent_decode(input: &str) -> String {
+    let bytes = input.as_bytes();
+    let mut output = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' && index + 2 < bytes.len() {
+            let high = (bytes[index + 1] as char).to_digit(16);
+            let low = (bytes[index + 2] as char).to_digit(16);
+            if let (Some(high), Some(low)) = (high, low) {
+                output.push((high * 16 + low) as u8);
+                index += 3;
+                continue;
+            }
+        }
+        output.push(bytes[index]);
+        index += 1;
+    }
+    String::from_utf8(output).unwrap_or_else(|_| input.to_string())
+}
+
+/// 判断整段剪贴板文本是否是一组真实存在的文件/文件夹路径。
+///
+/// Linux 文件管理器复制文件时，Wayland 平台层没有把 `text/uri-list`
+/// 暴露成 `ClipboardEntry::ExternalPaths`，而是作为 `text/plain` 路径返回；
+/// 这里识别这种路径文本并转为文件附件，避免搜索框里出现原始 `file://` URI。
+/// 支持每行一个绝对路径或 `file://` URI；任何一行不是现有路径则整体按文本处理。
+fn paths_from_clipboard_text(text: &str) -> Option<Vec<PathBuf>> {
+    let mut paths = Vec::new();
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let path = if line.starts_with("file://") {
+            path_from_file_uri(line)?
+        } else {
+            let path = PathBuf::from(line);
+            if !path.is_absolute() {
+                return None;
+            }
+            path
+        };
+        if !path.exists() {
+            return None;
+        }
+        paths.push(path);
+    }
+    (!paths.is_empty()).then_some(paths)
+}
+
 /// 小范围扩展名 → MIME 映射；未知扩展名返回 `None`。
 fn mime_for_extension(extension: &str) -> Option<&'static str> {
     Some(match extension {
@@ -96,9 +159,20 @@ pub(crate) fn snapshot_from_clipboard_item(
             }
         }
     }
-    item.text()
-        .filter(|text| !text.is_empty())
-        .map(|text| SearchInputSnapshot::text(text, source))
+    if item
+        .entries
+        .iter()
+        .any(|entry| matches!(entry, ClipboardEntry::ExternalPaths(_)))
+    {
+        // 有外部路径条目但路径已不存在时，不要把拼接后的路径字符串当文本插入。
+        return None;
+    }
+    item.text().and_then(|text| {
+        if let Some(paths) = paths_from_clipboard_text(&text) {
+            return snapshot_from_paths(&paths, source);
+        }
+        (!text.is_empty()).then(|| SearchInputSnapshot::text(text, source))
+    })
 }
 
 /// 计算剪贴板内容指纹，用于判定“5 秒内是否发生变化”。
@@ -198,6 +272,52 @@ mod tests {
         assert_eq!(snapshot.kind, UiInputKind::Text);
         assert_eq!(snapshot.text, "hi");
         assert_eq!(snapshot.source, InputSource::Paste);
+    }
+
+    #[test]
+    fn clipboard_text_file_path_becomes_files_snapshot() {
+        let dir = std::env::temp_dir().join(format!("flick-input-path-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("截图 2026-08-17.png");
+        std::fs::write(&file, b"x").unwrap();
+
+        let item = ClipboardItem::new_string(file.to_string_lossy().into_owned());
+        let snapshot = snapshot_from_clipboard_item(&item, InputSource::Paste).unwrap();
+        assert_eq!(snapshot.kind, UiInputKind::Files);
+        assert_eq!(snapshot.files.len(), 1);
+        assert_eq!(snapshot.files[0].display_name, "截图 2026-08-17.png");
+        assert!(!snapshot.files[0].is_dir);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn clipboard_text_folder_path_is_kept_as_directory() {
+        let dir = std::env::temp_dir().join(format!("flick-input-dir-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let item = ClipboardItem::new_string(dir.to_string_lossy().into_owned());
+        let snapshot = snapshot_from_clipboard_item(&item, InputSource::Paste).unwrap();
+        assert_eq!(snapshot.kind, UiInputKind::Files);
+        assert!(snapshot.files[0].is_dir);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn clipboard_text_nonexistent_path_remains_text() {
+        let item = ClipboardItem::new_string("/no/such/flick-path-xyz".into());
+        let snapshot = snapshot_from_clipboard_item(&item, InputSource::Paste).unwrap();
+        assert_eq!(snapshot.kind, UiInputKind::Text);
+        assert_eq!(snapshot.text, "/no/such/flick-path-xyz");
+    }
+
+    #[test]
+    fn file_uri_is_decoded_to_local_path() {
+        let path = path_from_file_uri("file:///tmp/flick%20a%23b%3Fc%25d.png").unwrap();
+        assert_eq!(path, std::path::PathBuf::from("/tmp/flick a#b?c%d.png"));
     }
 
     #[test]

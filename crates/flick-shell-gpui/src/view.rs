@@ -181,7 +181,6 @@ impl AppView {
                 view.dispatch(UiEvent::InputChanged(q), window, cx);
             }
         }
-        view.try_import_recent_clipboard(window, cx);
         view
     }
 
@@ -198,7 +197,14 @@ impl AppView {
 
     /// 接收一条宿主事件（由 `lib.rs` 的事件泵转发），进入正常 dispatch 流程。
     pub fn on_host(&mut self, event: HostToUi, window: &mut Window, cx: &mut Context<Self>) {
+        let showing = matches!(&event, HostToUi::ShowSearchPanel { .. });
+        let was_visible = self.state.panel.visible;
         self.dispatch(UiEvent::Host(event), window, cx);
+        // 每次从隐藏状态重新打开面板时都检查一次最近 5 秒剪贴板；
+        // 不能只在 `AppView::new` 做，因为 demo/复用窗口可能保持同一视图实例。
+        if showing && !was_visible {
+            self.try_import_recent_clipboard(window, cx);
+        }
     }
 
     /// 应用完整输入快照：同步受控 Input 文本，再进入统一的 dispatch 流程。

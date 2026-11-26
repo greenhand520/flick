@@ -20,6 +20,9 @@ pub(crate) struct ClipboardRecent {
 struct WatchState {
     last_fingerprint: Option<u64>,
     last_change_at: Option<Instant>,
+    /// 启动时的基线时刻：用户刚启动应用就开框时，把启动前已存在的剪贴板
+    /// 也视为“最近 5 秒内”，避免 demo/短生命周期进程读取不到启动前复制的内容。
+    baseline_at: Option<Instant>,
 }
 
 /// 剪贴板观察器句柄；可克隆并跨窗口重建使用。
@@ -46,6 +49,7 @@ impl ClipboardWatch {
             state: Arc::new(Mutex::new(WatchState {
                 last_fingerprint: baseline,
                 last_change_at: None,
+                baseline_at: Some(Instant::now()),
             })),
         };
         let state = Arc::clone(&watch.state);
@@ -78,14 +82,14 @@ impl ClipboardWatch {
         }
         ClipboardRecent {
             fingerprint,
-            changed_at: guard.last_change_at.unwrap_or(now),
+            changed_at: guard.last_change_at.or(guard.baseline_at).unwrap_or(now),
         }
     }
 
     /// 若最近一次变化仍在 5 秒窗口内，返回其记录；否则返回 `None`。
     pub(crate) fn recent_at(&self, now: Instant) -> Option<ClipboardRecent> {
         let guard = self.state.lock().unwrap();
-        let changed_at = guard.last_change_at?;
+        let changed_at = guard.last_change_at.or(guard.baseline_at)?;
         let recent = now.saturating_duration_since(changed_at) <= Self::RECENT_WINDOW;
         recent.then(|| ClipboardRecent {
             fingerprint: guard.last_fingerprint.unwrap_or_default(),
@@ -117,5 +121,19 @@ mod tests {
         assert_eq!(second.changed_at, base + Duration::from_secs(6));
         assert_ne!(first.fingerprint, second.fingerprint);
         assert!(watch.recent_at(base + Duration::from_secs(12)).is_none());
+    }
+
+    #[test]
+    fn startup_baseline_is_recent_only_within_first_five_seconds() {
+        let base = Instant::now();
+        let watch = ClipboardWatch {
+            state: Arc::new(Mutex::new(WatchState {
+                last_fingerprint: Some(1),
+                last_change_at: None,
+                baseline_at: Some(base),
+            })),
+        };
+        assert!(watch.recent_at(base + Duration::from_secs(4)).is_some());
+        assert!(watch.recent_at(base + Duration::from_secs(6)).is_none());
     }
 }
