@@ -151,6 +151,23 @@ impl ActionRegistry {
         self.surface_handlers.get(plugin_id).cloned()
     }
 
+    /// 返回所有 Public、输入匹配且显式 `search_invocable` 的 [`ActionId`]。
+    ///
+    /// 这些动作允许在搜索阶段被调用（必须只读、无副作用）：结果为
+    /// `ActionOutcome::Data` 时由运行时归一化为执行项。
+    pub fn search_invocable_actions(&self, input_kind: InputType) -> Vec<ActionId> {
+        self.entries
+            .values()
+            .filter(|entry| {
+                let d = &entry.descriptor;
+                d.visibility == flick_domain::ActionVisibility::Public
+                    && d.search_invocable
+                    && (d.supported_inputs.is_empty() || d.supported_inputs.contains(&input_kind))
+            })
+            .map(|entry| entry.descriptor.id.clone())
+            .collect()
+    }
+
     /// 搜索匹配的动作。
     ///
     /// 当前过渡实现只做关键词召回：将查询词元与每个描述符的关键字

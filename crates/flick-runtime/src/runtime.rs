@@ -4,8 +4,9 @@ use crate::handler::ActionHandler;
 use crate::plugin::{Plugin, PluginRegistrationError, SurfaceError, SurfaceSession};
 use crate::registry::ActionRegistry;
 use flick_domain::{
-    ActionContext, ActionDescriptor, ActionError, ActionInput, ActionOutcome, ActionRequest,
-    InputType, InvocationId, RouteItem, SurfaceContent, SurfaceEventKind, SurfaceSessionId,
+    ActionContext, ActionDescriptor, ActionError, ActionId, ActionInput, ActionOutcome,
+    ActionRequest, InputType, InvocationId, RouteItem, SurfaceContent, SurfaceEventKind,
+    SurfaceSessionId,
 };
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -97,6 +98,73 @@ impl ActionRuntime {
     pub async fn route(&self, query: &str, input_kind: InputType) -> Vec<RouteItem> {
         let reg = self.registry.read().await;
         reg.search(query, input_kind)
+    }
+
+    /// 搜索阶段执行：只调用 `search_invocable` Action，固定 150ms 超时。
+    ///
+    /// 这些 Action 必须只读、无副作用；每个 Action 的结果经
+    /// [`execution_route_items`] 归一化为 [`RouteItem`] 执行项。
+    /// 错误与超时只记录日志并丢弃，不影响其它 Action。
+    pub async fn search_invoke(&self, query: &str, input_kind: InputType) -> Vec<RouteItem> {
+        if query.trim().is_empty() {
+            return Vec::new();
+        }
+        let action_ids = {
+            let reg = self.registry.read().await;
+            reg.search_invocable_actions(input_kind)
+        };
+        let mut out = Vec::new();
+        for action_id in action_ids {
+            let request = ActionRequest {
+                invocation_id: InvocationId::new(),
+                action_id: action_id.clone(),
+                input: ActionInput::plain_text(query),
+                caller: flick_domain::Caller::ui("search-route"),
+                source: flick_domain::ActionSource::SearchRoute,
+                deadline: flick_domain::Deadline {
+                    timeout: std::time::Duration::from_millis(150),
+                },
+            };
+            let outcome = self.invoke(request).await;
+            out.extend(execution_route_items(action_id, outcome));
+        }
+        out
+    }
+
+    /// 用户对 Execution 项操作时，交给父 Action 的 handler 处理。
+    ///
+    /// 固定 30s 超时；未实现或出错时返回 `None`（仅记录日志）。
+    pub async fn execution_event(
+        &self,
+        parent_action_id: ActionId,
+        item_id: &str,
+        event: flick_domain::ExecutionEventKind,
+    ) -> Option<ActionOutcome> {
+        let handler = {
+            let reg = self.registry.read().await;
+            reg.find_by_id(&parent_action_id)
+                .map(|(_, h)| Arc::clone(h))
+        }?;
+        let ctx = ActionContext {
+            cancellation: CancellationToken::new(),
+            host_info: self.host_info.read().unwrap().clone(),
+        };
+        match tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            handler.execution_event(&parent_action_id, item_id, event, ctx),
+        )
+        .await
+        {
+            Ok(Ok(outcome)) => outcome,
+            Ok(Err(error)) => {
+                tracing::warn!(%parent_action_id, %item_id, ?error, "execution_event failed");
+                None
+            }
+            Err(_) => {
+                tracing::warn!(%parent_action_id, %item_id, "execution_event timed out");
+                None
+            }
+        }
     }
 
     /// 调用一个动作。
@@ -307,4 +375,77 @@ impl Default for ActionRuntime {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// 将一次 `search_invocable` Action 的结果归一化为 [`RouteItem`] 执行项。
+///
+/// 数组结果逐项展开，单项结果作为单条执行项；`Error`/`OpenSurface`
+/// 不产生执行项（仅记录日志）。标题按 `title`/`name`/`label` 回退。
+fn execution_route_items(parent_action_id: ActionId, outcome: ActionOutcome) -> Vec<RouteItem> {
+    let mut items = Vec::new();
+    let mut push = |raw: serde_json::Value, fallback_title: String, index: usize| {
+        let object = raw.as_object();
+        let item_id = object
+            .and_then(|o| o.get("id"))
+            .and_then(|v| v.as_str())
+            .map(str::to_string)
+            .unwrap_or_else(|| format!("index:{index}"));
+        let title = object
+            .and_then(|o| {
+                o.get("title")
+                    .or_else(|| o.get("name"))
+                    .or_else(|| o.get("label"))
+            })
+            .and_then(|v| v.as_str())
+            .map(str::to_string)
+            .unwrap_or(fallback_title);
+        let subtitle = object
+            .and_then(|o| o.get("subtitle").or_else(|| o.get("description")))
+            .and_then(|v| v.as_str())
+            .map(str::to_string);
+        let icon = object
+            .and_then(|o| o.get("icon"))
+            .and_then(|v| v.as_str())
+            .map(str::to_string);
+        let badge = object
+            .and_then(|o| o.get("badge"))
+            .and_then(|v| v.as_str())
+            .map(str::to_string);
+        let item = flick_domain::ExecutionItem {
+            item_id,
+            parent_action_id: parent_action_id.clone(),
+            invocation_id: InvocationId::new(),
+            title,
+            subtitle,
+            icon,
+            badge,
+            output: raw,
+        };
+        items.push(RouteItem::execution(item, 0.0));
+    };
+    match outcome {
+        ActionOutcome::Data(serde_json::Value::Array(values)) => {
+            for (i, value) in values.into_iter().enumerate() {
+                push(value, format!("结果 {}", i + 1), i);
+            }
+        }
+        ActionOutcome::Data(value) => push(value.clone(), value.to_string(), 0),
+        ActionOutcome::Text(text) => push(serde_json::Value::String(text.clone()), text, 0),
+        ActionOutcome::Notice { message } => {
+            push(serde_json::Value::String(message.clone()), message, 0)
+        }
+        ActionOutcome::Url(url) => push(serde_json::Value::String(url.clone()), url, 0),
+        ActionOutcome::File(file) => push(
+            serde_json::to_value(file).unwrap_or_default(),
+            "文件".into(),
+            0,
+        ),
+        ActionOutcome::Error(error) => {
+            tracing::debug!(?error, "search_invoke error dropped");
+        }
+        ActionOutcome::OpenSurface { .. } => {
+            tracing::warn!("search_invoke returned OpenSurface; dropped");
+        }
+    }
+    items
 }
