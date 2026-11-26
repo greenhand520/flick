@@ -66,6 +66,7 @@ async fn host_action_returns_open_surface() {
         action_id: ActionId::from_static(flick_builtins::host::HOST_ACTION_ID),
         input: ActionInput::plain_text("host"),
         caller: Caller::cli("test"),
+        source: flick_domain::ActionSource::Ui,
         deadline: Deadline::from_secs(30),
     };
     match rt.invoke(req).await {

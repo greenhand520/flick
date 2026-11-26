@@ -138,11 +138,7 @@ impl HostEventSink for FakeSink {
 // ─── 辅助函数 ─────────────────────────────────────────────────────────────────
 
 fn make_route_item(id: &str, title: &str, score: f64) -> RouteItem {
-    RouteItem {
-        action_id: ActionId::new(id).unwrap(),
-        title: title.into(),
-        score,
-    }
+    RouteItem::action(ActionId::new(id).unwrap(), title, score)
 }
 
 // ─── 测试 ───────────────────────────────────────────────────────────────────

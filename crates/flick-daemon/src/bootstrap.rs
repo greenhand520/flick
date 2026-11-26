@@ -107,6 +107,7 @@ impl flick_ipc::server::IpcDispatcher for DaemonIpcDispatcher {
                     action_id,
                     input: ActionInput::plain_text(&text),
                     caller: Caller::cli("flick-cli"),
+                    source: flick_domain::ActionSource::Ui,
                     deadline: Deadline::from_secs(30),
                 };
                 let outcome = self.runtime.invoke(request).await;

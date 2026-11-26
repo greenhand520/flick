@@ -68,6 +68,7 @@ fn echo_request(text: &str, caller: Caller) -> ActionRequest {
         action_id: ActionId::from_static("flick.builtin.echo.v1.echo"),
         input: flick_domain::ActionInput::plain_text(text),
         caller,
+        source: flick_domain::ActionSource::Ui,
         deadline: Deadline::from_secs(5),
     }
 }
@@ -180,6 +181,7 @@ async fn cancelling_an_invocation_returns_cancelled_outcome_or_stops_work() {
         action_id: slow_id,
         input: flick_domain::ActionInput::plain_text("slow"),
         caller: Caller::cli("test"),
+        source: flick_domain::ActionSource::Ui,
         deadline: Deadline::from_secs(60), // 较长的截止时间，以便我们先取消
     };
 
@@ -214,6 +216,7 @@ async fn unknown_action_is_structured_not_a_panic() {
         action_id: ActionId::from_static("does.not.exist"),
         input: flick_domain::ActionInput::plain_text("anything"),
         caller: Caller::cli("test"),
+        source: flick_domain::ActionSource::Ui,
         deadline: Deadline::from_secs(5),
     };
 

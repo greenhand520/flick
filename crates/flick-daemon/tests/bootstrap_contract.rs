@@ -490,6 +490,7 @@ async fn unknown_action_returns_structured_error() {
         action_id: ActionId::new("nonexistent").unwrap(),
         input: ActionInput::plain_text(""),
         caller: Caller::cli("test"),
+        source: flick_domain::ActionSource::Ui,
         deadline: Deadline::from_secs(5),
     };
     let outcome = runtime.invoke(request).await;

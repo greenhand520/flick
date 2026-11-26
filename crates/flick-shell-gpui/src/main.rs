@@ -263,6 +263,7 @@ async fn fake_host(
                     action_id,
                     input,
                     caller: Caller::ui("gpui-demo"),
+                    source: flick_domain::ActionSource::Ui,
                     deadline: Deadline::from_secs(30),
                 };
                 let outcome = runtime.invoke(request).await;

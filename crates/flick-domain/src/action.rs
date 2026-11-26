@@ -2,6 +2,7 @@
 
 use crate::caller::Caller;
 use crate::error::ActionError;
+use crate::execution::ActionSource;
 use crate::id::{ActionId, InvocationId};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
@@ -12,10 +13,14 @@ use std::time::Duration;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ActionDescriptor {
     pub id: ActionId,
+    /// 动作版本号，默认 `1.0.0`。
+    pub version: String,
     pub title: String,
     /// 用于纯文本搜索召回的关键词。
     pub keywords: Vec<String>,
     pub concurrency: ConcurrencyPolicy,
+    /// 该动作是否可作为搜索阶段被调用，返回 `ActionOutcome::Data` 归一化为执行项。
+    pub search_invocable: bool,
     pub supported_inputs: Vec<InputType>,
     /// 仅 `InputType::File` 有效；小写、不带点。
     pub file_extensions: Vec<String>,
@@ -36,9 +41,11 @@ impl ActionDescriptor {
     ) -> Self {
         Self {
             id,
+            version: "1.0.0".into(),
             title: title.into(),
             keywords,
             concurrency,
+            search_invocable: false,
             supported_inputs: vec![InputType::PlainText],
             file_extensions: Vec::new(),
             output_types: vec![OutputType::Data],
@@ -79,6 +86,9 @@ pub struct ActionInput {
     /// 仅当 `kind == ClipboardImage` 时携带；图片字节来自剪贴板，不要求是磁盘文件。
     #[serde(default)]
     pub image: Option<ImageData>,
+    /// 多文件/文件夹输入；`text` 仍保留首个 file:// URI。
+    #[serde(default)]
+    pub files: Vec<FileInput>,
 }
 
 impl ActionInput {
@@ -87,6 +97,7 @@ impl ActionInput {
             kind: InputType::PlainText,
             text: text.into(),
             image: None,
+            files: Vec::new(),
         }
     }
 
@@ -99,6 +110,7 @@ impl ActionInput {
                 mime: mime.into(),
                 bytes,
             }),
+            files: Vec::new(),
         }
     }
 
@@ -108,6 +120,7 @@ impl ActionInput {
             kind: InputType::None,
             text: String::new(),
             image: None,
+            files: Vec::new(),
         }
     }
 }
@@ -119,6 +132,21 @@ pub struct ImageData {
     pub bytes: Vec<u8>,
 }
 
+/// 多文件/文件夹输入项；`text` 仍保留首个 file:// URI。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FileInput {
+    /// `file://` URI。
+    pub uri: String,
+    /// 面向用户展示的文件名。
+    pub display_name: String,
+    /// 小写扩展名（不带点）。
+    pub extension: Option<String>,
+    /// 是否为目录。
+    pub is_dir: bool,
+    /// 探测到的 MIME 类型。
+    pub mime: Option<String>,
+}
+
 /// Phase 1 输入类型分类。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 pub enum InputType {
@@ -128,6 +156,7 @@ pub enum InputType {
     PathCandidate,
     MathExpression,
     File,
+    Files,
     /// 剪贴板中的临时图片（例如截图后复制），不要求对应磁盘文件。
     ClipboardImage,
     /// 没有输入类型（动作不接受输入）
@@ -181,6 +210,9 @@ pub struct ActionRequest {
     pub action_id: ActionId,
     pub input: ActionInput,
     pub caller: Caller,
+    /// 发起该请求的阶段，默认 UI。
+    #[serde(default)]
+    pub source: ActionSource,
     pub deadline: Deadline,
 }
 
@@ -192,6 +224,7 @@ impl ActionRequest {
             action_id: ActionId::from_static("flick.builtin.echo.v1.echo"),
             input: ActionInput::plain_text(text),
             caller,
+            source: ActionSource::Ui,
             deadline: Deadline::from_secs(30),
         }
     }

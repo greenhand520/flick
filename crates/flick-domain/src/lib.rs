@@ -8,6 +8,7 @@
 pub mod action;
 pub mod caller;
 pub mod error;
+pub mod execution;
 pub mod host;
 pub mod id;
 pub mod input;
@@ -23,15 +24,17 @@ pub const APP_ID: &str = "io.github.greenhand520.Flick";
 // 为方便使用，在 crate 根目录重新导出关键类型。
 pub use action::{
     ActionContext, ActionDescriptor, ActionInput, ActionOutcome, ActionRequest, ActionVisibility,
-    ConcurrencyPolicy, Deadline, FileRef, ImageData, InputType, InvocationPolicy, OutputType,
+    ConcurrencyPolicy, Deadline, FileInput, FileRef, ImageData, InputType, InvocationPolicy,
+    OutputType,
 };
 pub use caller::{Caller, CallerKind};
 pub use error::ActionError;
+pub use execution::{ActionSource, ExecutionEventKind, ExecutionItem};
 pub use host::HostInfo;
 pub use id::{ActionId, InvocationId, QueryGeneration, SurfaceSessionId};
 pub use input::SearchQuery;
 pub use plugin::*;
-pub use route::RouteItem;
+pub use route::{RouteItem, RouteItemKind};
 pub use surface::{
     BadgeTone, ButtonTone, ListItem, SURFACE_SCHEMA_VERSION, SpacerSize, SurfaceContent,
     SurfaceEventKind, SurfaceNode,

@@ -172,11 +172,11 @@ impl ActionRegistry {
 
             if matched > 0 {
                 let score = matched as f64 / tokens.len() as f64;
-                results.push(RouteItem {
-                    action_id: entry.descriptor.id.clone(),
-                    title: entry.descriptor.title.clone(),
+                results.push(RouteItem::action(
+                    entry.descriptor.id.clone(),
+                    entry.descriptor.title.clone(),
                     score,
-                });
+                ));
             }
         }
 

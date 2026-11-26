@@ -216,11 +216,11 @@ mod tests {
     fn desired_size_clamps_to_max_height() {
         let mut s = state();
         s.panel.routes = (0..20)
-            .map(|i| RouteItem {
-                action_id: ActionId::new(format!("a{i}")).unwrap(),
-                title: format!("T{i}"),
-                score: 1.0,
-            })
+            .map(|i| RouteItem::action(
+                ActionId::new(format!("a{i}")).unwrap(),
+                format!("T{i}"),
+                1.0,
+            ))
             .collect();
         let (_w, h) = desired_size(&s.panel, &Metrics::default());
         assert_eq!(h, 480.0);
@@ -378,11 +378,11 @@ mod tests {
             activation_token: None,
         }));
         s.panel.query = "clipboard".into();
-        s.panel.routes = vec![RouteItem {
-            action_id: ActionId::new("demo.builtin.clipboard.show").unwrap(),
-            title: "剪贴板".into(),
-            score: 1.0,
-        }];
+        s.panel.routes = vec![RouteItem::action(
+            ActionId::new("demo.builtin.clipboard.show").unwrap(),
+            "剪贴板",
+            1.0,
+        )];
         s.panel.selection.set_total(1);
         let effects = s.update(UiEvent::Submitted);
         let invocation_id = effects

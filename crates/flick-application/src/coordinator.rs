@@ -67,6 +67,7 @@ impl ApplicationCoordinator {
                     action_id,
                     input,
                     caller: Caller::ui("search-panel"),
+                    source: flick_domain::ActionSource::Ui,
                     deadline: Deadline::from_secs(30),
                 };
                 let outcome = self.runtime.invoke(request).await;
