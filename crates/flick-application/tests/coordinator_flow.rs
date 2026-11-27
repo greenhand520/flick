@@ -140,6 +140,20 @@ fn make_route_item(id: &str, title: &str, score: f64) -> RouteItem {
     RouteItem::action(ActionId::new(id).unwrap(), title, score)
 }
 
+/// 轮询等待事件数量达到 `n`（最多 2s），否则 panic。
+async fn wait_events(events: &Arc<Mutex<Vec<HostToUi>>>, n: usize) {
+    for _ in 0..200 {
+        if events.lock().unwrap().len() >= n {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    panic!(
+        "timeout waiting for {n} events, got {}",
+        events.lock().unwrap().len()
+    );
+}
+
 // ─── 测试 ───────────────────────────────────────────────────────────────────
 
 /// 两个查询被并发发送。第一个（较慢）查询的结果必须被丢弃，
@@ -715,6 +729,9 @@ async fn coordinator_emits_routes_then_execution_results() {
         .handle_ui(text_query(QueryGeneration::INITIAL, "fire"))
         .await;
 
+    // ExecutionResults 现在由后台任务异步发出，需轮询等待其到达。
+    wait_events(&events, 2).await;
+
     let emitted = events.lock().unwrap();
     assert_eq!(emitted.len(), 2, "Routes then ExecutionResults");
     match &emitted[0] {
@@ -775,4 +792,81 @@ async fn execution_activated_forwards_to_parent_and_emits_completion() {
         }
         other => panic!("expected InvocationCompleted, got {other:?}"),
     }
+}
+
+// ─── 按代次取消在途搜索 ───────────────────────────────────────────────
+
+/// `search_invoke` 会长时间阻塞的伪造 Runtime，用于验证 `handle_ui`
+/// 不再被搜索阶段串行阻塞（修复前会阻塞在 `search_invoke` 的 `.await` 上）。
+struct SlowSearchRuntime;
+
+#[async_trait]
+impl RuntimePort for SlowSearchRuntime {
+    async fn route(&self, _query: &str, _input_kind: InputType) -> Vec<RouteItem> {
+        vec![make_route_item("id_slow", "Slow", 1.0)]
+    }
+
+    async fn search_invoke(
+        &self,
+        _generation: QueryGeneration,
+        _input: ActionInput,
+    ) -> Vec<RouteItem> {
+        // 模拟最长耗时远超 UI 交互预算的在途搜索。
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        Vec::new()
+    }
+
+    async fn invoke(&self, _request: ActionRequest) -> ActionOutcome {
+        ActionOutcome::Notice {
+            message: "unused".into(),
+        }
+    }
+
+    async fn cancel(&self, _invocation_id: InvocationId) -> bool {
+        false
+    }
+
+    async fn surface_event(
+        &self,
+        _session: SurfaceSessionId,
+        _kind: SurfaceEventKind,
+    ) -> Result<SurfaceContent, String> {
+        Err("unused".into())
+    }
+
+    async fn surface_closed(&self, _session: SurfaceSessionId) {}
+}
+
+/// 关键回归：`handle_ui(QueryChanged)` 不得被 `search_invoke` 阻塞。
+///
+/// 修复前，阶段二 `search_invoke` 在 `handle_ui` 内串行 `.await`，这里 50ms
+/// 超时必然失败（搜索要睡 5s）；修复后阶段二 spawn 到后台，`handle_ui` 立即
+/// 返回，从而新代次能立刻进入并取消在途搜索。
+#[tokio::test]
+async fn newer_generation_cancels_in_flight_search() {
+    let gen1 = QueryGeneration::INITIAL;
+    let gen2 = gen1.next();
+    let runtime = Arc::new(SlowSearchRuntime);
+    let (sink, events) = FakeSink::new();
+    let coord = Arc::new(ApplicationCoordinator::new(runtime, Arc::new(sink)));
+
+    // 第一次查询：修复后应立即返回，不被 5s 的 search_invoke 阻塞。
+    tokio::time::timeout(Duration::from_millis(50), coord.handle_ui(text_query(gen1, "a")))
+        .await
+        .expect("handle_ui must not block on search_invoke (gen1)");
+
+    // 新代次立刻进入：同样应立即返回。
+    tokio::time::timeout(Duration::from_millis(50), coord.handle_ui(text_query(gen2, "b")))
+        .await
+        .expect("handle_ui must not block on search_invoke (gen2)");
+
+    // 给后台任务一点时间，确认过期代次不会补发 ExecutionResults。
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(
+        !events.lock().unwrap().iter().any(|event| matches!(
+            event,
+            HostToUi::ExecutionResults { generation, .. } if *generation == gen1
+        )),
+        "stale gen1 must not emit ExecutionResults"
+    );
 }

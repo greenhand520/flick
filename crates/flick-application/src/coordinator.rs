@@ -24,7 +24,7 @@ use crate::query::QueryTracker;
 pub struct ApplicationCoordinator {
     runtime: Arc<dyn RuntimePort>,
     sink: Arc<dyn HostEventSink>,
-    query_tracker: QueryTracker,
+    query_tracker: Arc<QueryTracker>,
     /// 最近一次发出的路由快照（同步锁，临界区内不做 `.await`）。
     routes: Mutex<RouteSnapshot>,
     panel_visible: AtomicBool,
@@ -84,7 +84,7 @@ impl ApplicationCoordinator {
         Self {
             runtime,
             sink,
-            query_tracker: QueryTracker::new(),
+            query_tracker: Arc::new(QueryTracker::new()),
             routes: Mutex::new(RouteSnapshot::default()),
             panel_visible: AtomicBool::new(false),
         }
@@ -121,14 +121,20 @@ impl ApplicationCoordinator {
                     items: action_items,
                 });
 
-                // 阶段二：搜索阶段执行（跨插件，最慢 150ms），完成后补发。
-                let execution_items = self.runtime.search_invoke(generation, action_input).await;
-                if execution_items.is_empty() || !self.query_tracker.is_current(generation) {
-                    return;
-                }
-                self.sink.send(HostToUi::ExecutionResults {
-                    generation,
-                    items: execution_items,
+                // 阶段二：搜索阶段执行放到后台任务，让更新的代次能立刻取消在途搜索
+                // （取消令牌由 runtime 内部管理，协调器只负责传代次）。
+                let runtime = Arc::clone(&self.runtime);
+                let sink = Arc::clone(&self.sink);
+                let tracker = Arc::clone(&self.query_tracker);
+                tokio::spawn(async move {
+                    let execution_items = runtime.search_invoke(generation, action_input).await;
+                    if execution_items.is_empty() || !tracker.is_current(generation) {
+                        return;
+                    }
+                    sink.send(HostToUi::ExecutionResults {
+                        generation,
+                        items: execution_items,
+                    });
                 });
             }
 
