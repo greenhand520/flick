@@ -210,10 +210,16 @@ pub fn desired_size(panel: &PanelState, m: &Metrics) -> (f32, f32) {
     // Surface 优先：内容即当前动作的输出视图，替换结果列表。
     if let Some(surface) = active_surface(panel) {
         let content_h = estimate_height(surface, &SurfaceStyle::default());
-        let height =
-            (m.input_height + m.content_gap + content_h + m.padding_bottom + attachments_h)
-                .min(m.panel_max_height);
-        return (m.width, height.max(m.input_height + attachments_h));
+        // `needs_search=false` 的 Surface 会隐藏主搜索框（见 view.rs 的 `hide_search`），
+        // 此时高度不再包含 `input_height`，避免面板顶部空出一条。
+        let input_h = if panel.surface_search() {
+            m.input_height
+        } else {
+            0.0
+        };
+        let height = (input_h + m.content_gap + content_h + m.padding_bottom + attachments_h)
+            .min(m.panel_max_height);
+        return (m.width, height.max(input_h + attachments_h));
     }
     let has_results = !(panel.routes.is_empty() && panel.last_outcome.is_none());
     let results_h = if has_results {
@@ -378,8 +384,44 @@ mod tests {
             needs_search: false,
         });
         assert!(active_surface(&s.panel).is_some());
+        // `needs_search=false`：主搜索框隐藏，高度不再包含 input_height。
         let (_w, h) = desired_size(&s.panel, &Metrics::default());
-        assert!(h > 64.0 && h <= 480.0);
+        assert!(h > 0.0 && h <= 480.0);
+    }
+
+    #[test]
+    fn hidden_search_surface_is_shorter_by_input_height() {
+        fn surface_height(needs_search: bool) -> f32 {
+            let mut s = state();
+            let invocation_id = flick_domain::InvocationId::new();
+            s.panel.active_invocation = Some(invocation_id);
+            s.update(UiEvent::Host(HostToUi::InvocationCompleted {
+                invocation_id,
+                outcome: ActionOutcome::OpenSurface {
+                    surface_id: "info".into(),
+                    content: SurfaceContent {
+                        schema_version: SURFACE_SCHEMA_VERSION,
+                        title: None,
+                        body: vec![SurfaceNode::Heading {
+                            id: None,
+                            text: "系统信息".into(),
+                        }],
+                    },
+                    session_id: None,
+                    needs_search,
+                },
+            }));
+            let (_w, h) = desired_size(&s.panel, &Metrics::default());
+            h
+        }
+
+        let hidden = surface_height(false);
+        let shown = surface_height(true);
+        assert_eq!(
+            shown - hidden,
+            Metrics::default().input_height,
+            "needs_search=false 应比 needs_search=true 少一条搜索框高度"
+        );
     }
 
     #[test]

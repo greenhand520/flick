@@ -547,6 +547,21 @@ impl PanelState {
         {
             self.surface_session = *session_id;
             self.surface_search = *needs_search;
+            if !*needs_search {
+                // `needs_search=false`：已进入插件独立窗口/动作自己的 UI，搜索阶段结束，
+                // 主搜索框必须清空并隐藏，`query/pending_query/routes/selection` 一并清空
+                // （设计文档「输入搜索、路由与结果输出」§7.3 / 决策 15）。
+                self.query.clear();
+                self.pending_query.clear();
+                self.input = SearchInputSnapshot::text(String::new(), InputSource::Manual);
+                self.session.end();
+                self.routes.clear();
+                self.selection.set_total(0);
+                // 推进代次并作废未触发的防抖，避免迟到的查询把结果灌回隐藏的搜索框。
+                self.generation = self.generation.next();
+                self.debounce_revision = self.debounce_revision.wrapping_add(1);
+                self.flushed_debounce_revision = None;
+            }
         } else {
             self.surface_session = None;
             self.surface_search = false;
@@ -779,6 +794,34 @@ mod tests {
         assert!(actions.is_empty());
         assert_eq!(st.surface_session(), Some(session));
         assert!(st.surface_search());
+    }
+
+    #[test]
+    fn surface_without_search_clears_query_and_routes() {
+        let session = SurfaceSessionId::new();
+        let mut st = PanelState::new();
+        st.visible = true;
+        st.query = "echo".into();
+        st.pending_query = "echo".into();
+        st.routes = vec![action_route("a.v1.one", "A", 1.0)];
+        st.selection.set_total(1);
+        let generation_before = st.generation;
+
+        let invocation_id = InvocationId::new();
+        st.active_invocation = Some(invocation_id);
+        let actions = st.update(PanelEvent::InvocationCompleted {
+            invocation_id,
+            outcome: open_surface_outcome(session, false, "x"),
+        });
+
+        assert!(actions.is_empty());
+        assert_eq!(st.surface_session(), Some(session));
+        assert!(!st.surface_search(), "needs_search=false 应标记为不显示搜索框");
+        assert!(st.query.is_empty(), "搜索框文本必须清空");
+        assert!(st.pending_query.is_empty(), "待发查询必须清空");
+        assert!(st.routes.is_empty(), "候选必须清空");
+        assert_eq!(st.selection.total, 0, "选中态必须清空");
+        assert_eq!(st.generation, generation_before.next(), "应推进代次作废旧查询");
     }
 
     #[test]

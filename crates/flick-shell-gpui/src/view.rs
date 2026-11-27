@@ -597,8 +597,14 @@ impl Render for AppView {
             panel = panel.pb(px(self.metrics.padding_bottom));
         }
 
+        // `needs_search=false` 的 Surface：搜索阶段已结束，主搜索框必须隐藏，
+        // 不得在 Surface 上方保留空搜索框（设计文档「输入搜索、路由与结果输出」§7.3）。
+        let hide_search = crate::app::active_surface(&self.state.panel).is_some()
+            && !self.state.panel.surface_search();
+
         // 搜索行：占满条高、垂直居中，大号字号（参考 gpui-shell/awari 的 query row）。
-        panel = panel.child(
+        if !hide_search {
+            panel = panel.child(
             div()
                 .h(px(self.metrics.input_height))
                 .w_full()
@@ -646,10 +652,13 @@ impl Render for AppView {
                                 }),
                         ),
                 ),
-        );
+            );
+        }
 
-        if let Some(chips) = render_attachment_chips(&self.attachments, &ui, &self.metrics) {
-            panel = panel.child(chips);
+        if !hide_search {
+            if let Some(chips) = render_attachment_chips(&self.attachments, &ui, &self.metrics) {
+                panel = panel.child(chips);
+            }
         }
 
         // 仅覆盖主题颜色与行圆角；高度相关字段（pad/row_gap/line_height/
@@ -748,6 +757,16 @@ impl Render for AppView {
                         .rounded(px(self.metrics.radius_row))
                         .bg(col(bg))
                         .text_color(col(fg))
+                        // 鼠标移动即「hover 选中」：把选中行切到指针所在行（设计文档 §8.2 / 决策 16）。
+                        .on_mouse_move(cx.listener(move |this, _, _, cx| {
+                            if this.state.panel.selection.index != index {
+                                this.state.panel.selection.index = index.clamp(
+                                    0,
+                                    this.state.panel.selection.total.saturating_sub(1),
+                                );
+                                cx.notify();
+                            }
+                        }))
                         // 鼠标点击等同 Enter：先选中该行，再走统一的提交路径。
                         .on_mouse_down(
                             MouseButton::Left,
@@ -756,8 +775,33 @@ impl Render for AppView {
                                 this.dispatch(UiEvent::Submitted, window, cx);
                                 cx.stop_propagation();
                             }),
-                        )
-                        .child(Label::new(item.title.clone()));
+                        );
+
+                    // 标题：有 `matched_range` 时把命中片段单独染成高亮块。
+                    if let Some((before, matched, after)) =
+                        split_title_by_range(&item.title, item.matched_range)
+                    {
+                        // 选中行背景本身即 `selected_bg`，高亮块改用 `surface` 反衬，避免同色。
+                        let chip_bg = if selected { ui.surface } else { ui.selected_bg };
+                        let mut title_row = div().flex().items_center();
+                        if !before.is_empty() {
+                            title_row = title_row.child(Label::new(before));
+                        }
+                        title_row = title_row.child(
+                            div()
+                                .rounded(px(3.0))
+                                .px(px(1.0))
+                                .bg(col(chip_bg))
+                                .text_color(col(ui.selected_fg))
+                                .child(Label::new(matched)),
+                        );
+                        if !after.is_empty() {
+                            title_row = title_row.child(Label::new(after));
+                        }
+                        row = row.child(title_row);
+                    } else {
+                        row = row.child(Label::new(item.title.clone()));
+                    }
                     if let Some(subtitle) = &item.subtitle {
                         row = row.child(
                             div()
@@ -977,6 +1021,24 @@ fn render_image_preview(image: &ImageData, ui: &theme::UiTheme) -> AnyElement {
         .into_any_element()
 }
 
+/// 按 `matched_range`（字符区间）把标题拆成「命中前 / 命中 / 命中后」三段，
+/// 供结果行高亮匹配片段。区间非法（空区间、越界、`None`）时返回 `None`，
+/// 调用方退回整串渲染。
+fn split_title_by_range(
+    title: &str,
+    range: Option<(usize, usize)>,
+) -> Option<(String, String, String)> {
+    let (start, end) = range?;
+    let chars: Vec<char> = title.chars().collect();
+    if start >= end || end > chars.len() {
+        return None;
+    }
+    let before: String = chars[..start].iter().collect();
+    let matched: String = chars[start..end].iter().collect();
+    let after: String = chars[end..].iter().collect();
+    Some((before, matched, after))
+}
+
 /// Surface 内一个可编辑文本节点的值快照（用于建立/同步控件）。
 pub(crate) struct InputSpec {
     pub id: String,
@@ -1031,7 +1093,7 @@ fn persist_theme(mode: ThemeMode) {
 
 #[cfg(test)]
 mod tests {
-    use super::{estimated_label_width, visible_file_count};
+    use super::{estimated_label_width, split_title_by_range, visible_file_count};
     use flick_domain::FileInput;
 
     fn file(name: &str) -> FileInput {
@@ -1063,5 +1125,39 @@ mod tests {
     #[test]
     fn estimated_label_width_treats_cjk_as_double_width() {
         assert!(estimated_label_width("截图.png") > estimated_label_width("ab.png"));
+    }
+
+    #[test]
+    fn split_title_by_range_splits_middle() {
+        let split = split_title_by_range("系统信息面板", Some((2, 4)));
+        assert_eq!(
+            split,
+            Some(("系统".to_string(), "信息".to_string(), "面板".to_string()))
+        );
+    }
+
+    #[test]
+    fn split_title_by_range_handles_prefix_and_suffix() {
+        assert_eq!(
+            split_title_by_range("abc", Some((0, 1))),
+            Some((String::new(), "a".to_string(), "bc".to_string()))
+        );
+        assert_eq!(
+            split_title_by_range("abc", Some((2, 3))),
+            Some(("ab".to_string(), "c".to_string(), String::new()))
+        );
+    }
+
+    #[test]
+    fn split_title_by_range_rejects_invalid_ranges() {
+        assert_eq!(split_title_by_range("abc", None), None);
+        assert_eq!(split_title_by_range("abc", Some((1, 1))), None);
+        assert_eq!(split_title_by_range("abc", Some((2, 1))), None);
+        assert_eq!(split_title_by_range("abc", Some((0, 4))), None);
+        // 按字符而非字节切分：中文 2 个字符 = 6 字节，区间仍按字符计。
+        assert_eq!(
+            split_title_by_range("中文标题", Some((0, 2))),
+            Some((String::new(), "中文".to_string(), "标题".to_string()))
+        );
     }
 }
