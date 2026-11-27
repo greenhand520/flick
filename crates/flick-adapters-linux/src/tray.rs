@@ -3,9 +3,12 @@
 //! 只负责把 DBus 托盘事件翻译成 [`TrayEvent`]，不认识 daemon 的协调器与
 //! 生命周期类型；图标复用内置 SVG（见 [`crate::flick_icon`]）。
 
-use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, OnceLock};
 
-use ksni::Icon;
+use ksni::menu::StandardItem;
+use ksni::{Icon, MenuItem, Tray, TrayMethods};
+use tokio::sync::mpsc::UnboundedSender;
 
 /// 托盘图标在 DBus 上的稳定标识。
 pub const TRAY_ID: &str = "flick";
@@ -134,6 +137,108 @@ fn render_tray_icon_uncached() -> Icon {
     }
 }
 
+/// 托盘启动失败的原因。
+#[derive(Debug, thiserror::Error)]
+pub enum TrayError {
+    /// 通过 `FLICK_DISABLE_TRAY` 显式禁用。
+    #[error("托盘已禁用（FLICK_DISABLE_TRAY）")]
+    Disabled,
+}
+
+/// 是否允许启动托盘：`FLICK_DISABLE_TRAY` 未设置时启用。
+pub fn tray_enabled() -> bool {
+    std::env::var_os("FLICK_DISABLE_TRAY").is_none()
+}
+
+/// 托盘实现：把 ksni 回调翻译成 [`TrayEvent`] 发送给 daemon。
+pub struct FlickTray {
+    /// 事件出口（daemon 侧消费）。
+    events: UnboundedSender<TrayEvent>,
+    /// 保证「无 SNI 宿主」的告警只出现一次。
+    warned: Arc<AtomicBool>,
+}
+
+impl Tray for FlickTray {
+    fn id(&self) -> String {
+        TRAY_ID.to_string()
+    }
+
+    fn title(&self) -> String {
+        TRAY_TITLE.to_string()
+    }
+
+    fn icon_pixmap(&self) -> Vec<Icon> {
+        vec![render_tray_icon()]
+    }
+
+    fn activate(&mut self, _x: i32, _y: i32) {
+        let _ = self.events.send(TrayEvent::Activate);
+    }
+
+    fn menu(&self) -> Vec<MenuItem<Self>> {
+        menu_spec()
+            .into_iter()
+            .map(|spec| match spec.id {
+                None => MenuItem::Separator,
+                Some(id) => {
+                    let event = map_menu_click(id);
+                    let label = spec.label.to_string();
+                    MenuItem::from(StandardItem {
+                        label,
+                        enabled: true,
+                        visible: true,
+                        activate: Box::new(move |tray: &mut Self| {
+                            if let Some(event) = event {
+                                let _ = tray.events.send(event);
+                            }
+                        }),
+                        ..StandardItem::default()
+                    })
+                }
+            })
+            .collect()
+    }
+
+    fn watcher_offline(&self, reason: ksni::OfflineReason) -> bool {
+        if !self.warned.swap(true, Ordering::SeqCst) {
+            tracing::warn!(
+                ?reason,
+                "系统托盘不可用：GNOME 默认不显示 StatusNotifierItem，请安装 AppIndicator 扩展"
+            );
+        }
+        // 返回 true 表示托盘服务继续等待宿主上线（不退出 daemon）。
+        true
+    }
+}
+
+/// 在当前 tokio 运行时上启动托盘。
+///
+/// - 返回 `Err(TrayError::Disabled)` 表示被环境变量禁用（调用方无需告警）。
+/// - DBus 连接失败只在任务内 warn，不影响 daemon 其余功能。
+pub fn spawn_tray(events: UnboundedSender<TrayEvent>) -> Result<(), TrayError> {
+    if !tray_enabled() {
+        return Err(TrayError::Disabled);
+    }
+    let tray = FlickTray {
+        events,
+        warned: Arc::new(AtomicBool::new(false)),
+    };
+    tokio::spawn(async move {
+        // `assume_sni_available(true)` 把「无 StatusNotifierWatcher」降级成
+        // `watcher_offline` 回调，避免 GNOME 未装扩展时 spawn 直接失败。
+        match tray.assume_sni_available(true).spawn().await {
+            Ok(handle) => {
+                tracing::info!("系统托盘已启动");
+                // 持有 handle 让托盘服务活到进程退出。
+                let _keep_alive = handle;
+                std::future::pending::<()>().await;
+            }
+            Err(error) => tracing::warn!(%error, "系统托盘启动失败，继续无托盘运行"),
+        }
+    });
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -200,5 +305,57 @@ mod tests {
         assert_eq!(first.width, second.width);
         assert_eq!(first.height, second.height);
         assert_eq!(first.data, second.data, "同一 SVG 渲染结果必须一致");
+    }
+
+    #[test]
+    fn disabled_env_switch_blocks_spawn() {
+        // edition 2024：`set_var`/`remove_var` 是 unsafe；本用例独占该变量。
+        unsafe { std::env::set_var("FLICK_DISABLE_TRAY", "1") };
+        assert!(!tray_enabled());
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let result = spawn_tray(tx);
+        unsafe { std::env::remove_var("FLICK_DISABLE_TRAY") };
+        assert!(matches!(result, Err(TrayError::Disabled)));
+        assert!(tray_enabled());
+    }
+
+    #[test]
+    fn activate_sends_event_through_channel() {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut tray = FlickTray {
+            events: tx,
+            warned: Arc::new(AtomicBool::new(false)),
+        };
+        tray.activate(0, 0);
+        assert_eq!(rx.try_recv(), Ok(TrayEvent::Activate));
+    }
+
+    #[test]
+    fn menu_items_carry_labels_and_dispatch_events() {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut tray = FlickTray {
+            events: tx,
+            warned: Arc::new(AtomicBool::new(false)),
+        };
+        let menu = tray.menu();
+        assert_eq!(menu.len(), 5);
+        let mut fired = Vec::new();
+        for item in menu {
+            if let ksni::MenuItem::Standard(item) = item {
+                (item.activate)(&mut tray);
+                if let Ok(event) = rx.try_recv() {
+                    fired.push(event);
+                }
+            }
+        }
+        assert_eq!(
+            fired,
+            vec![
+                TrayEvent::Home,
+                TrayEvent::Settings,
+                TrayEvent::About,
+                TrayEvent::Quit
+            ]
+        );
     }
 }
