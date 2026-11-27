@@ -105,7 +105,7 @@ impl ActionHandler for HostHandler {
 struct HostLifecycle;
 #[async_trait]
 impl PluginLifecycle for HostLifecycle {
-    async fn activate(&self) -> Result<(), PluginRuntimeError> {
+    async fn activate(&self, _ctx: PluginContext) -> Result<(), PluginRuntimeError> {
         Ok(())
     }
     async fn deactivate(&self) -> Result<(), PluginRuntimeError> {

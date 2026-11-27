@@ -133,6 +133,7 @@ impl SurfaceHandler for CountingSurfaceHandler {
         &self,
         _session: &SurfaceSession,
         _event: SurfaceEventKind,
+        _ctx: flick_domain::PluginContext,
     ) -> Result<SurfaceContent, SurfaceError> {
         Ok(SurfaceContent {
             schema_version: SURFACE_SCHEMA_VERSION,

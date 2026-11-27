@@ -244,7 +244,7 @@ struct AppsLifecycle {
 
 #[async_trait]
 impl PluginLifecycle for AppsLifecycle {
-    async fn activate(&self) -> Result<(), PluginRuntimeError> {
+    async fn activate(&self, _ctx: PluginContext) -> Result<(), PluginRuntimeError> {
         // 在激活阶段一次性构建索引；此后搜索只读内存，不做任何磁盘 I/O。
         // 注：本 crate 未直接依赖 tokio，故此处同步扫描（仅在启动期执行一次）。
         let apps = scan_apps_from_dirs(&self.dirs);
@@ -437,7 +437,11 @@ mod tests {
             "[Desktop Entry]\nType=Application\nName=火狐浏览器\nExec=firefox\n",
         );
         let plugin = AppsPlugin::with_dirs(vec![apps_dir]);
-        plugin.lifecycle.activate().await.unwrap();
+        plugin
+            .lifecycle
+            .activate(PluginContext::new(tokio_util::sync::CancellationToken::new()))
+            .await
+            .unwrap();
         let handler = AppsSearchHandler::from_state(plugin.state.clone());
         let request = ActionRequest {
             invocation_id: InvocationId::new(),

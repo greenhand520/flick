@@ -12,7 +12,7 @@ struct CountingLifecycle(Arc<AtomicUsize>);
 
 #[async_trait]
 impl PluginLifecycle for CountingLifecycle {
-    async fn activate(&self) -> Result<(), PluginRuntimeError> {
+    async fn activate(&self, _ctx: flick_domain::PluginContext) -> Result<(), PluginRuntimeError> {
         self.0.fetch_add(1, Ordering::SeqCst);
         Ok(())
     }

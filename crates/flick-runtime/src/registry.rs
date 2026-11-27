@@ -162,9 +162,12 @@ impl ActionRegistry {
         self.manifests.keys().cloned().collect()
     }
 
-    /// 返回已注册插件的生命周期句柄（用于启动时统一 activate）。
-    pub fn plugin_lifecycles(&self) -> Vec<Arc<dyn PluginLifecycle>> {
-        self.lifecycles.values().cloned().collect()
+    /// 返回已注册插件的生命周期句柄（含插件 id，用于启动时统一 activate）。
+    pub fn plugin_lifecycles(&self) -> Vec<(String, Arc<dyn PluginLifecycle>)> {
+        self.lifecycles
+            .iter()
+            .map(|(id, lifecycle)| (id.clone(), Arc::clone(lifecycle)))
+            .collect()
     }
 
     /// 按 id 查找单个动作。
@@ -175,7 +178,6 @@ impl ActionRegistry {
         self.entries.get(id).map(|e| (&e.descriptor, &e.handler))
     }
 
-    /// 返回持有给定动作的插件 manifest（裸注册动作返回 None）。
     /// 返回全部已注册插件的清单快照（按插件 id 升序）。
     ///
     /// 宿主据此把插件声明的设置项注册进设置系统。
@@ -183,6 +185,7 @@ impl ActionRegistry {
         self.manifests.values().cloned().collect()
     }
 
+    /// 返回持有给定动作的插件 manifest（裸注册动作返回 None）。
     pub fn plugin_for_action(&self, id: &ActionId) -> Option<&PluginManifest> {
         let plugin_id = self.entries.get(id)?.plugin_id.as_ref()?;
         self.manifests.get(plugin_id)

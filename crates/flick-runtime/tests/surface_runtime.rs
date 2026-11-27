@@ -33,6 +33,7 @@ impl SurfaceHandler for EchoSurface {
         &self,
         _session: &SurfaceSession,
         event: SurfaceEventKind,
+        _ctx: flick_domain::PluginContext,
     ) -> Result<SurfaceContent, SurfaceError> {
         Ok(SurfaceContent {
             schema_version: SURFACE_SCHEMA_VERSION,

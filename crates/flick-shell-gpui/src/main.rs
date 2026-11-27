@@ -187,6 +187,7 @@ impl SurfaceHandler for DemoClipboardPlugin {
         &self,
         session: &SurfaceSession,
         event: SurfaceEventKind,
+        _ctx: PluginContext,
     ) -> Result<SurfaceContent, SurfaceError> {
         let mut guard = self.sessions.lock().unwrap();
         let state = guard.entry(session.id).or_default();

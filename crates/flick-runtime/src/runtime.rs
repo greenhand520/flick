@@ -1,13 +1,14 @@
 //! ActionRuntime — 编排路由、调用和生命周期。
 
 use crate::registry::ActionRegistry;
+use flick_domain::settings::{ConfigSnapshot, SettingSecretReader};
 use flick_domain::{
-    PluginContext, ActionDescriptor, ActionError, ActionId, ActionInput, ActionOutcome,
-    ActionRequest, DependencyStatus, InputContext, InputType, InvocationId, QueryGeneration,
+    ActionDescriptor, ActionError, ActionId, ActionInput, ActionOutcome, ActionRequest,
+    DependencyStatus, InputContext, InputType, InvocationId, PluginContext, QueryGeneration,
     RouteItem, SurfaceContent, SurfaceEventKind, SurfaceSessionId,
 };
 use flick_plugin::{
-    ActionHandler, Plugin, PluginRegistrationError, SurfaceError, SurfaceSession,
+    ActionHandler, Plugin, PluginRegistrationError, SettingsProvider, SurfaceError, SurfaceSession,
 };
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -142,6 +143,10 @@ pub struct ActionRuntime {
     surface_sessions: Arc<RwLock<HashMap<SurfaceSessionId, SurfaceSessionState>>>,
     /// 搜索代次取消槽：记录当前搜索代次与其取消令牌。
     search_cancel: std::sync::Mutex<Option<(QueryGeneration, CancellationToken)>>,
+    /// 设置快照提供者；`None` 表示设置系统不可用（所有调用拿到空快照）。
+    settings: Arc<std::sync::RwLock<Option<Arc<dyn SettingsProvider>>>>,
+    /// secret 读取器；`None` 时 `ctx.secret()` 恒为 `None`。
+    secrets: Arc<std::sync::RwLock<Option<Arc<dyn SettingSecretReader>>>>,
 }
 
 /// 一次动作调用所需的最小运行时上下文。
@@ -158,6 +163,10 @@ struct InvocationCore {
     host_info: Arc<std::sync::RwLock<Option<Arc<flick_domain::HostInfo>>>>,
     /// 活动 Surface 会话表（`OpenSurface` 回填需要）。
     surface_sessions: Arc<RwLock<HashMap<SurfaceSessionId, SurfaceSessionState>>>,
+    /// 设置快照提供者（与运行时共享）。
+    settings: Arc<std::sync::RwLock<Option<Arc<dyn SettingsProvider>>>>,
+    /// secret 读取器（与运行时共享）。
+    secrets: Arc<std::sync::RwLock<Option<Arc<dyn SettingSecretReader>>>>,
 }
 
 impl ActionRuntime {
@@ -169,6 +178,8 @@ impl ActionRuntime {
             host_info: Arc::new(std::sync::RwLock::new(None)),
             surface_sessions: Arc::new(RwLock::new(HashMap::new())),
             search_cancel: std::sync::Mutex::new(None),
+            settings: Arc::new(std::sync::RwLock::new(None)),
+            secrets: Arc::new(std::sync::RwLock::new(None)),
         }
     }
 
@@ -179,6 +190,8 @@ impl ActionRuntime {
             active: Arc::clone(&self.active),
             host_info: Arc::clone(&self.host_info),
             surface_sessions: Arc::clone(&self.surface_sessions),
+            settings: Arc::clone(&self.settings),
+            secrets: Arc::clone(&self.secrets),
         }
     }
 
@@ -191,6 +204,56 @@ impl ActionRuntime {
         } else {
             tracing::warn!("设置使用频率存储失败：注册表正被写入");
         }
+    }
+
+    /// 注入设置快照提供者（由 daemon 适配 `SettingsService` 得到）。
+    pub fn set_settings_provider(&self, provider: Arc<dyn SettingsProvider>) {
+        *self.settings.write().unwrap() = Some(provider);
+    }
+
+    /// 注入 secret 读取器（实时解密，不进入快照）。
+    pub fn set_settings_secrets(&self, reader: Arc<dyn SettingSecretReader>) {
+        *self.secrets.write().unwrap() = Some(reader);
+    }
+
+    /// 解析某插件当前的设置快照；无 provider 或无插件 id 时返回空快照。
+    fn snapshot_for(&self, plugin_id: Option<&str>) -> ConfigSnapshot {
+        let Some(plugin_id) = plugin_id else {
+            return ConfigSnapshot::empty();
+        };
+        match self.settings.read().unwrap().as_ref() {
+            Some(provider) => provider.snapshot(plugin_id),
+            None => ConfigSnapshot::empty(),
+        }
+    }
+
+    /// 构造一个带设置快照的插件上下文。
+    fn context_with(&self, cancellation: CancellationToken, plugin_id: Option<&str>) -> PluginContext {
+        let settings = self.snapshot_for(plugin_id);
+        PluginContext::new(cancellation)
+            .with_host_info(self.host_info.read().unwrap().clone())
+            .with_settings(settings)
+            .with_plugin_id(plugin_id.map(str::to_string))
+            .with_secrets(self.secrets.read().unwrap().clone())
+    }
+
+    /// 订阅某插件的设置变更。
+    ///
+    /// 首次 `borrow()` 即当前快照；之后每次该命名空间 revision 变化推送新快照。
+    /// 未注入 provider 时返回一个只含空快照、不再更新的接收端。
+    pub fn watch_settings(&self, plugin_id: &str) -> tokio::sync::watch::Receiver<ConfigSnapshot> {
+        let (tx, rx) = tokio::sync::watch::channel(self.snapshot_for(Some(plugin_id)));
+        if let Some(provider) = self.settings.read().unwrap().clone() {
+            let sender = Arc::new(tx);
+            provider.subscribe(
+                plugin_id,
+                Arc::new(move |snapshot| {
+                    // 无接收者时 send 失败，属正常情况。
+                    let _ = sender.send(snapshot);
+                }),
+            );
+        }
+        rx
     }
 
     /// 注入启动时采集的宿主信息。
@@ -225,9 +288,10 @@ impl ActionRuntime {
             let reg = self.registry.read().await;
             reg.plugin_lifecycles()
         };
-        for lifecycle in lifecycles {
-            if let Err(error) = lifecycle.activate().await {
-                tracing::warn!(?error, "plugin activate failed");
+        for (plugin_id, lifecycle) in lifecycles {
+            let ctx = self.context_with(CancellationToken::new(), Some(&plugin_id));
+            if let Err(error) = lifecycle.activate(ctx).await {
+                tracing::warn!(%plugin_id, ?error, "plugin activate failed");
             }
         }
     }
@@ -369,13 +433,17 @@ impl ActionRuntime {
         item_id: &str,
         event: flick_domain::ExecutionEventKind,
     ) -> Option<ActionOutcome> {
-        let handler = {
+        let (handler, plugin_id) = {
             let reg = self.registry.read().await;
-            reg.find_by_id(&parent_action_id)
-                .map(|(_, h)| Arc::clone(h))
-        }?;
-        let ctx = PluginContext::new(CancellationToken::new())
-            .with_host_info(self.host_info.read().unwrap().clone());
+            let plugin_id = reg
+                .plugin_for_action(&parent_action_id)
+                .map(|manifest| manifest.id.clone());
+            let handler = reg
+                .find_by_id(&parent_action_id)
+                .map(|(_, h)| Arc::clone(h))?;
+            (handler, plugin_id)
+        };
+        let ctx = self.context_with(CancellationToken::new(), plugin_id.as_deref());
         match tokio::time::timeout(
             std::time::Duration::from_secs(30),
             handler.execution_event(&parent_action_id, item_id, event, ctx),
@@ -423,7 +491,8 @@ impl ActionRuntime {
         .ok_or(SurfaceError {
             message: "surface handler not found".into(),
         })?;
-        handler.on_event(&session, event).await
+        let ctx = self.context_with(CancellationToken::new(), Some(&session.plugin_id));
+        handler.on_event(&session, event, ctx).await
     }
 
     /// 关闭一个 Surface 会话（幂等）：触发 `on_close` 并移除会话。
@@ -484,7 +553,7 @@ impl InvocationCore {
         }
 
         // ── 1. 查找处理器（仅短暂持有读锁） ────────
-        let (handler, accepts_no_input): (Arc<dyn ActionHandler>, bool) = {
+        let (handler, accepts_no_input, plugin_id): (Arc<dyn ActionHandler>, bool, Option<String>) = {
             let reg = self.registry.read().await;
             match reg.find_by_id(&request.action_id) {
                 Some((desc, h)) => {
@@ -495,7 +564,10 @@ impl InvocationCore {
                             .supported_inputs
                             .iter()
                             .all(|kind| *kind == InputType::None);
-                    (Arc::clone(h), no_input)
+                    let plugin_id = reg
+                        .plugin_for_action(&request.action_id)
+                        .map(|manifest| manifest.id.clone());
+                    (Arc::clone(h), no_input, plugin_id)
                 }
                 None => {
                     return ActionOutcome::Error(ActionError::UnknownAction {
@@ -515,8 +587,18 @@ impl InvocationCore {
             Some(parent) => parent.child_token(),
             None => CancellationToken::new(),
         };
+        let settings = match plugin_id.as_deref() {
+            Some(id) => match self.settings.read().unwrap().as_ref() {
+                Some(provider) => provider.snapshot(id),
+                None => ConfigSnapshot::empty(),
+            },
+            None => ConfigSnapshot::empty(),
+        };
         let ctx = PluginContext::new(token.clone())
-            .with_host_info(self.host_info.read().unwrap().clone());
+            .with_host_info(self.host_info.read().unwrap().clone())
+            .with_settings(settings)
+            .with_plugin_id(plugin_id)
+            .with_secrets(self.secrets.read().unwrap().clone());
 
         // 存入活动映射，以便 `cancel()` 能找到它。
         // 用守卫托管清理：即使本 future 中途被丢弃，也会移除条目。

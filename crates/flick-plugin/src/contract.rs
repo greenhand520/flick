@@ -78,10 +78,13 @@ pub trait PluginUiFactory: Send + Sync {}
 #[async_trait]
 pub trait SurfaceHandler: Send + Sync {
     /// 处理一次 Surface 交互事件，返回更新后的内容。
+    ///
+    /// `ctx` 携带调用入口固定的设置快照（本插件命名空间）。
     async fn on_event(
         &self,
         session: &SurfaceSession,
         event: SurfaceEventKind,
+        ctx: PluginContext,
     ) -> Result<SurfaceContent, SurfaceError>;
 
     /// Surface 会话打开时的可选钩子。
@@ -108,7 +111,8 @@ pub struct SurfaceError {
 /// 可选的生命周期钩子；未提供时视为 Resident（静态在进程内）。
 #[async_trait]
 pub trait PluginLifecycle: Send + Sync {
-    async fn activate(&self) -> Result<(), PluginRuntimeError>;
+    /// 激活插件；`ctx` 携带该插件命名空间在激活时刻的设置快照。
+    async fn activate(&self, ctx: PluginContext) -> Result<(), PluginRuntimeError>;
     async fn deactivate(&self) -> Result<(), PluginRuntimeError>;
     fn idle_timeout(&self) -> Option<Duration> {
         None
