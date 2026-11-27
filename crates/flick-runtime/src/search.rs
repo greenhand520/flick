@@ -158,9 +158,10 @@ pub(crate) fn select_input(
                 InputType::MathExpression if context.has_facet(InputFacetKind::MathExpression) => {
                     matched.push(InputFacetKind::MathExpression)
                 }
-                InputType::File | InputType::Files if file_count > 0 => {
-                    matched.push(InputFacetKind::File)
-                }
+                // `File` 只接受单个文件/文件夹；`Files` 接受一个或多个。
+                // 只声明 `File` 的动作不接受多文件，避免隐式截断（设计文档 §2.3）。
+                InputType::File if file_count == 1 => matched.push(InputFacetKind::File),
+                InputType::Files if file_count >= 1 => matched.push(InputFacetKind::File),
                 InputType::ClipboardImage if context.has_facet(InputFacetKind::ClipboardImage) => {
                     matched.push(InputFacetKind::ClipboardImage)
                 }
@@ -742,5 +743,49 @@ mod tests {
 
         assert!(select_input(&descriptor, &rs_context).is_some());
         assert!(select_input(&descriptor, &txt_context).is_none());
+    }
+
+    /// `InputType::File` 只接受单个文件；多文件必须声明 `Files`；
+    /// 同时声明两者时多文件放行。
+    #[test]
+    fn file_requires_single_file_but_files_accepts_many() {
+        fn file_input(name: &str) -> FileInput {
+            FileInput {
+                uri: format!("file:///tmp/{name}"),
+                display_name: name.into(),
+                extension: name.rsplit_once('.').map(|(_, ext)| ext.to_string()),
+                is_dir: false,
+                mime: None,
+            }
+        }
+        fn ctx(files: Vec<FileInput>) -> InputContext {
+            InputContext::from_snapshot(
+                QueryGeneration::INITIAL,
+                &SearchInputSnapshot::files(files, InputSource::DragDrop),
+            )
+        }
+
+        let one = ctx(vec![file_input("a.txt")]);
+        let many = ctx(vec![file_input("a.txt"), file_input("b.txt")]);
+
+        let mut only_file = descriptor("Open", &["open"]);
+        only_file.supported_inputs = vec![InputType::File];
+        assert!(select_input(&only_file, &one).is_some(), "单文件应匹配 File");
+        assert!(
+            select_input(&only_file, &many).is_none(),
+            "只声明 File 的动作不接受多文件"
+        );
+
+        let mut only_files = descriptor("Open", &["open"]);
+        only_files.supported_inputs = vec![InputType::Files];
+        assert!(select_input(&only_files, &one).is_some());
+        assert!(select_input(&only_files, &many).is_some());
+
+        let mut both = descriptor("Open", &["open"]);
+        both.supported_inputs = vec![InputType::File, InputType::Files];
+        assert!(
+            select_input(&both, &many).is_some(),
+            "同时声明 File 与 Files 时多文件放行"
+        );
     }
 }

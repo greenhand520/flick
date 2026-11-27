@@ -22,6 +22,64 @@ pub const MAX_EXECUTION_ITEMS_PER_ACTION: usize = 20;
 /// 由宿主固定，插件不能通过 manifest 或 descriptor 延长（设计文档 §9 约束 9）。
 pub const SEARCH_INVOKE_TIMEOUT_MS: u64 = 150;
 
+/// 把 `file://` URI 转为本地路径；非该前缀或含非法字符时返回 `None`。
+///
+/// 只做最小编码处理：去掉 `file://`、`file://localhost` 前缀，并做一次
+/// 常见百分号解码（`%20` 等），不引入 URL 解析依赖。
+fn uri_to_path(uri: &str) -> Option<std::path::PathBuf> {
+    let rest = uri
+        .strip_prefix("file://localhost")
+        .or_else(|| uri.strip_prefix("file://"))?;
+    let decoded = percent_decode(rest);
+    (!decoded.is_empty()).then(|| std::path::PathBuf::from(decoded))
+}
+
+/// 极简百分号解码，仅覆盖路径中常见的转义；非法序列按原样保留。
+fn percent_decode(input: &str) -> String {
+    let bytes = input.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            let hex = std::str::from_utf8(&bytes[i + 1..i + 3]).ok();
+            if let Some(value) = hex.and_then(|h| u8::from_str_radix(h, 16).ok()) {
+                out.push(value);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// 调用入口的显式输入归一化：`PathCandidate` 若指向真实存在的文件/文件夹，
+/// 升级为 `InputType::File` 并回填 `FileInput.is_dir`（设计文档「搜索匹配算法」§2.3）。
+///
+/// 只在真正的调用入口执行一次 `stat`；搜索阶段（`ActionSource::SearchRoute`）
+/// 跳过，保持「匹配阶段无 I/O」。
+fn normalize_path_input(input: &mut ActionInput) {
+    if input.kind != InputType::PathCandidate {
+        return;
+    }
+    let raw = input
+        .files
+        .first()
+        .map(|file| file.uri.clone())
+        .unwrap_or_else(|| input.text.clone());
+    let Some(path) = uri_to_path(&raw) else {
+        return;
+    };
+    let Ok(metadata) = std::fs::metadata(&path) else {
+        return;
+    };
+    input.kind = InputType::File;
+    if let Some(file) = input.files.first_mut() {
+        file.is_dir = metadata.is_dir();
+    }
+}
+
 /// 活动调用映射中的条目。
 ///
 /// 仅存储 [`CancellationToken`]，以便外部调用方
@@ -406,6 +464,11 @@ impl InvocationCore {
         let invocation_id = request.invocation_id;
         let deadline = request.deadline.timeout;
 
+        // 调用入口做一次显式输入归一化（搜索阶段不做 I/O）。
+        if request.source != flick_domain::ActionSource::SearchRoute {
+            normalize_path_input(&mut request.input);
+        }
+
         // ── 1. 查找处理器（仅短暂持有读锁） ────────
         let (handler, accepts_no_input): (Arc<dyn ActionHandler>, bool) = {
             let reg = self.registry.read().await;
@@ -722,6 +785,171 @@ mod active_guard_tests {
         assert!(
             runtime.active.lock().await.is_empty(),
             "dropped invoke must not leak its active entry"
+        );
+    }
+}
+
+#[cfg(test)]
+mod path_input_tests {
+    //! 校验调用入口的 `PathCandidate -> File` 归一化。
+
+    use super::*;
+    use flick_domain::*;
+    use flick_plugin::ActionSpec;
+    use std::sync::Mutex;
+
+    /// 记录最后一次调用收到的输入类型。
+    #[derive(Clone, Default)]
+    struct Seen(Arc<Mutex<Option<InputType>>>);
+
+    struct CapturingHandler {
+        seen: Seen,
+    }
+
+    #[async_trait::async_trait]
+    impl ActionHandler for CapturingHandler {
+        async fn invoke(
+            &self,
+            request: ActionRequest,
+            _ctx: ActionContext,
+        ) -> Result<ActionOutcome, ActionError> {
+            *self.seen.0.lock().unwrap() = Some(request.input.kind);
+            Ok(ActionOutcome::Text("ok".into()))
+        }
+    }
+
+    struct CapturePlugin {
+        seen: Seen,
+    }
+
+    impl Plugin for CapturePlugin {
+        fn manifest(&self) -> PluginManifest {
+            PluginManifest {
+                id: "flick.test.path".into(),
+                name: "Path".into(),
+                author: "Flick".into(),
+                version: "1.0.0".into(),
+                kind: PluginKind::BuiltInRust,
+                keywords: vec![],
+                icon: None,
+                profile: PluginProfile::default(),
+                permissions: vec![],
+                plugin_dependencies: vec![],
+                settings: vec![],
+                surfaces: vec![],
+                supported_os: vec![],
+                supported_architectures: vec![],
+                needs_search: false,
+            }
+        }
+
+        fn actions(&self) -> Vec<ActionSpec> {
+            let mut descriptor = ActionDescriptor::new(
+                ActionId::from_static("flick.test.path.v1.open"),
+                "打开路径",
+                vec![],
+                ConcurrencyPolicy::Parallel,
+            );
+            descriptor.supported_inputs = vec![
+                InputType::PathCandidate,
+                InputType::File,
+                InputType::Files,
+            ];
+            vec![ActionSpec {
+                descriptor,
+                handler: Arc::new(CapturingHandler {
+                    seen: self.seen.clone(),
+                }),
+            }]
+        }
+    }
+
+    fn path_request(uri: Option<String>) -> ActionRequest {
+        ActionRequest {
+            invocation_id: InvocationId::new(),
+            action_id: ActionId::from_static("flick.test.path.v1.open"),
+            input: ActionInput {
+                kind: InputType::PathCandidate,
+                text: uri.clone().unwrap_or_default(),
+                image: None,
+                files: uri
+                    .map(|uri| {
+                        vec![FileInput {
+                            uri,
+                            display_name: "x".into(),
+                            extension: None,
+                            is_dir: false,
+                            mime: None,
+                        }]
+                    })
+                    .unwrap_or_default(),
+            },
+            caller: Caller::ui("test"),
+            source: ActionSource::Ui,
+            deadline: Deadline::from_secs(5),
+        }
+    }
+
+    #[test]
+    fn uri_to_path_strips_prefix_and_decodes() {
+        assert_eq!(
+            uri_to_path("file:///tmp/a%20b.txt"),
+            Some(std::path::PathBuf::from("/tmp/a b.txt"))
+        );
+        assert_eq!(
+            uri_to_path("file://localhost/tmp/x"),
+            Some(std::path::PathBuf::from("/tmp/x"))
+        );
+        assert_eq!(uri_to_path("/tmp/plain"), None);
+        assert_eq!(uri_to_path("file://"), None);
+    }
+
+    #[tokio::test]
+    async fn existing_path_is_upgraded_to_file() {
+        let seen = Seen::default();
+        let runtime = ActionRuntime::new();
+        runtime
+            .register_plugin(&CapturePlugin { seen: seen.clone() })
+            .await
+            .unwrap();
+
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("flick_norm_{unique}.txt"));
+        std::fs::write(&path, b"x").unwrap();
+
+        let uri = format!("file://{}", path.display());
+        let _ = runtime.invoke(path_request(Some(uri))).await;
+
+        assert_eq!(
+            *seen.0.lock().unwrap(),
+            Some(InputType::File),
+            "存在的路径应升级为 InputType::File"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[tokio::test]
+    async fn missing_path_stays_path_candidate() {
+        let seen = Seen::default();
+        let runtime = ActionRuntime::new();
+        runtime
+            .register_plugin(&CapturePlugin { seen: seen.clone() })
+            .await
+            .unwrap();
+
+        let _ = runtime
+            .invoke(path_request(Some(
+                "file:///tmp/flick-definitely-missing-file".into(),
+            )))
+            .await;
+
+        assert_eq!(
+            *seen.0.lock().unwrap(),
+            Some(InputType::PathCandidate),
+            "不存在的路径保持 PathCandidate"
         );
     }
 }
