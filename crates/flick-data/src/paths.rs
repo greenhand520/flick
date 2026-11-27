@@ -105,6 +105,24 @@ impl DataDirectories {
     }
 }
 
+/// 把目录解析能力暴露给插件上下文。
+///
+/// 这里直接复用 [`DataDirectories`] 的校验与创建逻辑；错误被降级为 `None`
+/// （与 `SettingSecretReader::secret` 一致），日志由调用方按需补充。
+impl flick_domain::PluginPaths for DataDirectories {
+    fn data_dir(&self, plugin_id: &str) -> Option<PathBuf> {
+        self.plugin_dir(plugin_id).ok()
+    }
+
+    fn cache_dir(&self, plugin_id: &str) -> Option<PathBuf> {
+        self.plugin_cache_dir(plugin_id).ok()
+    }
+
+    fn tmp_dir(&self, plugin_id: &str) -> Option<PathBuf> {
+        self.plugin_tmp_dir(plugin_id).ok()
+    }
+}
+
 /// 校验插件 id：复用 domain 的字符集规则，并额外拒绝路径分隔符。
 fn validate_plugin_id(plugin_id: &str) -> Result<&str, DataError> {
     if flick_domain::settings::is_valid_plugin_id(plugin_id)

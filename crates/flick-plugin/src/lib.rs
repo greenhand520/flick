@@ -21,6 +21,7 @@ pub use flick_domain::{
     PluginContext, ActionDescriptor, ActionError, ActionId, ActionOutcome, ActionRequest,
     ActionVisibility, Architecture, Category, DependencyRequirement, ExecutionEventKind,
     ExecutionMode, InputType, OperatingSystem, PluginDependency, PluginKind, PluginManifest,
-    SettingDecl, SettingKind, SurfaceContent, SurfaceEventKind, SurfaceSessionId, SurfaceKind,
+    PluginPaths, SettingDecl, SettingKind, SurfaceContent, SurfaceEventKind, SurfaceSessionId,
+    SurfaceKind,
     SurfacePlacement, UiSurfaceDecl,
 };

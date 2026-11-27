@@ -4,8 +4,8 @@ use crate::registry::ActionRegistry;
 use flick_domain::settings::{ConfigSnapshot, SettingSecretReader};
 use flick_domain::{
     ActionDescriptor, ActionError, ActionId, ActionInput, ActionOutcome, ActionRequest,
-    DependencyStatus, InputContext, InputType, InvocationId, PluginContext, QueryGeneration,
-    RouteItem, SurfaceContent, SurfaceEventKind, SurfaceSessionId,
+    DependencyStatus, InputContext, InputType, InvocationId, PluginContext, PluginPaths,
+    QueryGeneration, RouteItem, SurfaceContent, SurfaceEventKind, SurfaceSessionId,
 };
 use flick_plugin::{
     ActionHandler, Plugin, PluginRegistrationError, SettingsProvider, SurfaceError, SurfaceSession,
@@ -147,6 +147,8 @@ pub struct ActionRuntime {
     settings: Arc<std::sync::RwLock<Option<Arc<dyn SettingsProvider>>>>,
     /// secret 读取器；`None` 时 `ctx.secret()` 恒为 `None`。
     secrets: Arc<std::sync::RwLock<Option<Arc<dyn SettingSecretReader>>>>,
+    /// 插件目录提供者；`None` 时 `ctx.data_dir()` 等恒为 `None`。
+    paths: Arc<std::sync::RwLock<Option<Arc<dyn PluginPaths>>>>,
 }
 
 /// 一次动作调用所需的最小运行时上下文。
@@ -167,6 +169,8 @@ struct InvocationCore {
     settings: Arc<std::sync::RwLock<Option<Arc<dyn SettingsProvider>>>>,
     /// secret 读取器（与运行时共享）。
     secrets: Arc<std::sync::RwLock<Option<Arc<dyn SettingSecretReader>>>>,
+    /// 插件目录提供者（与运行时共享）。
+    paths: Arc<std::sync::RwLock<Option<Arc<dyn PluginPaths>>>>,
 }
 
 impl ActionRuntime {
@@ -180,6 +184,7 @@ impl ActionRuntime {
             search_cancel: std::sync::Mutex::new(None),
             settings: Arc::new(std::sync::RwLock::new(None)),
             secrets: Arc::new(std::sync::RwLock::new(None)),
+            paths: Arc::new(std::sync::RwLock::new(None)),
         }
     }
 
@@ -192,6 +197,7 @@ impl ActionRuntime {
             surface_sessions: Arc::clone(&self.surface_sessions),
             settings: Arc::clone(&self.settings),
             secrets: Arc::clone(&self.secrets),
+            paths: Arc::clone(&self.paths),
         }
     }
 
@@ -216,6 +222,11 @@ impl ActionRuntime {
         *self.secrets.write().unwrap() = Some(reader);
     }
 
+    /// 注入插件目录提供者（由 `flick-data` 的 `DataDirectories` 实现）。
+    pub fn set_plugin_paths(&self, provider: Arc<dyn PluginPaths>) {
+        *self.paths.write().unwrap() = Some(provider);
+    }
+
     /// 解析某插件当前的设置快照；无 provider 或无插件 id 时返回空快照。
     fn snapshot_for(&self, plugin_id: Option<&str>) -> ConfigSnapshot {
         let Some(plugin_id) = plugin_id else {
@@ -228,13 +239,18 @@ impl ActionRuntime {
     }
 
     /// 构造一个带设置快照的插件上下文。
-    fn context_with(&self, cancellation: CancellationToken, plugin_id: Option<&str>) -> PluginContext {
+    fn context_with(
+        &self,
+        cancellation: CancellationToken,
+        plugin_id: Option<&str>,
+    ) -> PluginContext {
         let settings = self.snapshot_for(plugin_id);
         PluginContext::new(cancellation)
             .with_host_info(self.host_info.read().unwrap().clone())
             .with_settings(settings)
             .with_plugin_id(plugin_id.map(str::to_string))
             .with_secrets(self.secrets.read().unwrap().clone())
+            .with_paths(self.paths.read().unwrap().clone())
     }
 
     /// 订阅某插件的设置变更。
@@ -598,7 +614,8 @@ impl InvocationCore {
             .with_host_info(self.host_info.read().unwrap().clone())
             .with_settings(settings)
             .with_plugin_id(plugin_id)
-            .with_secrets(self.secrets.read().unwrap().clone());
+            .with_secrets(self.secrets.read().unwrap().clone())
+            .with_paths(self.paths.read().unwrap().clone());
 
         // 存入活动映射，以便 `cancel()` 能找到它。
         // 用守卫托管清理：即使本 future 中途被丢弃，也会移除条目。

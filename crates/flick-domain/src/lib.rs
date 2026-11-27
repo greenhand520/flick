@@ -12,6 +12,7 @@ pub mod execution;
 pub mod host;
 pub mod id;
 pub mod input;
+pub mod paths;
 pub mod plugin;
 pub mod route;
 pub mod surface;
@@ -38,6 +39,7 @@ pub use input::{
     InputContext, InputFacet, InputFacetKind, InputSource, PathLikeKind, SearchInputSnapshot,
     SearchQuery, UiInputKind,
 };
+pub use paths::PluginPaths;
 pub use plugin::*;
 pub use route::{MatchField, RouteItem, RouteItemKey, RouteItemKind};
 pub use settings::{

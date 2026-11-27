@@ -1,6 +1,7 @@
 //! 路径解析与目录安全测试。
 
 use flick_data::{DataDirectories, DataError};
+use flick_domain::PluginPaths;
 
 #[test]
 fn discover_yields_four_non_empty_roots() {
@@ -32,6 +33,32 @@ fn plugin_dirs_are_created_with_0700() {
     }
     assert!(dirs.plugin_cache_dir("flick.builtin.apps").unwrap().is_dir());
     assert!(dirs.plugin_tmp_dir("flick.builtin.apps").unwrap().is_dir());
+}
+
+#[test]
+fn plugin_paths_trait_exposes_all_three_roots() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let root = temp.path();
+    let dirs = DataDirectories::with_roots(
+        root.join("config"),
+        root.join("data"),
+        root.join("cache"),
+        root.join("runtime"),
+    );
+    let provider: &dyn PluginPaths = &dirs;
+    assert_eq!(
+        provider.data_dir("flick.demo"),
+        Some(root.join("data").join("plugins").join("flick.demo"))
+    );
+    assert_eq!(
+        provider.cache_dir("flick.demo"),
+        Some(root.join("cache").join("plugins").join("flick.demo"))
+    );
+    assert_eq!(
+        provider.tmp_dir("flick.demo"),
+        Some(root.join("runtime").join("plugins").join("flick.demo"))
+    );
+    assert_eq!(provider.data_dir("bad/id"), None);
 }
 
 #[test]

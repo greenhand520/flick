@@ -873,6 +873,9 @@ pub async fn init_settings_at(
     dirs: flick_data::DataDirectories,
     keys: flick_data::SharedKeySource,
 ) -> Option<Arc<SettingsService>> {
+    // 路径能力与设置存储解耦：即使 core.sqlite3 打开失败，插件仍可拿到自己的目录。
+    runtime.set_plugin_paths(Arc::new(dirs.clone()) as Arc<dyn PluginPaths>);
+
     let storage = match StorageManager::open(dirs, keys) {
         Ok(storage) => Arc::new(storage),
         Err(error) => {
