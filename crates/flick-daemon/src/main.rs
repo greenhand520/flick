@@ -317,7 +317,8 @@ fn run_graphical(socket_path: PathBuf) -> Result<(), String> {
     });
 
     tracing::info!("Launching GPUI on main thread");
-    flick_shell_gpui::run(ui_cmd_tx, host_event_rx);
+    let initial_theme = bootstrap::load_initial_theme();
+    flick_shell_gpui::run_with_theme(ui_cmd_tx, host_event_rx, initial_theme);
     lifecycle.request_shutdown(ShutdownReason::ShellExited);
     let background_thread_panicked = bg_thread.join().is_err();
     if background_thread_panicked || background_panicked.load(Ordering::Acquire) {

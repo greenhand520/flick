@@ -712,6 +712,107 @@ pub async fn init_settings_at(
     Some(service)
 }
 
+/// 读取初始主题。
+///
+/// 顺序：设置系统 `core.theme.mode` > 旧 `shell-gpui.toml` 迁移 > shell 自带探测。
+pub fn load_initial_theme() -> flick_shell_gpui::ThemeMode {
+    let dirs = match flick_data::DataDirectories::discover() {
+        Ok(dirs) => dirs,
+        Err(_) => return flick_shell_gpui::detect_initial_theme(),
+    };
+    let keys: flick_data::SharedKeySource = if std::env::var_os("FLICK_MASTER_KEY").is_some() {
+        Arc::new(flick_data::EnvMasterKeySource)
+    } else {
+        Arc::new(flick_data::UnavailableMasterKeySource)
+    };
+    initial_theme_at(dirs, keys)
+}
+
+/// 在指定目录上读取初始主题（便于测试注入）。
+pub fn initial_theme_at(
+    dirs: flick_data::DataDirectories,
+    keys: flick_data::SharedKeySource,
+) -> flick_shell_gpui::ThemeMode {
+    let storage = match StorageManager::open(dirs.clone(), keys) {
+        Ok(storage) => Arc::new(storage),
+        Err(error) => {
+            tracing::warn!(%error, "读取主题失败：设置存储不可用，回退自动探测");
+            return flick_shell_gpui::detect_initial_theme();
+        }
+    };
+    let service = SettingsService::new(storage);
+    let version = env!("CARGO_PKG_VERSION");
+    if let Err(error) = service.register_schema(core_schema(), version, version) {
+        tracing::warn!(%error, "读取主题失败：core schema 注册失败");
+        return flick_shell_gpui::detect_initial_theme();
+    }
+    migrate_legacy_theme(&service, &dirs);
+    theme_mode(&service).unwrap_or_else(flick_shell_gpui::detect_initial_theme)
+}
+
+/// 从设置系统读取主题模式；未设置或取值非法时返回 `None`。
+pub fn theme_mode(service: &SettingsService) -> Option<flick_shell_gpui::ThemeMode> {
+    let key = flick_domain::SettingKey::new(flick_domain::SettingNamespace::Core, "theme.mode");
+    match service.resolved(&key).ok()? {
+        flick_domain::settings::SettingValue::Enum(mode) if mode == "light" => {
+            Some(flick_shell_gpui::ThemeMode::Light)
+        }
+        flick_domain::settings::SettingValue::Enum(mode) if mode == "dark" => {
+            Some(flick_shell_gpui::ThemeMode::Dark)
+        }
+        _ => None,
+    }
+}
+
+/// 把旧的 `shell-gpui.toml`（仅 `mode` 字段）迁移进设置系统，然后重命名文件。
+///
+/// 只在设置系统里还没有显式值时写入；无论是否写入，迁移完成后都会把文件
+/// 重命名为 `shell-gpui.toml.migrated`，避免下次重复迁移。
+pub fn migrate_legacy_theme(service: &SettingsService, dirs: &flick_data::DataDirectories) {
+    let path = dirs.config_root().join("shell-gpui.toml");
+    if !path.exists() {
+        return;
+    }
+    let key = flick_domain::SettingKey::new(flick_domain::SettingNamespace::Core, "theme.mode");
+    let already_set = matches!(service.get(&key), Ok(Some(_)));
+    if !already_set {
+        if let Some(mode) = std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|text| parse_legacy_theme_mode(&text))
+        {
+            let value = flick_domain::settings::SettingValue::Enum(mode);
+            match service.set(&key, value) {
+                Ok(_) => tracing::info!("已把旧主题配置迁移进设置系统"),
+                Err(error) => tracing::warn!(%error, "迁移旧主题配置失败"),
+            }
+        }
+    }
+    let migrated = path.with_extension("toml.migrated");
+    if let Err(error) = std::fs::rename(&path, &migrated) {
+        tracing::warn!(%error, "重命名旧主题配置文件失败");
+    }
+}
+
+/// 解析旧主题文件里的 `mode = "dark" | "light"`。
+fn parse_legacy_theme_mode(text: &str) -> Option<String> {
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let (key, value) = line.split_once('=')?;
+        if key.trim() != "mode" {
+            continue;
+        }
+        let value = value.trim().trim_matches('"').trim_matches('\'');
+        return match value {
+            "dark" | "light" => Some(value.to_string()),
+            _ => None,
+        };
+    }
+    None
+}
+
 #[cfg(test)]
 mod init_settings_tests {
     use super::*;
@@ -723,6 +824,32 @@ mod init_settings_tests {
             .expect("register builtin plugins");
         runtime.activate_all_plugins().await;
         runtime
+    }
+
+    #[test]
+    fn legacy_theme_is_migrated_and_file_renamed() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        let dirs = flick_data::DataDirectories::with_roots(
+            root.join("config"),
+            root.join("data"),
+            root.join("cache"),
+            root.join("runtime"),
+        );
+        std::fs::create_dir_all(dirs.config_root()).unwrap();
+        let legacy = dirs.config_root().join("shell-gpui.toml");
+        std::fs::write(&legacy, "mode = \"light\"\n").unwrap();
+
+        let keys: flick_data::SharedKeySource = Arc::new(flick_data::FixedMasterKeySource(
+            flick_data::MasterKey {
+                key_id: "test".into(),
+                bytes: [4u8; 32],
+            },
+        ));
+        let theme = initial_theme_at(dirs.clone(), keys);
+        assert_eq!(theme, flick_shell_gpui::ThemeMode::Light);
+        assert!(!legacy.exists(), "旧文件应被重命名");
+        assert!(dirs.config_root().join("shell-gpui.toml.migrated").exists());
     }
 
     #[tokio::test]
