@@ -17,3 +17,4 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 serde = { version = "1.0.229", features = ["derive"] }
 resvg = { version = "0.46", default-features = false }
+ksni = { version = "0.3.8", default-features = false, features = ["tokio"] }

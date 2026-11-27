@@ -9,3 +9,4 @@ pub mod portal_client;
 pub mod portal_identity;
 pub mod session;
 pub mod shortcut_state;
+pub mod tray;
