@@ -31,6 +31,38 @@ struct ActiveEntry {
     cancel_token: CancellationToken,
 }
 
+/// `active` 表的自动清理守卫。
+///
+/// `invoke()` 可能在 `tokio::select!` 中途被丢弃（例如搜索阶段的 `JoinSet`
+/// 被 abort）。此时函数末尾的清理代码不会执行，`InvocationId` 会残留在
+/// `active` 表中泄漏取消令牌。把清理放进 `Drop`，保证无论正常返回还是 future
+/// 被丢弃都能移除条目。
+struct ActiveGuard {
+    /// 与 `InvocationCore::active` 共享的活动调用表。
+    active: Arc<tokio::sync::Mutex<HashMap<InvocationId, ActiveEntry>>>,
+    /// 需要移除的调用标识。
+    invocation_id: InvocationId,
+}
+
+impl Drop for ActiveGuard {
+    fn drop(&mut self) {
+        let active = Arc::clone(&self.active);
+        let invocation_id = self.invocation_id;
+        // 绝大多数情况可以立刻拿到锁。
+        if let Ok(mut map) = active.try_lock() {
+            map.remove(&invocation_id);
+            return;
+        }
+        // 锁被占用：交给后台任务异步移除。没有运行时上下文时只能放弃
+        // （此时进程正在退出或测试已结束，残留无实际影响）。
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            handle.spawn(async move {
+                active.lock().await.remove(&invocation_id);
+            });
+        }
+    }
+}
+
 /// 一个活动 Surface 会话的运行时状态。
 struct SurfaceSessionState {
     session: SurfaceSession,
@@ -412,6 +444,11 @@ impl InvocationCore {
         };
 
         // 存入活动映射，以便 `cancel()` 能找到它。
+        // 用守卫托管清理：即使本 future 中途被丢弃，也会移除条目。
+        let _active_guard = ActiveGuard {
+            active: Arc::clone(&self.active),
+            invocation_id,
+        };
         {
             let mut active = self.active.lock().await;
             active.insert(
@@ -461,10 +498,7 @@ impl InvocationCore {
         };
 
         // ── 4. 清理 ────────────────────────────────────────────
-        {
-            let mut active = self.active.lock().await;
-            active.remove(&invocation_id);
-        }
+        // 由 `_active_guard` 的 `Drop` 负责移除（正常返回与 future 丢弃两条路径统一）。
 
         outcome
     }
@@ -601,4 +635,93 @@ fn execution_route_items(
     // 单个 Action 最多展开 20 条执行项，避免插件返回大列表时撑爆候选面板。
     items.truncate(MAX_EXECUTION_ITEMS_PER_ACTION);
     items
+}
+
+#[cfg(test)]
+mod active_guard_tests {
+    //! 校验 [`ActiveGuard`] 在 future 被丢弃时仍会清理 `active` 表。
+
+    use super::*;
+    use flick_domain::*;
+    use flick_plugin::ActionSpec;
+    use std::time::Duration;
+
+    /// 永不自主完成的处理器，用于模拟「调用尚未结束」。
+    struct HangingHandler;
+
+    #[async_trait::async_trait]
+    impl ActionHandler for HangingHandler {
+        async fn invoke(
+            &self,
+            _request: ActionRequest,
+            _ctx: ActionContext,
+        ) -> Result<ActionOutcome, ActionError> {
+            tokio::time::sleep(Duration::from_secs(30)).await;
+            Ok(ActionOutcome::Text("late".into()))
+        }
+    }
+
+    /// 持有一个挂起 Action 的插件。
+    struct HangingPlugin;
+
+    impl Plugin for HangingPlugin {
+        fn manifest(&self) -> PluginManifest {
+            PluginManifest {
+                id: "flick.test.hang".into(),
+                name: "Hang".into(),
+                author: "Flick".into(),
+                version: "1.0.0".into(),
+                kind: PluginKind::BuiltInRust,
+                keywords: vec![],
+                icon: None,
+                profile: PluginProfile::default(),
+                permissions: vec![],
+                plugin_dependencies: vec![],
+                settings: vec![],
+                surfaces: vec![],
+                supported_os: vec![],
+                supported_architectures: vec![],
+                needs_search: true,
+            }
+        }
+
+        fn actions(&self) -> Vec<ActionSpec> {
+            let mut descriptor = ActionDescriptor::new(
+                ActionId::from_static("flick.test.hang.v1.hang"),
+                "挂起",
+                vec![],
+                ConcurrencyPolicy::Parallel,
+            );
+            descriptor.supported_inputs = vec![InputType::None];
+            vec![ActionSpec {
+                descriptor,
+                handler: Arc::new(HangingHandler),
+            }]
+        }
+    }
+
+    /// future 被丢弃时，`active` 表中的条目必须被移除（不泄漏取消令牌）。
+    #[tokio::test]
+    async fn dropped_invoke_removes_active_entry() {
+        let runtime = ActionRuntime::new();
+        runtime.register_plugin(&HangingPlugin).await.unwrap();
+
+        let request = ActionRequest {
+            invocation_id: InvocationId::new(),
+            action_id: ActionId::from_static("flick.test.hang.v1.hang"),
+            input: ActionInput::none(),
+            caller: Caller::ui("test"),
+            source: ActionSource::Ui,
+            deadline: Deadline::from_secs(30),
+        };
+
+        // 50ms 后放弃等待：模拟上层 select!/JoinSet abort 丢弃 future。
+        let result = tokio::time::timeout(Duration::from_millis(50), runtime.invoke(request)).await;
+        assert!(result.is_err(), "invoke should still be running when dropped");
+
+        assert!(
+            runtime.active.lock().await.is_empty(),
+            "dropped invoke must not leak its active entry"
+        );
+    }
 }
