@@ -6,16 +6,16 @@
 //! （得到 1440×900，实际应为 1728×1080）。因此不能直接拿 `Display::bounds()` 当
 //! 窗口尺寸，改为向合成器（GNOME/Mutter 的 `DisplayConfig`）查询真实逻辑布局。
 //!
-//! 多显示器策略：
-//! - 用 XWayland 的指针坐标（`xdotool getmouselocation`）确定「鼠标所在屏」，
-//!   借助 `xrandr --listmonitors` 把坐标映射到连接器名（`eDP-2`、`HDMI-1` ……）；
-//! - 再用连接器名到 Mutter 的逻辑显示器列表里取该屏的逻辑原点与缩放比例，
-//!   结合当前模式的物理宽高换算出逻辑宽高；
+//! 多显示器策略（全部进程内完成，不 fork 任何外部命令）：
+//! - 用 `x11rb` 的 `QueryPointer` 读 XWayland 根窗口指针坐标，再用 `x11rb` 的
+//!   RandR `GetMonitors` 把坐标映射到连接器名（`eDP-2`、`HDMI-1` ……）；
+//! - 用 `zbus` 调 Mutter 的 `DisplayConfig.GetCurrentState`，按连接器取该屏的
+//!   逻辑原点与缩放比例，结合当前模式的物理宽高换算出逻辑宽高；
 //! - 混合 DPI、负坐标、旋转（90°/270° 交换宽高）都在逻辑显示器这一层统一处理。
 //!
-//! 任一环节失败都返回 `None`，由调用方回退到「最大化」建窗方案。
+//! 指针仍要借 XWayland：Wayland 协议本身不提供全局指针查询。任一环节失败都
+//! 返回 `None`，由调用方回退到「最大化」建窗方案。
 
-use std::process::Command;
 
 /// 一块显示器在逻辑坐标系中的矩形（单位：逻辑像素）。
 #[derive(Debug, Clone, PartialEq)]
@@ -117,147 +117,124 @@ fn x11_monitors() -> Vec<MonitorRect> {
 
 /// 查询 Mutter 的逻辑显示器列表（逻辑像素）；不可用时返回空列表。
 ///
-/// 通过 `gdbus` 读取 `org.gnome.Mutter.DisplayConfig.GetCurrentState`。这里刻意
-/// 用文本输出而不是 zbus 结构化反序列化：该方法的签名里嵌了多层匿名结构，逐层
-/// 定义 Rust 类型既啰嗦又容易随版本漂移，而 gdbus 的文本输出格式稳定且便于单测。
+/// 走 zbus 直接调用 `org.gnome.Mutter.DisplayConfig.GetCurrentState`，不 fork
+/// `gdbus`。返回值的签名是
+/// `(u32, a((ssss)a(siiddada{sv})a{sv}), a(iiduba(ssss)a{sv}), a{sv})`，
+/// 下面按字段顺序定义对应结构体。
 fn mutter_monitors() -> Vec<MonitorRect> {
-    let output = match Command::new("gdbus")
-        .args([
-            "call",
-            "--session",
-            "--dest",
-            "org.gnome.Mutter.DisplayConfig",
-            "--object-path",
-            "/org/gnome/Mutter/DisplayConfig",
-            "--method",
-            "org.gnome.Mutter.DisplayConfig.GetCurrentState",
-        ])
-        .output()
-    {
-        Ok(output) => output,
-        Err(_) => return Vec::new(),
-    };
-    if !output.status.success() {
+    let Ok(connection) = zbus::blocking::Connection::session() else {
         return Vec::new();
-    }
-    parse_mutter_state(&String::from_utf8_lossy(&output.stdout))
+    };
+    let Ok(reply) = connection.call_method(
+        Some("org.gnome.Mutter.DisplayConfig"),
+        "/org/gnome/Mutter/DisplayConfig",
+        Some("org.gnome.Mutter.DisplayConfig"),
+        "GetCurrentState",
+        &(),
+    ) else {
+        return Vec::new();
+    };
+    let body = reply.body();
+    let Ok(state) = body.deserialize::<MutterState>() else {
+        return Vec::new();
+    };
+    state_to_monitors(&state)
 }
 
-/// 解析 `GetCurrentState` 的文本输出，得到每块屏的逻辑矩形。
-///
-/// 输入形如：
-/// ```text
-/// (uint32 2, [(('eDP-2', 'SDC', ...), [('2880x1800@120.001', 2880, 1800, ...
-///   {'is-current': <true>, ...}), ...], {'is-builtin': <true>, ...}), ...],
-///  [(0, 0, 1.6666666269302368, uint32 0, true, [('eDP-2', ...)], @a{sv} {}),
-///   (1728, 0, 1.0, 0, false, [('HDMI-1', ...)], {})], {'layout-mode': <uint32 1>})
-/// ```
-/// 逻辑显示器段给出原点与缩放，物理宽高取自该屏「当前模式」（`is-current: true`）。
-fn parse_mutter_state(text: &str) -> Vec<MonitorRect> {
-    // 先按显示器块切分：每个块以 `(('连接器名'` 开始（逻辑显示器段里的连接器是单层括号）。
-    let mut blocks: Vec<(usize, &str)> = Vec::new();
-    let mut cursor = 0;
-    while let Some(offset) = text[cursor..].find("(('") {
-        let start = cursor + offset;
-        blocks.push((start, &text[start..]));
-        cursor = start + 3;
-    }
+/// `GetCurrentState` 的返回结构。
+/// 该结构体字段逐一对应 DBus 返回元组，部分字段只用于对齐签名。
+#[allow(dead_code)]
+#[derive(serde::Deserialize, zbus::zvariant::Type)]
+struct MutterState(
+    u32,
+    Vec<MutterMonitorSpec>,
+    Vec<MutterLogicalMonitor>,
+    std::collections::HashMap<String, zbus::zvariant::OwnedValue>,
+);
 
-    // 「连接器 → 当前模式物理宽高」。
-    let mut sizes: Vec<(String, f64, f64)> = Vec::new();
-    for (index, (start, _block)) in blocks.iter().enumerate() {
-        let end = blocks.get(index + 1).map(|(next, _)| *next).unwrap_or(text.len());
-        let block = &text[*start..end];
-        let _ = block;
-        let Some(connector) = block.split('\'').nth(1) else {
-            continue;
-        };
-        // 该块内 `is-current: <true>` 之前最近的模式元组就是当前模式。
-        let Some(current_at) = block.find("'is-current': <true>") else {
-            continue;
-        };
-        let prefix = &block[..current_at];
-        let Some(mode_at) = prefix.rfind("('") else {
-            continue;
-        };
-        let mut parts = prefix[mode_at..].split('\'');
-        let _ = parts.next(); // "("
-        let _ = parts.next(); // 模式 id
-        let Some(rest) = parts.next() else {
-            continue;
-        };
-        let numbers: Vec<&str> = rest.trim_start_matches(',').split(',').collect();
-        let (Some(width), Some(height)) = (
-            numbers.first().and_then(|v| v.trim().parse::<f64>().ok()),
-            numbers.get(1).and_then(|v| v.trim().parse::<f64>().ok()),
-        ) else {
-            continue;
-        };
-        sizes.push((connector.to_string(), width, height));
-    }
+/// 单块显示器的规格：身份四元组、支持的模式列表、属性。
+/// 该结构体字段逐一对应 DBus 返回元组，部分字段只用于对齐签名。
+#[allow(dead_code)]
+#[derive(serde::Deserialize, zbus::zvariant::Type)]
+struct MutterMonitorSpec(
+    (String, String, String, String),
+    Vec<MutterMode>,
+    std::collections::HashMap<String, zbus::zvariant::OwnedValue>,
+);
 
-    // 再解析逻辑显示器段。
+/// 单个显示模式：id、物理宽高、刷新率、首选缩放、支持的缩放列表、属性。
+/// 该结构体字段逐一对应 DBus 返回元组，部分字段只用于对齐签名。
+#[allow(dead_code)]
+#[derive(serde::Deserialize, zbus::zvariant::Type)]
+struct MutterMode(
+    String,
+    i32,
+    i32,
+    f64,
+    f64,
+    Vec<f64>,
+    std::collections::HashMap<String, zbus::zvariant::OwnedValue>,
+);
+
+/// 逻辑显示器：原点、缩放、旋转、是否主屏、所辖显示器身份、属性。
+/// 该结构体字段逐一对应 DBus 返回元组，部分字段只用于对齐签名。
+#[allow(dead_code)]
+#[derive(serde::Deserialize, zbus::zvariant::Type)]
+struct MutterLogicalMonitor(
+    i32,
+    i32,
+    f64,
+    u32,
+    bool,
+    Vec<(String, String, String, String)>,
+    std::collections::HashMap<String, zbus::zvariant::OwnedValue>,
+);
+
+/// 把结构化结果换算成逻辑矩形（物理宽高 / 缩放，旋转 90°/270° 时交换）。
+fn state_to_monitors(state: &MutterState) -> Vec<MonitorRect> {
+    let sizes: Vec<(String, f64, f64)> = state
+        .1
+        .iter()
+        .filter_map(|spec| {
+            let connector = spec.0 .0.clone();
+            let mode = spec
+                .1
+                .iter()
+                .find(|mode| is_current(&mode.6))
+                .or_else(|| spec.1.first())?;
+            Some((connector, f64::from(mode.1), f64::from(mode.2)))
+        })
+        .collect();
+
     let mut monitors = Vec::new();
-    let Some(logical_start) = text.find("})], [(") else {
-        return monitors;
-    };
-    let logical_text = &text[logical_start + 6..];
-    let mut depth = 0i32;
-    let mut entry_start: Option<usize> = None;
-    let bytes = logical_text.as_bytes();
-    for (index, byte) in bytes.iter().enumerate() {
-        match byte {
-            b'(' => {
-                if depth == 0 {
-                    entry_start = Some(index);
-                }
-                depth += 1;
-            }
-            b')' => {
-                depth -= 1;
-                if depth == 0 {
-                    if let Some(start) = entry_start.take() {
-                        if let Some(monitor) = parse_logical_entry(&logical_text[start..=index], &sizes) {
-                            monitors.push(monitor);
-                        }
-                    }
-                }
-            }
-            _ => {}
+    for logical in &state.2 {
+        let Some(connector) = logical.5.first().map(|identity| identity.0.clone()) else {
+            continue;
+        };
+        let Some((_, width, height)) = sizes.iter().find(|(name, _, _)| *name == connector) else {
+            continue;
+        };
+        if logical.2 <= 0.0 {
+            continue;
         }
+        let (width, height) = logical_size(*width, *height, logical.2, logical.3);
+        monitors.push(MonitorRect {
+            name: connector,
+            x: f64::from(logical.0),
+            y: f64::from(logical.1),
+            width,
+            height,
+        });
     }
     monitors
 }
 
-/// 解析单个逻辑显示器元组 `(x, y, scale, transform, primary, [('连接器', ...)], props)`。
-fn parse_logical_entry(entry: &str, sizes: &[(String, f64, f64)]) -> Option<MonitorRect> {
-    let connector_at = entry.find("[('")?;
-    let head = &entry[1..connector_at];
-    let connector = entry[connector_at + 3..].split('\'').next()?.to_string();
-    let tokens: Vec<&str> = head.split(',').collect();
-    if tokens.len() < 4 {
-        return None;
-    }
-    let x: f64 = tokens[0].trim().parse().ok()?;
-    let y: f64 = tokens[1].trim().parse().ok()?;
-    let scale: f64 = tokens[2].trim().parse().ok()?;
-    let transform: u32 = tokens[3]
-        .trim()
-        .trim_start_matches("uint32 ")
-        .parse()
-        .ok()?;
-    let (_, width, height) = sizes.iter().find(|(name, _, _)| *name == connector)?;
-    if scale <= 0.0 {
-        return None;
-    }
-    let (width, height) = logical_size(*width, *height, scale, transform);
-    Some(MonitorRect {
-        name: connector,
-        x,
-        y,
-        width,
-        height,
-    })
+/// 属性字典里是否有 `is-current: true`（标记该屏当前使用的模式）。
+fn is_current(properties: &std::collections::HashMap<String, zbus::zvariant::OwnedValue>) -> bool {
+    properties
+        .get("is-current")
+        .and_then(|value| bool::try_from(value).ok())
+        .unwrap_or(false)
 }
 
 /// 由物理宽高、缩放比例与旋转（1..=8）算出逻辑宽高。
@@ -297,20 +274,6 @@ mod tests {
         assert_eq!(pick_monitor(&monitors, -10.0, 100.0).unwrap().name, "left");
         assert_eq!(pick_monitor(&monitors, 2559.0, 1439.0).unwrap().name, "main");
         assert!(pick_monitor(&monitors, 2560.0, 0.0).is_none());
-    }
-
-    #[test]
-    fn parses_mutter_state_with_mixed_scales() {
-        let text = "(uint32 2, [(('eDP-2', 'SDC', '0x4190', '0x0'), [('2880x1800@120.001', 2880, 1800, 120.0, 1.6666666, [1.0, 1.5], {'is-current': <true>, 'is-preferred': <true>}), ('1440x900@60.0', 1440, 900, 60.0, 1.0, [1.0], {})], {'is-builtin': <true>}), (('HDMI-1', 'XMI', 'Redmi', '308'), [('3840x2160@60.0', 3840, 2160, 60.0, 2.0, [1.0, 2.0], {'is-current': <true>})], {'is-builtin': <false>})], [(0, 0, 1.6666666269302368, uint32 0, true, [('eDP-2', 'SDC', '0x4190', '0x0')], @a{sv} {}), (1728, 0, 2.0, 0, false, [('HDMI-1', 'XMI', 'Redmi', '308')], {})], {'layout-mode': <uint32 1>})";
-        let monitors = parse_mutter_state(text);
-        assert_eq!(monitors.len(), 2);
-        assert_eq!(monitors[0].name, "eDP-2");
-        assert!((monitors[0].width - 1728.0).abs() < 0.001);
-        assert!((monitors[0].height - 1080.0).abs() < 0.001);
-        assert_eq!(monitors[1].name, "HDMI-1");
-        assert!((monitors[1].x - 1728.0).abs() < 0.001);
-        assert!((monitors[1].width - 1920.0).abs() < 0.001);
-        assert!((monitors[1].height - 1080.0).abs() < 0.001);
     }
 
     #[test]
