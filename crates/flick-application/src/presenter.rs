@@ -220,6 +220,7 @@ impl PanelState {
     }
 
     fn on_show(&mut self, activation_token: Option<String>, now: Instant) -> Vec<PanelAction> {
+        let was_visible = self.visible;
         if self
             .hidden_at
             .is_some_and(|hidden| now.saturating_duration_since(hidden) > PANEL_RESUME_WINDOW)
@@ -233,6 +234,11 @@ impl PanelState {
         // 面板显示即开启一次新会话；隐藏期间的旧累积不会带进来。
         self.session
             .begin(self.input.kind, self.input.source == InputSource::Manual);
+        // 面板重新显示（含 resume 窗口内的快速重开）视为新会话：
+        // 推进代次，使隐藏前同代次在途的批次一律变陈旧，避免孤儿执行项混入。
+        if !was_visible {
+            self.generation = self.generation.next();
+        }
         self.activation_token = activation_token;
         self.activation_token_applied = false;
         vec![]
@@ -451,13 +457,13 @@ impl PanelState {
         generation: QueryGeneration,
         items: Vec<RouteItem>,
     ) -> Vec<PanelAction> {
-        // 会话已结束（面板隐藏 / Escape）时丢弃迟到批次，避免写回孤儿候选。
-        if !self.session.is_active() {
-            return vec![];
-        }
         // 迟到/未来代次一律丢弃：`Routes` 不带查询文本，无法做
         // 「文本仍在链中」的判定，安全侧选择直接丢弃。
         if generation != self.generation {
+            return vec![];
+        }
+        // 第二道闸：会话已结束（面板隐藏 / Escape）时丢弃迟到批次，避免写回孤儿候选。
+        if !self.session.is_active() {
             return vec![];
         }
         self.routes = self.session.merge(items);
@@ -474,12 +480,12 @@ impl PanelState {
         generation: QueryGeneration,
         items: Vec<RouteItem>,
     ) -> Vec<PanelAction> {
-        // 会话已结束（面板隐藏 / Escape）时丢弃同代次执行项，避免把孤儿
-        // 子项写回 `self.routes` 并重新点亮结果区。
-        if !self.session.is_active() {
+        if generation != self.generation {
             return vec![];
         }
-        if generation != self.generation {
+        // 第二道闸：会话已结束（面板隐藏 / Escape）时丢弃同代次执行项，避免把孤儿
+        // 子项写回 `self.routes` 并重新点亮结果区。
+        if !self.session.is_active() {
             return vec![];
         }
         self.routes = self.session.merge_execution(items);
@@ -1013,6 +1019,47 @@ mod tests {
             !titles.contains(&"Orphan"),
             "execution results after hide must be dropped, got {titles:?}"
         );
+    }
+
+    /// resume 窗口内快速重开：隐藏前同代次在途的执行项必须在重开后被判为
+    /// 陈旧丢弃，避免无父 Action 的孤儿执行项混入新会话。
+    #[test]
+    fn resume_within_window_invalidates_old_execution_results() {
+        let mut st = visible_manual_panel();
+        let now = Instant::now();
+        let stale_gen = st.generation;
+
+        // 隐藏前先造一个父 Action。
+        st.update_at(
+            PanelEvent::Routes {
+                generation: stale_gen,
+                items: vec![action_route("p.v1.parent", "父", 1.0)],
+            },
+            now,
+        );
+
+        st.update_at(PanelEvent::Hide, now);
+        // 1s 后重开，仍在 PANEL_RESUME_WINDOW 内（不触发 reset_expired_session）。
+        st.update_at(
+            PanelEvent::Show {
+                activation_token: None,
+            },
+            now + Duration::from_secs(1),
+        );
+
+        // 隐藏前同代次的在途执行项在重开后到达：应被判为陈旧丢弃。
+        st.update_at(
+            PanelEvent::ExecutionResults {
+                generation: stale_gen,
+                items: vec![execution_route("p.v1.parent", "child", 0.0)],
+            },
+            now + Duration::from_secs(1),
+        );
+
+        // 结果区只剩那一条父 Action，没有 Execution 项混入。
+        assert_eq!(st.routes.len(), 1, "stale execution must not leak into resumed session");
+        let titles: Vec<&str> = st.routes.iter().map(|i| i.title.as_str()).collect();
+        assert_eq!(titles, vec!["父"], "only the parent action should remain");
     }
 
     /// 附件输入（非手动）只替换，不累积。
