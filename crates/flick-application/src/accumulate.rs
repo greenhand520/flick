@@ -61,14 +61,16 @@ pub fn merge_execution_batch(accumulated: &mut Vec<RouteItem>, batch: Vec<RouteI
         let key = item.key();
         match accumulated.iter().position(|slot| slot.key() == key) {
             Some(index) => {
-                // 同 key：只有更高分才替换内容，位置与「已继承的父分」都保持不变。
-                // 分数不能跟着批次走，否则可能高于父项而被 `truncate_by_score` 单独保留。
-                if item.score > accumulated[index].score {
-                    let inherited = accumulated[index].score;
-                    let mut updated = item;
-                    updated.score = inherited;
-                    accumulated[index] = updated;
-                }
+                // 同 key：位置不变、分数保持「已继承的父分」。
+                //
+                // 不能用 `item.score` 与已累积分数比较来决定是否替换：执行项的分数
+                // 恒被父分覆盖（通常父分 0.1~1.0，而 Runtime 产出的执行项原分是 0.0），
+                // 比较结果永远是「不更高」，导致后续批次里更新的内容（标题/副标题/图标）
+                // 永远进不来。这里改为「后到者更新内容」：内容取新项，分数钉在父分上。
+                let inherited = accumulated[index].score;
+                let mut updated = item;
+                updated.score = inherited;
+                accumulated[index] = updated;
             }
             None => {
                 // 父项 id：执行项优先用 `parent_action_id`，缺失时回退 `action_id`。
@@ -388,6 +390,39 @@ mod tests {
             output: Default::default(),
         };
         RouteItem::execution(item, score)
+    }
+
+    /// 同一执行项在后续批次带来更新内容：内容更新，分数仍钉在父分上。
+    #[test]
+    fn merge_execution_batch_updates_content_of_existing_item() {
+        // 用固定 `item_id` 构造执行项，让两批次的 key 相同、内容不同。
+        fn exec(parent: &'static str, subtitle: &str) -> RouteItem {
+            let item = ExecutionItem {
+                item_id: "shared-item".into(),
+                parent_action_id: ActionId::from_static(parent),
+                invocation_id: InvocationId::new(),
+                title: "child".into(),
+                subtitle: Some(subtitle.into()),
+                icon: None,
+                badge: None,
+                output: Default::default(),
+            };
+            RouteItem::execution(item, 0.0)
+        }
+
+        let mut accumulated = vec![action("a.v1.one", "A", 0.8)];
+        merge_execution_batch(&mut accumulated, vec![exec("a.v1.one", "旧副标题")]);
+        assert_eq!(accumulated.len(), 2);
+
+        // 第二批新内容分数仍是 0.0，低于继承的 0.8：内容必须更新，但不能重复。
+        merge_execution_batch(&mut accumulated, vec![exec("a.v1.one", "新副标题")]);
+        assert_eq!(accumulated.len(), 2, "same execution item must not duplicate");
+        assert_eq!(accumulated[1].score, 0.8, "score stays pinned to parent");
+        assert_eq!(
+            accumulated[1].subtitle.as_deref(),
+            Some("新副标题"),
+            "execution item content must follow the latest batch"
+        );
     }
 
     /// 执行项插到父 Action 之后；父项在末尾时追加末尾。
