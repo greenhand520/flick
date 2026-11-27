@@ -407,6 +407,12 @@ pub async fn run_headless(socket_path: std::path::PathBuf) -> Result<(), String>
                     Some(HostToUi::Routes { generation, items }) => {
                         info!("UI: Routes for gen {generation}: {} items", items.len());
                     }
+                    Some(HostToUi::ExecutionResults { generation, items }) => {
+                        info!(
+                            "UI: ExecutionResults for gen {generation}: {} items",
+                            items.len()
+                        );
+                    }
                     Some(HostToUi::InvocationCompleted { invocation_id, .. }) => {
                         info!("UI: Invocation {invocation_id} completed");
                     }

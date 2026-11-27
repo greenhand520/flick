@@ -88,6 +88,9 @@ impl AppState {
                     HostToUi::Routes { generation, items } => {
                         PanelEvent::Routes { generation, items }
                     }
+                    HostToUi::ExecutionResults { generation, items } => {
+                        PanelEvent::ExecutionResults { generation, items }
+                    }
                     HostToUi::InvocationCompleted {
                         invocation_id,
                         outcome,

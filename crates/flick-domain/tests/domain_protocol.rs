@@ -149,3 +149,25 @@ fn host_to_ui_round_trips() {
         let _back: HostToUi = serde_json::from_str(&json).unwrap();
     }
 }
+
+#[test]
+fn execution_results_event_carries_generation_and_items() {
+    let message = HostToUi::ExecutionResults {
+        generation: QueryGeneration::INITIAL,
+        items: vec![RouteItem::action(
+            ActionId::from_static("test.apps.search"),
+            "应用",
+            0.5,
+        )],
+    };
+    let json = serde_json::to_string(&message).unwrap();
+    let back: HostToUi = serde_json::from_str(&json).unwrap();
+    match back {
+        HostToUi::ExecutionResults { generation, items } => {
+            assert_eq!(generation, QueryGeneration::INITIAL);
+            assert_eq!(items.len(), 1);
+            assert_eq!(items[0].title, "应用");
+        }
+        other => panic!("expected ExecutionResults, got {other:?}"),
+    }
+}

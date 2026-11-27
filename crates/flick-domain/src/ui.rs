@@ -99,6 +99,17 @@ pub enum HostToUi {
         generation: QueryGeneration,
         items: Vec<RouteItem>,
     },
+    /// 搜索阶段执行项（设计文档 §7.3）。
+    ///
+    /// 在 [`HostToUi::Routes`] 之后异步补发：`Routes` 只含纯内存路由得到的
+    /// action candidates，本事件补充各 Action 的搜索阶段执行结果。
+    /// UI 必须按 `generation` 校验，丢弃旧代次的结果。
+    ExecutionResults {
+        /// 产生这批执行项的查询代次。
+        generation: QueryGeneration,
+        /// 执行项：`kind == RouteItemKind::Execution`，`parent_action_id` 指向父 Action。
+        items: Vec<RouteItem>,
+    },
     /// 一次调用已完成。
     InvocationCompleted {
         invocation_id: InvocationId,

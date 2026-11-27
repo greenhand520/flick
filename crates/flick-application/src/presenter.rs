@@ -39,6 +39,13 @@ pub enum PanelEvent {
         generation: QueryGeneration,
         items: Vec<RouteItem>,
     },
+    /// 搜索阶段执行项（对应 [`HostToUi::ExecutionResults`]）。
+    ExecutionResults {
+        /// 产生这批执行项的查询代次。
+        generation: QueryGeneration,
+        /// 执行项。
+        items: Vec<RouteItem>,
+    },
     InvocationCompleted {
         invocation_id: InvocationId,
         outcome: ActionOutcome,
@@ -197,6 +204,9 @@ impl PanelState {
                 vec![]
             }
             PanelEvent::Routes { generation, items } => self.on_routes(generation, items),
+            PanelEvent::ExecutionResults { generation, items } => {
+                self.on_execution_results(generation, items)
+            }
             PanelEvent::InvocationCompleted {
                 invocation_id,
                 outcome,
@@ -447,6 +457,23 @@ impl PanelState {
             return vec![];
         }
         self.routes = self.session.merge(items);
+        self.selection.set_total(self.routes.len());
+        vec![]
+    }
+
+    /// 把搜索阶段执行项并入当前结果。
+    ///
+    /// 规则：代次不符丢弃；按 [`RouteItemKey`] 去重；插到父 Action 之后；
+    /// 分数继承父项。具体合并语义见 [`crate::accumulate::merge_execution_batch`]。
+    fn on_execution_results(
+        &mut self,
+        generation: QueryGeneration,
+        items: Vec<RouteItem>,
+    ) -> Vec<PanelAction> {
+        if generation != self.generation {
+            return vec![];
+        }
+        self.routes = self.session.merge_execution(items);
         self.selection.set_total(self.routes.len());
         vec![]
     }
@@ -784,6 +811,21 @@ mod tests {
         RouteItem::action(ActionId::from_static(id), title, score)
     }
 
+    /// 构造某父 Action 下的一条执行项。
+    fn execution_route(parent: &'static str, title: &str, score: f64) -> RouteItem {
+        let item = ExecutionItem {
+            item_id: format!("{parent}:{title}"),
+            parent_action_id: ActionId::from_static(parent),
+            invocation_id: InvocationId::new(),
+            title: title.into(),
+            subtitle: None,
+            icon: None,
+            badge: None,
+            output: Default::default(),
+        };
+        RouteItem::execution(item, score)
+    }
+
     /// 让面板进入可见的手动输入状态。
     fn visible_manual_panel() -> PanelState {
         let mut st = PanelState::new();
@@ -972,5 +1014,107 @@ mod tests {
             Instant::now(),
         );
         assert!(st.routes.is_empty());
+    }
+
+    /// 执行项插在父 Action 之后，其余候选顺序不变。
+    #[test]
+    fn execution_results_insert_after_parent_action() {
+        let mut st = visible_manual_panel();
+        let generation = st.generation;
+        st.update_at(
+            PanelEvent::Routes {
+                generation,
+                items: vec![
+                    action_route("a.v1.one", "A", 1.0),
+                    action_route("b.v1.two", "B", 0.9),
+                ],
+            },
+            Instant::now(),
+        );
+        st.update_at(
+            PanelEvent::ExecutionResults {
+                generation,
+                items: vec![execution_route("a.v1.one", "A child", 0.0)],
+            },
+            Instant::now(),
+        );
+        let titles: Vec<&str> = st.routes.iter().map(|i| i.title.as_str()).collect();
+        assert_eq!(titles, vec!["A", "A child", "B"]);
+        assert_eq!(st.selection.total, 3);
+    }
+
+    /// 代次不符的执行项直接丢弃。
+    #[test]
+    fn stale_execution_results_are_dropped() {
+        let mut st = visible_manual_panel();
+        let generation = st.generation;
+        st.update_at(
+            PanelEvent::Routes {
+                generation,
+                items: vec![action_route("a.v1.one", "A", 1.0)],
+            },
+            Instant::now(),
+        );
+        st.update_at(
+            PanelEvent::ExecutionResults {
+                generation: generation.next(),
+                items: vec![execution_route("a.v1.one", "A child", 0.0)],
+            },
+            Instant::now(),
+        );
+        assert_eq!(st.routes.len(), 1);
+        assert_eq!(st.routes[0].title, "A");
+    }
+
+    /// 同代次后续 `Routes` 批次不得冲掉已有执行项。
+    #[test]
+    fn execution_items_survive_next_routes_batch() {
+        let mut st = visible_manual_panel();
+        let generation = st.generation;
+        st.update_at(
+            PanelEvent::Routes {
+                generation,
+                items: vec![action_route("a.v1.one", "A", 1.0)],
+            },
+            Instant::now(),
+        );
+        st.update_at(
+            PanelEvent::ExecutionResults {
+                generation,
+                items: vec![execution_route("a.v1.one", "A child", 0.0)],
+            },
+            Instant::now(),
+        );
+        st.update_at(
+            PanelEvent::Routes {
+                generation,
+                items: vec![action_route("b.v1.two", "B", 0.5)],
+            },
+            Instant::now(),
+        );
+        let titles: Vec<&str> = st.routes.iter().map(|i| i.title.as_str()).collect();
+        assert_eq!(titles, vec!["A", "A child", "B"]);
+    }
+
+    /// 执行项合并后继承父项分数。
+    #[test]
+    fn execution_item_inherits_parent_score() {
+        let mut st = visible_manual_panel();
+        let generation = st.generation;
+        st.update_at(
+            PanelEvent::Routes {
+                generation,
+                items: vec![action_route("a.v1.one", "A", 0.8)],
+            },
+            Instant::now(),
+        );
+        st.update_at(
+            PanelEvent::ExecutionResults {
+                generation,
+                items: vec![execution_route("a.v1.one", "A child", 0.0)],
+            },
+            Instant::now(),
+        );
+        assert_eq!(st.routes[1].score, 0.8);
     }
 }
