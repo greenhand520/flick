@@ -2,11 +2,14 @@
 
 use crate::search::score_action;
 use flick_domain::{
-    ActionDescriptor, ActionId, ActionVisibility, InputContext, InputType, PluginManifest,
-    RouteItem,
+    ActionDescriptor, ActionId, ActionVisibility, DependencyStatus, InputContext, InputType,
+    PluginManifest, RouteItem,
 };
-use flick_plugin::{ActionHandler, Plugin, PluginLifecycle, PluginRegistrationError, SurfaceHandler};
-use std::collections::HashMap;
+use flick_plugin::{
+    ActionHandler, Plugin, PluginLifecycle, PluginRegistrationError, SurfaceHandler,
+    validate_manifest,
+};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
 /// 注册表中的一个条目：描述符 + 处理器 + 所属插件 id（裸注册时为 None）。
@@ -31,11 +34,17 @@ struct ScoredRoute {
 pub struct ActionRegistry {
     entries: HashMap<ActionId, Entry>,
     /// 插件 id → manifest（仅通过 `register_plugin` 注册的插件）。
-    manifests: HashMap<String, PluginManifest>,
+    ///
+    /// 用 `BTreeMap` 保证依赖解析的迭代顺序确定。
+    manifests: BTreeMap<String, PluginManifest>,
     /// 插件 id → Surface 交互处理器。
     surface_handlers: HashMap<String, Arc<dyn SurfaceHandler>>,
     /// 插件 id → 生命周期句柄（仅在有提供时记录）。
     lifecycles: HashMap<String, Arc<dyn PluginLifecycle>>,
+    /// 插件 id → 该插件的依赖解析结果（由 `resolve_dependencies` 填充）。
+    dependency_status: HashMap<String, Vec<DependencyStatus>>,
+    /// 因必需依赖缺失而被判定不可用的插件 id。
+    unavailable: HashSet<String>,
 }
 
 impl ActionRegistry {
@@ -43,9 +52,11 @@ impl ActionRegistry {
     pub fn new() -> Self {
         Self {
             entries: HashMap::new(),
-            manifests: HashMap::new(),
+            manifests: BTreeMap::new(),
             surface_handlers: HashMap::new(),
             lifecycles: HashMap::new(),
+            dependency_status: HashMap::new(),
+            unavailable: HashSet::new(),
         }
     }
 
@@ -68,55 +79,25 @@ impl ActionRegistry {
     /// 注册一个插件提供的全部动作，并做命名空间/冲突/元数据校验。
     ///
     /// 校验全部通过后才写入，避免半写入状态。
+    ///
+    /// 静态规则委托给 [`flick_plugin::validate_manifest`]；`ActionId`
+    /// 冲突需要注册表状态，在这里单独校验。
     pub fn register_plugin(&mut self, plugin: &dyn Plugin) -> Result<(), PluginRegistrationError> {
         let manifest = plugin.manifest();
         let lifecycle = plugin.lifecycle();
-        if manifest.id.trim().is_empty() {
-            return Err(PluginRegistrationError::InvalidManifest {
-                reason: "empty plugin id".into(),
-            });
-        }
-        if manifest.author.trim().is_empty() {
-            return Err(PluginRegistrationError::InvalidManifest {
-                reason: "empty plugin author".into(),
-            });
-        }
-        // 设置 key 唯一
-        let mut seen_keys = std::collections::HashSet::new();
-        for s in &manifest.settings {
-            if !seen_keys.insert(s.key.as_str()) {
-                return Err(PluginRegistrationError::DuplicateSettingKey { key: s.key.clone() });
-            }
-        }
-        // surface id 唯一
-        let mut seen_surfaces = std::collections::HashSet::new();
-        for s in &manifest.surfaces {
-            if !seen_surfaces.insert(s.id.as_str()) {
-                return Err(PluginRegistrationError::SurfaceIdCollision {
-                    surface_id: s.id.clone(),
-                });
-            }
-        }
         let actions = plugin.actions();
-        if actions.is_empty() {
-            return Err(PluginRegistrationError::NoActions);
-        }
-        let prefix = format!("{}.", manifest.id);
-        // 先全量校验，再插入（避免半写入）
+
+        // 1. 纯静态校验（不依赖其它插件信息）。
+        validate_manifest(&manifest, &actions)?;
+        // 2. 唯一需要注册表状态的规则：ActionId 冲突。
         for spec in &actions {
-            let id = spec.descriptor.id.as_str();
-            if !id.starts_with(&prefix) {
-                return Err(PluginRegistrationError::NamespaceViolation {
-                    action_id: id.to_string(),
-                    plugin_id: manifest.id.clone(),
-                });
-            }
             if self.entries.contains_key(&spec.descriptor.id) {
                 return Err(PluginRegistrationError::IdCollision {
-                    action_id: id.to_string(),
+                    action_id: spec.descriptor.id.as_str().to_string(),
                 });
             }
         }
+        // 3. 全量校验通过，写入。
         for spec in actions {
             self.entries.insert(
                 spec.descriptor.id.clone(),
@@ -135,6 +116,39 @@ impl ActionRegistry {
         }
         self.manifests.insert(manifest.id.clone(), manifest);
         Ok(())
+    }
+
+    /// 解析所有已注册插件的依赖关系，并把结果应用到注册表。
+    ///
+    /// 必需依赖（含传递）不满足的插件会被标记为不可用：其动作、
+    /// Surface 处理器与生命周期句柄一并移除，manifest 保留以便诊断
+    /// 区分「未安装」与「依赖不满足」。
+    ///
+    /// 返回全部 `DependencyMissing` 错误，不短路。幂等。
+    pub fn resolve_dependencies(&mut self) -> Vec<PluginRegistrationError> {
+        let resolution = flick_plugin::resolve_dependencies(&self.manifests);
+        for plugin_id in &resolution.unavailable {
+            self.entries
+                .retain(|_, entry| entry.plugin_id.as_deref() != Some(plugin_id.as_str()));
+            self.surface_handlers.remove(plugin_id);
+            self.lifecycles.remove(plugin_id);
+        }
+        self.dependency_status = resolution.statuses;
+        self.unavailable = resolution.unavailable;
+        resolution.errors
+    }
+
+    /// 返回某插件声明的每条依赖的解析状态；未注册或没有依赖时返回空。
+    pub fn dependency_status(&self, plugin_id: &str) -> Vec<DependencyStatus> {
+        self.dependency_status
+            .get(plugin_id)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// 返回所有已注册插件 id（`BTreeMap` 键天然升序）。
+    pub fn plugin_ids(&self) -> Vec<String> {
+        self.manifests.keys().cloned().collect()
     }
 
     /// 返回已注册插件的生命周期句柄（用于启动时统一 activate）。
@@ -307,6 +321,7 @@ impl Default for ActionRegistry {
 mod tests {
     use super::*;
     use flick_domain::{ActionDescriptor, ActionId, ConcurrencyPolicy};
+    use flick_plugin::ActionSpec;
 
     /// 用于测试的空操作处理器。
     struct NoopHandler;
@@ -502,18 +517,71 @@ mod tests {
                 plugin_id: Some("demo.plugin".into()),
             },
         );
-        let mut manifests = HashMap::new();
+        let mut manifests = BTreeMap::new();
         manifests.insert("demo.plugin".into(), manifest);
         let reg = ActionRegistry {
             entries,
             manifests,
             surface_handlers: HashMap::new(),
             lifecycles: HashMap::new(),
+            dependency_status: HashMap::new(),
+            unavailable: HashSet::new(),
         };
 
         let results = reg.search_input(&text_context("demo"));
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].title, "Unrelated");
+    }
+
+    /// 构造一个带依赖声明的最小插件 manifest。
+    fn plugin_manifest(
+        id: &str,
+        dependencies: Vec<(&str, flick_domain::DependencyRequirement)>,
+    ) -> PluginManifest {
+        PluginManifest {
+            id: id.into(),
+            name: id.into(),
+            author: "Flick".into(),
+            version: "1.0.0".into(),
+            kind: flick_domain::PluginKind::BuiltInRust,
+            keywords: vec![],
+            icon: None,
+            profile: flick_domain::PluginProfile::default(),
+            permissions: vec![],
+            plugin_dependencies: dependencies
+                .into_iter()
+                .map(|(plugin_id, requirement)| flick_domain::PluginDependency {
+                    plugin_id: plugin_id.into(),
+                    requirement,
+                })
+                .collect(),
+            settings: vec![],
+            surfaces: vec![],
+            supported_os: vec![],
+            supported_architectures: vec![],
+            needs_search: false,
+        }
+    }
+
+    /// 测试用插件替身：manifest + 动作集。
+    struct TestPlugin {
+        manifest: PluginManifest,
+        actions: Vec<ActionSpec>,
+    }
+
+    impl Plugin for TestPlugin {
+        fn manifest(&self) -> PluginManifest {
+            self.manifest.clone()
+        }
+        fn actions(&self) -> Vec<ActionSpec> {
+            self.actions
+                .iter()
+                .map(|spec| ActionSpec {
+                    descriptor: spec.descriptor.clone(),
+                    handler: spec.handler.clone(),
+                })
+                .collect()
+        }
     }
 
     #[test]
@@ -532,5 +600,74 @@ mod tests {
         assert_eq!(results.len(), 2);
         assert_eq!(results[0].action_id.as_str(), "demo.plugin.v1.a");
         assert_eq!(results[1].action_id.as_str(), "demo.plugin.v1.b");
+    }
+
+    #[test]
+    fn resolve_dependencies_removes_actions_of_unavailable_plugin() {
+        let mut reg = ActionRegistry::new();
+        let dependent = TestPlugin {
+            manifest: plugin_manifest(
+                "demo.dependent",
+                vec![(
+                    "demo.missing",
+                    flick_domain::DependencyRequirement::Required,
+                )],
+            ),
+            actions: vec![ActionSpec {
+                descriptor: ActionDescriptor::new(
+                    ActionId::from_static("demo.dependent.v1.run"),
+                    "Run",
+                    vec!["run".into()],
+                    ConcurrencyPolicy::Parallel,
+                ),
+                handler: Arc::new(NoopHandler),
+            }],
+        };
+        reg.register_plugin(&dependent).unwrap();
+        let action_id = ActionId::from_static("demo.dependent.v1.run");
+        assert!(reg.find_by_id(&action_id).is_some());
+
+        let errors = reg.resolve_dependencies();
+
+        assert_eq!(errors.len(), 1);
+        assert!(
+            reg.find_by_id(&action_id).is_none(),
+            "unavailable plugin actions must be removed"
+        );
+        // manifest 保留：诊断需要区分「未安装」与「依赖不满足」。
+        assert!(reg.plugin_ids().contains(&"demo.dependent".to_string()));
+        assert!(!reg.dependency_status("demo.dependent")[0].available);
+    }
+
+    #[test]
+    fn resolve_dependencies_is_idempotent() {
+        let mut reg = ActionRegistry::new();
+        let dependent = TestPlugin {
+            manifest: plugin_manifest(
+                "demo.dependent",
+                vec![(
+                    "demo.missing",
+                    flick_domain::DependencyRequirement::Required,
+                )],
+            ),
+            actions: vec![ActionSpec {
+                descriptor: ActionDescriptor::new(
+                    ActionId::from_static("demo.dependent.v1.run"),
+                    "Run",
+                    vec!["run".into()],
+                    ConcurrencyPolicy::Parallel,
+                ),
+                handler: Arc::new(NoopHandler),
+            }],
+        };
+        reg.register_plugin(&dependent).unwrap();
+        let first = reg.resolve_dependencies();
+        let second = reg.resolve_dependencies();
+        assert_eq!(first, second);
+        assert_eq!(reg.plugin_ids().len(), 1);
+        assert!(
+            reg.find_by_id(&ActionId::from_static("demo.dependent.v1.run"))
+                .is_none()
+        );
     }
 }

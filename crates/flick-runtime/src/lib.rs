@@ -24,8 +24,9 @@ pub use invocation::InvocationHandle;
 // 插件契约已抽到 `flick-plugin`；此处 re-export 保持下游
 // （`flick-builtins` / `flick-testkit`）import 路径不变。
 pub use flick_plugin::{
-    ActionHandler, ActionSpec, Plugin, PluginLifecycle, PluginRegistrationError, PluginRuntimeError,
-    PluginUiFactory, SurfaceError, SurfaceHandler, SurfaceSession,
+    ActionHandler, ActionSpec, DependencyResolution, Plugin, PluginLifecycle,
+    PluginRegistrationError, PluginRuntimeError, PluginUiFactory, SurfaceError, SurfaceHandler,
+    SurfaceSession, validate_manifest,
 };
 pub use registry::ActionRegistry;
 pub use runtime::ActionRuntime;
