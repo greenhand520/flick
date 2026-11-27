@@ -2,7 +2,7 @@
 
 use crate::registry::ActionRegistry;
 use flick_domain::{
-    ActionContext, ActionDescriptor, ActionError, ActionId, ActionInput, ActionOutcome,
+    PluginContext, ActionDescriptor, ActionError, ActionId, ActionInput, ActionOutcome,
     ActionRequest, DependencyStatus, InputContext, InputType, InvocationId, QueryGeneration,
     RouteItem, SurfaceContent, SurfaceEventKind, SurfaceSessionId,
 };
@@ -374,10 +374,8 @@ impl ActionRuntime {
             reg.find_by_id(&parent_action_id)
                 .map(|(_, h)| Arc::clone(h))
         }?;
-        let ctx = ActionContext {
-            cancellation: CancellationToken::new(),
-            host_info: self.host_info.read().unwrap().clone(),
-        };
+        let ctx = PluginContext::new(CancellationToken::new())
+            .with_host_info(self.host_info.read().unwrap().clone());
         match tokio::time::timeout(
             std::time::Duration::from_secs(30),
             handler.execution_event(&parent_action_id, item_id, event, ctx),
@@ -517,10 +515,8 @@ impl InvocationCore {
             Some(parent) => parent.child_token(),
             None => CancellationToken::new(),
         };
-        let ctx = ActionContext {
-            cancellation: token.clone(),
-            host_info: self.host_info.read().unwrap().clone(),
-        };
+        let ctx = PluginContext::new(token.clone())
+            .with_host_info(self.host_info.read().unwrap().clone());
 
         // 存入活动映射，以便 `cancel()` 能找到它。
         // 用守卫托管清理：即使本 future 中途被丢弃，也会移除条目。
@@ -733,7 +729,7 @@ mod active_guard_tests {
         async fn invoke(
             &self,
             _request: ActionRequest,
-            _ctx: ActionContext,
+            _ctx: PluginContext,
         ) -> Result<ActionOutcome, ActionError> {
             tokio::time::sleep(Duration::from_secs(30)).await;
             Ok(ActionOutcome::Text("late".into()))
@@ -827,7 +823,7 @@ mod path_input_tests {
         async fn invoke(
             &self,
             request: ActionRequest,
-            _ctx: ActionContext,
+            _ctx: PluginContext,
         ) -> Result<ActionOutcome, ActionError> {
             *self.seen.0.lock().unwrap() = Some(request.input.kind);
             Ok(ActionOutcome::Text("ok".into()))

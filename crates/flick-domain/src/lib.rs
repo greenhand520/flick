@@ -25,7 +25,7 @@ pub const APP_ID: &str = "io.github.greenhand520.Flick";
 
 // 为方便使用，在 crate 根目录重新导出关键类型。
 pub use action::{
-    ActionContext, ActionDescriptor, ActionInput, ActionOutcome, ActionRequest, ActionVisibility,
+    ActionDescriptor, ActionInput, ActionOutcome, ActionRequest, ActionVisibility,
     ConcurrencyPolicy, Deadline, FileInput, FileRef, ImageData, InputType, InvocationPolicy,
     OutputType,
 };
@@ -41,9 +41,10 @@ pub use input::{
 pub use plugin::*;
 pub use route::{MatchField, RouteItem, RouteItemKey, RouteItemKind};
 pub use settings::{
-    SettingChange, SettingDecl, SettingKey, SettingKind, SettingNamespace, SettingSchema,
-    SettingSnapshot, SettingValue, SettingValueError,
+    ConfigSnapshot, SettingChange, SettingDecl, SettingKey, SettingKind, SettingNamespace, SettingSchema,
+    SettingSnapshot, SettingSecretReader, SettingValue, SettingValueError,
 };
+pub use action::PluginContext;
 pub use surface::{
     BadgeTone, ButtonTone, ListItem, SURFACE_SCHEMA_VERSION, SpacerSize, SurfaceContent,
     SurfaceEventKind, SurfaceNode,

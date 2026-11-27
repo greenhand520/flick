@@ -358,7 +358,7 @@ mod tests {
         async fn invoke(
             &self,
             _req: flick_domain::ActionRequest,
-            _ctx: flick_domain::ActionContext,
+            _ctx: flick_domain::PluginContext,
         ) -> Result<flick_domain::ActionOutcome, flick_domain::ActionError> {
             Ok(flick_domain::ActionOutcome::Notice {
                 message: "noop".into(),

@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use flick_domain::{
-    ActionContext, ActionDescriptor, ActionError, ActionId, ActionOutcome, ActionRequest, Category,
+    PluginContext, ActionDescriptor, ActionError, ActionId, ActionOutcome, ActionRequest, Category,
     ConcurrencyPolicy, InputType, PluginKind, PluginManifest, PluginProfile,
 };
 use flick_runtime::{ActionHandler, ActionSpec, Plugin};
@@ -23,7 +23,7 @@ impl ActionHandler for EchoHandler {
     async fn invoke(
         &self,
         request: ActionRequest,
-        _ctx: ActionContext,
+        _ctx: PluginContext,
     ) -> Result<ActionOutcome, ActionError> {
         // Phase 0：仅接受纯文本输入。
         if request.input.kind != InputType::PlainText {

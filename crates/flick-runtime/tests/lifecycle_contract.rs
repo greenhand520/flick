@@ -70,7 +70,7 @@ impl ActionHandler for NoopHandler {
     async fn invoke(
         &self,
         _: ActionRequest,
-        _: ActionContext,
+        _: PluginContext,
     ) -> Result<ActionOutcome, ActionError> {
         Ok(ActionOutcome::Notice {
             message: "ok".into(),

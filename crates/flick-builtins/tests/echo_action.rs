@@ -1,15 +1,12 @@
 //! Echo 内置动作的测试。
 
 use flick_builtins::echo::{ECHO_ACTION_ID, EchoHandler};
-use flick_domain::{ActionContext, ActionOutcome, ActionRequest, Caller};
+use flick_domain::{PluginContext, ActionOutcome, ActionRequest, Caller};
 use flick_runtime::ActionHandler;
 use tokio_util::sync::CancellationToken;
 
-fn test_ctx() -> ActionContext {
-    ActionContext {
-        cancellation: CancellationToken::new(),
-        host_info: None,
-    }
+fn test_ctx() -> PluginContext {
+    PluginContext::new(CancellationToken::new())
 }
 
 #[test]

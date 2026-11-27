@@ -14,7 +14,7 @@ impl ActionHandler for OpenHandler {
     async fn invoke(
         &self,
         _r: ActionRequest,
-        _c: ActionContext,
+        _c: PluginContext,
     ) -> Result<ActionOutcome, ActionError> {
         let content = SurfaceContent {
             schema_version: SURFACE_SCHEMA_VERSION,

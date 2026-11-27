@@ -8,13 +8,13 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use flick_domain::{
-    ActionContext, ActionDescriptor, ActionError, ActionId, ActionOutcome, ActionRequest,
+    PluginContext, ActionDescriptor, ActionError, ActionId, ActionOutcome, ActionRequest,
     ExecutionEventKind, PluginManifest, SurfaceContent, SurfaceEventKind, SurfaceSessionId,
 };
 
 /// 每个注册的 Action 所实现的 trait。
 ///
-/// 实现者接收一个 [`ActionRequest`] 和一个 [`ActionContext`]
+/// 实现者接收一个 [`ActionRequest`] 和一个 [`PluginContext`]
 /// （其中携带一个 [`CancellationToken`]），并返回一个
 /// [`ActionOutcome`]。
 ///
@@ -31,7 +31,7 @@ pub trait ActionHandler: Send + Sync {
     async fn invoke(
         &self,
         request: ActionRequest,
-        ctx: ActionContext,
+        ctx: PluginContext,
     ) -> Result<ActionOutcome, ActionError>;
 
     /// 用户对 Execution 项的操作；默认 no-op。
@@ -40,7 +40,7 @@ pub trait ActionHandler: Send + Sync {
         _parent_action_id: &ActionId,
         _item_id: &str,
         _event: ExecutionEventKind,
-        _ctx: ActionContext,
+        _ctx: PluginContext,
     ) -> Result<Option<ActionOutcome>, ActionError> {
         Ok(None)
     }

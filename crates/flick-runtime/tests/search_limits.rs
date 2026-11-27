@@ -13,7 +13,7 @@ impl ActionHandler for NoopHandler {
     async fn invoke(
         &self,
         _request: ActionRequest,
-        _: ActionContext,
+        _: PluginContext,
     ) -> Result<ActionOutcome, ActionError> {
         Ok(ActionOutcome::Text("noop".into()))
     }

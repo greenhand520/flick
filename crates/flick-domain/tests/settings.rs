@@ -204,3 +204,55 @@ fn plugin_id_rules_block_path_escapes() {
         assert!(!flick_domain::settings::is_valid_plugin_id(bad), "{bad}");
     }
 }
+
+// ─── S1-A：ConfigSnapshot 与 PluginContext ────────────────────────────────
+
+use flick_domain::{ConfigSnapshot, PluginContext};
+use tokio_util::sync::CancellationToken;
+
+fn snapshot() -> ConfigSnapshot {
+    let mut values = std::collections::BTreeMap::new();
+    values.insert("enabled".to_string(), SettingValue::Bool(true));
+    values.insert("limit".to_string(), SettingValue::Integer(7));
+    values.insert("mode".to_string(), SettingValue::Enum("light".to_string()));
+    values.insert("name".to_string(), SettingValue::String("flick".to_string()));
+    ConfigSnapshot {
+        namespace: "flick.demo".to_string(),
+        revision: 5,
+        values,
+    }
+}
+
+#[test]
+fn config_snapshot_typed_getters() {
+    let s = snapshot();
+    assert_eq!(s.revision(), 5);
+    assert!(!s.is_empty());
+    assert_eq!(s.bool("enabled"), Some(true));
+    assert_eq!(s.i64("limit"), Some(7));
+    assert_eq!(s.str("mode"), Some("light"));
+    assert_eq!(s.str("name"), Some("flick"));
+    assert!(s.is_enum("mode", "light"));
+    assert!(!s.is_enum("mode", "dark"));
+    assert_eq!(s.i64("missing"), None);
+    assert!(s.value("enabled").is_some());
+}
+
+#[test]
+fn empty_snapshot_is_degraded_default() {
+    let empty = ConfigSnapshot::empty();
+    assert!(empty.is_empty());
+    assert_eq!(empty.revision(), 0);
+    assert_eq!(empty.bool("enabled"), None);
+}
+
+#[test]
+fn plugin_context_has_no_secret_reader_by_default() {
+    let ctx = PluginContext::new(CancellationToken::new())
+        .with_settings(snapshot())
+        .with_plugin_id(Some("flick.demo".to_string()));
+    assert_eq!(ctx.plugin_id(), Some("flick.demo"));
+    assert_eq!(ctx.settings().revision(), 5);
+    // 没有 secret 读取器时安全返回 None。
+    assert_eq!(ctx.secret("api_token"), None);
+}

@@ -38,7 +38,7 @@ impl ActionHandler for NoopHandler {
     async fn invoke(
         &self,
         _r: ActionRequest,
-        _c: ActionContext,
+        _c: PluginContext,
     ) -> Result<ActionOutcome, ActionError> {
         Ok(ActionOutcome::Data(serde_json::json!({"ok": true})))
     }

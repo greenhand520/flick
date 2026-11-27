@@ -276,7 +276,7 @@ impl ActionHandler for AppsSearchHandler {
     async fn invoke(
         &self,
         request: ActionRequest,
-        _: ActionContext,
+        _: PluginContext,
     ) -> Result<ActionOutcome, ActionError> {
         let query = request.input.text.trim().to_lowercase();
         if query.is_empty() {
@@ -316,7 +316,7 @@ impl ActionHandler for AppsSearchHandler {
         _parent_action_id: &ActionId,
         item_id: &str,
         event: ExecutionEventKind,
-        _ctx: ActionContext,
+        _ctx: PluginContext,
     ) -> Result<Option<ActionOutcome>, ActionError> {
         if event != ExecutionEventKind::Activate {
             return Ok(None);
@@ -450,10 +450,7 @@ mod tests {
         let outcome = handler
             .invoke(
                 request,
-                ActionContext {
-                    cancellation: tokio_util::sync::CancellationToken::new(),
-                    host_info: None,
-                },
+                PluginContext::new(tokio_util::sync::CancellationToken::new()),
             )
             .await
             .unwrap();
@@ -479,10 +476,7 @@ mod tests {
         let outcome = handler
             .invoke(
                 request,
-                ActionContext {
-                    cancellation: tokio_util::sync::CancellationToken::new(),
-                    host_info: None,
-                },
+                PluginContext::new(tokio_util::sync::CancellationToken::new()),
             )
             .await
             .unwrap();

@@ -3,7 +3,7 @@
 //! 每个 `#[test]` 对应一个具名的契约场景。
 
 use flick_domain::{
-    ActionContext, ActionDescriptor, ActionError, ActionId, ActionOutcome, ActionRequest, Caller,
+    PluginContext, ActionDescriptor, ActionError, ActionId, ActionOutcome, ActionRequest, Caller,
     ConcurrencyPolicy, Deadline, InputType,
 };
 use flick_runtime::{ActionHandler, ActionRuntime};
@@ -20,7 +20,7 @@ impl ActionHandler for EchoHandler {
     async fn invoke(
         &self,
         request: ActionRequest,
-        _ctx: ActionContext,
+        _ctx: PluginContext,
     ) -> Result<ActionOutcome, ActionError> {
         // 如果存在 "echo " 前缀则将其去掉，否则返回原始文本。
         let text = request.input.text;
@@ -40,7 +40,7 @@ impl ActionHandler for SlowHandler {
     async fn invoke(
         &self,
         _request: ActionRequest,
-        ctx: ActionContext,
+        ctx: PluginContext,
     ) -> Result<ActionOutcome, ActionError> {
         tokio::select! {
             _ = tokio::time::sleep(self.delay) => {

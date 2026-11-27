@@ -18,7 +18,7 @@ pub use manifest::validate_manifest;
 // 这些类型仍定义在 `flick-domain`（跨层共享的数据词汇），此处仅做转出，
 // 避免插件作者同时 import 两个 crate。
 pub use flick_domain::{
-    ActionContext, ActionDescriptor, ActionError, ActionId, ActionOutcome, ActionRequest,
+    PluginContext, ActionDescriptor, ActionError, ActionId, ActionOutcome, ActionRequest,
     ActionVisibility, Architecture, Category, DependencyRequirement, ExecutionEventKind,
     ExecutionMode, InputType, OperatingSystem, PluginDependency, PluginKind, PluginManifest,
     SettingDecl, SettingKind, SurfaceContent, SurfaceEventKind, SurfaceSessionId, SurfaceKind,

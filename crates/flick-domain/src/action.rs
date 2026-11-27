@@ -249,13 +249,78 @@ impl Deadline {
 
 // ─── 上下文 ──────────────────────────────────────────────────────────────────
 
-/// 调用期间提供给 ActionHandler 的运行时上下文。
+/// 调用期间提供给插件的运行时上下文。
 ///
-/// 携带一个取消令牌，用于协作式取消。
-pub struct ActionContext {
+/// 携带取消令牌、宿主信息、**调用入口固定的设置快照**，以及可选的 secret
+/// 读取器（实时解密，不放进快照，避免 `Debug` 泄露明文）。
+#[derive(Default)]
+pub struct PluginContext {
+    /// 协作式取消令牌。
     pub cancellation: tokio_util::sync::CancellationToken,
     /// 启动时注入的宿主信息（由适配器采集）。
     pub host_info: Option<std::sync::Arc<crate::host::HostInfo>>,
+    /// 本次调用固定的设置快照（只含非 secret 值，已合并声明默认值）。
+    pub settings: crate::settings::ConfigSnapshot,
+    /// 当前动作所属插件 id；`None` 表示非插件注册的动作。
+    pub plugin_id: Option<String>,
+    /// secret 值读取器；宿主未提供服务时为 `None`。
+    pub secrets: Option<std::sync::Arc<dyn crate::settings::SettingSecretReader>>,
+}
+
+impl PluginContext {
+    /// 用取消令牌构造一个其余字段全空的上下文。
+    pub fn new(cancellation: tokio_util::sync::CancellationToken) -> Self {
+        Self {
+            cancellation,
+            ..Self::default()
+        }
+    }
+
+    /// 设置快照（链式）。
+    pub fn with_settings(mut self, settings: crate::settings::ConfigSnapshot) -> Self {
+        self.settings = settings;
+        self
+    }
+
+    /// 设置插件 id（链式）。
+    pub fn with_plugin_id(mut self, plugin_id: Option<String>) -> Self {
+        self.plugin_id = plugin_id;
+        self
+    }
+
+    /// 设置 secret 读取器（链式）。
+    pub fn with_secrets(
+        mut self,
+        secrets: Option<std::sync::Arc<dyn crate::settings::SettingSecretReader>>,
+    ) -> Self {
+        self.secrets = secrets;
+        self
+    }
+
+    /// 设置宿主信息（链式）。
+    pub fn with_host_info(
+        mut self,
+        host_info: Option<std::sync::Arc<crate::host::HostInfo>>,
+    ) -> Self {
+        self.host_info = host_info;
+        self
+    }
+
+    /// 本次调用的设置快照。
+    pub fn settings(&self) -> &crate::settings::ConfigSnapshot {
+        &self.settings
+    }
+
+    /// 当前动作所属插件 id。
+    pub fn plugin_id(&self) -> Option<&str> {
+        self.plugin_id.as_deref()
+    }
+
+    /// 读取一个 secret 值；无读取器或不存在时返回 `None`。
+    pub fn secret(&self, key: &str) -> Option<String> {
+        let plugin_id = self.plugin_id.as_deref()?;
+        self.secrets.as_ref()?.secret(plugin_id, key)
+    }
 }
 
 // ─── 结果 ──────────────────────────────────────────────────────────────────

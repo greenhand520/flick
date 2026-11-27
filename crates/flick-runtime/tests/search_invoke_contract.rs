@@ -10,7 +10,7 @@ impl ActionHandler for AppSearchHandler {
     async fn invoke(
         &self,
         request: ActionRequest,
-        _: ActionContext,
+        _: PluginContext,
     ) -> Result<ActionOutcome, ActionError> {
         assert_eq!(request.source, ActionSource::SearchRoute);
         Ok(ActionOutcome::Data(serde_json::json!([
@@ -108,7 +108,7 @@ impl ActionHandler for SurfaceSearchHandler {
     async fn invoke(
         &self,
         request: ActionRequest,
-        _: ActionContext,
+        _: PluginContext,
     ) -> Result<ActionOutcome, ActionError> {
         assert_eq!(request.source, ActionSource::SearchRoute);
         Ok(ActionOutcome::open_surface(
@@ -241,7 +241,7 @@ impl ActionHandler for SlowSearchHandler {
     async fn invoke(
         &self,
         request: ActionRequest,
-        _: ActionContext,
+        _: PluginContext,
     ) -> Result<ActionOutcome, ActionError> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         self.seen.lock().unwrap().push(request.input.clone());
@@ -263,7 +263,7 @@ impl ActionHandler for BulkSearchHandler {
     async fn invoke(
         &self,
         _request: ActionRequest,
-        _: ActionContext,
+        _: PluginContext,
     ) -> Result<ActionOutcome, ActionError> {
         let values: Vec<serde_json::Value> = (0..self.count)
             .map(|i| serde_json::json!({ "id": format!("bulk:{i}"), "title": format!("Bulk {i}") }))
@@ -285,7 +285,7 @@ impl ActionHandler for CancellableSearchHandler {
     async fn invoke(
         &self,
         _request: ActionRequest,
-        context: ActionContext,
+        context: PluginContext,
     ) -> Result<ActionOutcome, ActionError> {
         self.started.notify_one();
         context.cancellation.cancelled().await;
@@ -566,7 +566,7 @@ impl ActionHandler for RecordingInvocationHandler {
     async fn invoke(
         &self,
         request: ActionRequest,
-        _: ActionContext,
+        _: PluginContext,
     ) -> Result<ActionOutcome, ActionError> {
         self.seen.lock().unwrap().push(request.invocation_id);
         Ok(ActionOutcome::Data(serde_json::json!([

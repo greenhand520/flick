@@ -391,6 +391,71 @@ impl SettingSnapshot {
     }
 }
 
+/// 一次调用内固定不变的设置快照（只含**非 secret**值，已合并声明默认值）。
+///
+/// 由宿主的 `SettingsProvider` 在调用入口解析一次，随后作为
+/// [`crate::action::PluginContext`] 的一部分传给插件；调用期间 revision 与
+/// 值集合都不再变化。
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ConfigSnapshot {
+    /// 命名空间：`core` 或插件 id；空串表示"没有可用的设置"。
+    pub namespace: String,
+    /// 快照对应的 namespace 级 revision（0 表示空快照）。
+    pub revision: u64,
+    /// 短 key → 值（不含 secret）。
+    pub values: BTreeMap<String, SettingValue>,
+}
+
+impl ConfigSnapshot {
+    /// 构造空快照（设置不可用时的降级结果）。
+    pub fn empty() -> Self {
+        Self::default()
+    }
+
+    /// 是否为降级空快照。
+    pub fn is_empty(&self) -> bool {
+        self.values.is_empty() && self.revision == 0
+    }
+
+    /// 快照 revision。
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    /// 按短 key 取值。
+    pub fn value(&self, key: &str) -> Option<&SettingValue> {
+        self.values.get(key)
+    }
+
+    /// 读布尔值。
+    pub fn bool(&self, key: &str) -> Option<bool> {
+        self.values.get(key).and_then(SettingValue::as_bool)
+    }
+
+    /// 读整数。
+    pub fn i64(&self, key: &str) -> Option<i64> {
+        self.values.get(key).and_then(SettingValue::as_i64)
+    }
+
+    /// 读字符串（`String` / `Enum` / `Path` 三类都按字符串返回）。
+    pub fn str(&self, key: &str) -> Option<&str> {
+        self.values.get(key).and_then(SettingValue::as_str)
+    }
+
+    /// 枚举值是否等于 `variant`。
+    pub fn is_enum(&self, key: &str, variant: &str) -> bool {
+        matches!(self.values.get(key), Some(SettingValue::Enum(v)) if v == variant)
+    }
+}
+
+/// 按需读取 secret 值的抽象（实时解密，不放进快照）。
+///
+/// 定义在 domain 以免契约层引入存储依赖；实现由宿主（`flick-daemon`）提供。
+pub trait SettingSecretReader: Send + Sync {
+    /// 读取指定插件命名空间下的一个 secret 值。
+    fn secret(&self, plugin_id: &str, key: &str) -> Option<String>;
+}
+
 /// 全限定设置键：命名空间 + 短 key。
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct SettingKey {

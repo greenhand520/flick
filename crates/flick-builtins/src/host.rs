@@ -80,7 +80,7 @@ impl ActionHandler for HostHandler {
     async fn invoke(
         &self,
         request: ActionRequest,
-        ctx: ActionContext,
+        ctx: PluginContext,
     ) -> Result<ActionOutcome, ActionError> {
         if request.input.kind != InputType::None {
             return Err(ActionError::InvalidInput {

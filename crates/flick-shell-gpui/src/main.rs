@@ -165,7 +165,7 @@ impl ActionHandler for DemoClipboardPlugin {
     async fn invoke(
         &self,
         _request: ActionRequest,
-        _ctx: ActionContext,
+        _ctx: PluginContext,
     ) -> Result<ActionOutcome, ActionError> {
         Ok(ActionOutcome::open_surface(
             CLIPBOARD_SURFACE_ID,
