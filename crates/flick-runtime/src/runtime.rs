@@ -249,6 +249,11 @@ impl ActionRuntime {
     }
 
     /// 返回所有已注册插件 id（升序）。
+    /// 返回全部已注册插件的清单（供宿主注册设置 schema）。
+    pub async fn plugin_manifests(&self) -> Vec<flick_domain::PluginManifest> {
+        self.registry.read().await.plugin_manifests()
+    }
+
     pub async fn registered_plugin_ids(&self) -> Vec<String> {
         let registry = self.registry.read().await;
         registry.plugin_ids()

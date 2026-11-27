@@ -14,6 +14,8 @@ use flick_ipc::message::*;
 use flick_ipc::server::IpcServer;
 use flick_ipc::unix::{TransportError, UnixSocketServer};
 use flick_runtime::ActionRuntime;
+use flick_data::StorageManager;
+use flick_settings::{SettingsService, core_schema};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -105,6 +107,9 @@ impl IntentSink for ChannelIntentSink {
 
 pub struct DaemonIpcDispatcher {
     pub runtime: Arc<dyn RuntimePort>,
+    /// 设置服务；`None` 表示设置系统不可用（启动时打开存储失败）。
+    #[allow(dead_code)] // 设置类 IPC 命令在后续提交启用
+    pub settings: Option<Arc<SettingsService>>,
     pub coordinator: Arc<ApplicationCoordinator>,
     #[allow(dead_code)]
     pub intent_tx: mpsc::UnboundedSender<UiIntent>,
@@ -319,8 +324,10 @@ fn portal_snapshot_value(snapshot: &PortalSnapshot) -> serde_json::Value {
 
 // ─── 公共辅助函数 ──────────────────────────────────────────────────────────
 
+#[allow(clippy::too_many_arguments)]
 pub fn create_ipc_dispatcher(
     runtime: Arc<ActionRuntime>,
+    settings: Option<Arc<SettingsService>>,
     coordinator: Arc<ApplicationCoordinator>,
     _host_event_tx: mpsc::UnboundedSender<HostToUi>,
     intent_tx: mpsc::UnboundedSender<UiIntent>,
@@ -331,6 +338,7 @@ pub fn create_ipc_dispatcher(
     let runtime_port = Arc::new(RuntimeAdapter { runtime }) as Arc<dyn RuntimePort>;
     Arc::new(DaemonIpcDispatcher {
         runtime: runtime_port,
+        settings,
         coordinator,
         intent_tx,
         portal,
@@ -435,8 +443,10 @@ pub async fn run_headless(socket_path: std::path::PathBuf) -> Result<(), String>
         }
     });
 
+    let settings = init_settings(&runtime).await;
     let dispatcher = create_ipc_dispatcher(
         runtime,
+        settings,
         coordinator,
         host_event_tx.clone(),
         intent_tx,
@@ -490,4 +500,130 @@ pub async fn run_headless(socket_path: std::path::PathBuf) -> Result<(), String>
     shutdown(handle).await;
     let _ = event_worker.await;
     Ok(())
+}
+
+// ─── 设置系统装配 ─────────────────────────────────────────────────────────
+
+/// 软卸载数据保留期（天）。
+pub const UNINSTALLED_RETENTION_DAYS: u64 = 30;
+
+/// 初始化设置服务。
+///
+/// 返回 `None` 表示设置系统不可用（例如主进程无法打开设置存储）；
+/// 调用方应继续启动，相关 IPC 命令返回不可用即可。
+pub async fn init_settings(runtime: &ActionRuntime) -> Option<Arc<SettingsService>> {
+    let dirs = match flick_data::DataDirectories::discover() {
+        Ok(dirs) => dirs,
+        Err(error) => {
+            tracing::warn!(%error, "设置系统不可用：无法解析数据目录");
+            return None;
+        }
+    };
+    let keys: flick_data::SharedKeySource = if std::env::var_os("FLICK_MASTER_KEY").is_some() {
+        Arc::new(flick_data::EnvMasterKeySource)
+    } else {
+        // 密钥来源缺失时仍可启动：明文字段可用，secret 读写会明确报错。
+        Arc::new(flick_data::UnavailableMasterKeySource)
+    };
+    init_settings_at(runtime, dirs, keys).await
+}
+
+/// 在指定目录与主密钥来源上初始化设置服务（便于测试注入）。
+pub async fn init_settings_at(
+    runtime: &ActionRuntime,
+    dirs: flick_data::DataDirectories,
+    keys: flick_data::SharedKeySource,
+) -> Option<Arc<SettingsService>> {
+    let storage = match StorageManager::open(dirs, keys) {
+        Ok(storage) => Arc::new(storage),
+        Err(error) => {
+            tracing::warn!(%error, "设置系统不可用：无法打开设置存储");
+            return None;
+        }
+    };
+
+    let service = Arc::new(SettingsService::new(storage));
+
+    let version = env!("CARGO_PKG_VERSION");
+    if let Err(error) = service.register_schema(core_schema(), version, version) {
+        tracing::warn!(%error, "核心设置 schema 注册失败");
+    }
+
+    for manifest in runtime.plugin_manifests().await {
+        let schema = SettingSchema {
+            namespace: SettingNamespace::Plugin(manifest.id.clone()),
+            declarations: manifest.settings.clone(),
+            schema_version: 1,
+        };
+        if let Err(error) =
+            service.register_schema(schema, &manifest.version, &manifest.version)
+        {
+            tracing::warn!(plugin = %manifest.id, %error, "插件设置 schema 注册失败");
+        }
+    }
+
+    match service
+        .storage()
+        .purge_uninstalled_older_than(UNINSTALLED_RETENTION_DAYS)
+    {
+        Ok(purged) if !purged.is_empty() => {
+            tracing::info!(count = purged.len(), ?purged, "已清理过期卸载数据");
+        }
+        Ok(_) => {}
+        Err(error) => tracing::warn!(%error, "清理过期卸载数据失败"),
+    }
+
+    Some(service)
+}
+
+#[cfg(test)]
+mod init_settings_tests {
+    use super::*;
+
+    async fn runtime_with_builtins() -> Arc<ActionRuntime> {
+        let runtime = Arc::new(ActionRuntime::new());
+        flick_builtins::register_builtin(&runtime)
+            .await
+            .expect("register builtin plugins");
+        runtime.activate_all_plugins().await;
+        runtime
+    }
+
+    #[tokio::test]
+    async fn registers_core_and_plugin_settings() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        let dirs = flick_data::DataDirectories::with_roots(
+            root.join("config"),
+            root.join("data"),
+            root.join("cache"),
+            root.join("runtime"),
+        );
+        let keys: flick_data::SharedKeySource = Arc::new(flick_data::FixedMasterKeySource(
+            flick_data::MasterKey {
+                key_id: "test".into(),
+                bytes: [3u8; 32],
+            },
+        ));
+        let runtime = runtime_with_builtins().await;
+
+        let service = init_settings_at(&runtime, dirs, keys)
+            .await
+            .expect("设置服务应可用");
+        assert!(service.registered_namespaces().iter().any(|ns| ns == "core"));
+
+        let mode =
+            flick_domain::SettingKey::new(flick_domain::SettingNamespace::Core, "theme.mode");
+        assert_eq!(
+            service.resolved(&mode).unwrap(),
+            flick_domain::SettingValue::Enum("dark".into())
+        );
+
+        for plugin_id in runtime.registered_plugin_ids().await {
+            assert!(
+                service.schema(&plugin_id).is_some(),
+                "插件 {plugin_id} 的设置 schema 应已注册"
+            );
+        }
+    }
 }

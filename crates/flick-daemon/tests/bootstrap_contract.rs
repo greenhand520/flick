@@ -192,6 +192,7 @@ async fn build_dispatcher_with_lifecycle(
     (
         bootstrap::DaemonIpcDispatcher {
             runtime,
+            settings: None,
             coordinator,
             intent_tx,
             portal,

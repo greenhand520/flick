@@ -12,6 +12,8 @@ flick-domain = { path = "../flick-domain" }
 flick-application = { path = "../flick-application" }
 flick-runtime = { path = "../flick-runtime" }
 flick-builtins = { path = "../flick-builtins" }
+flick-settings = { path = "../flick-settings" }
+flick-data = { path = "../flick-data" }
 flick-ipc = { path = "../flick-ipc" }
 flick-adapters-linux = { path = "../flick-adapters-linux" }
 flick-shell-gpui = { path = "../flick-shell-gpui" }

@@ -176,6 +176,13 @@ impl ActionRegistry {
     }
 
     /// 返回持有给定动作的插件 manifest（裸注册动作返回 None）。
+    /// 返回全部已注册插件的清单快照（按插件 id 升序）。
+    ///
+    /// 宿主据此把插件声明的设置项注册进设置系统。
+    pub fn plugin_manifests(&self) -> Vec<PluginManifest> {
+        self.manifests.values().cloned().collect()
+    }
+
     pub fn plugin_for_action(&self, id: &ActionId) -> Option<&PluginManifest> {
         let plugin_id = self.entries.get(id)?.plugin_id.as_ref()?;
         self.manifests.get(plugin_id)

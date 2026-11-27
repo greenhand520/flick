@@ -238,8 +238,10 @@ fn run_graphical(socket_path: PathBuf) -> Result<(), String> {
                     }
                 });
 
+                let settings = bootstrap::init_settings(&runtime).await;
                 let dispatcher = bootstrap::create_ipc_dispatcher(
                     runtime,
+                    settings,
                     coordinator,
                     host_event_tx.clone(),
                     intent_tx,
