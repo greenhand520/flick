@@ -12,6 +12,9 @@ use flick_plugin::{
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
+/// 单次搜索最多返回多少条 action candidates（设计文档 §9 约束 8）。
+pub const MAX_ACTION_RESULTS: usize = 100;
+
 /// 注册表中的一个条目：描述符 + 处理器 + 所属插件 id（裸注册时为 None）。
 struct Entry {
     descriptor: ActionDescriptor,
@@ -238,6 +241,7 @@ impl ActionRegistry {
                 .partial_cmp(&a.score)
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
+        results.truncate(MAX_ACTION_RESULTS);
         results
     }
 
@@ -304,10 +308,12 @@ impl ActionRegistry {
                 .then_with(|| left_order.cmp(right_order))
         });
 
-        scored
+        let mut results: Vec<RouteItem> = scored
             .into_iter()
             .map(|(_, candidate)| candidate.item)
-            .collect()
+            .collect();
+        results.truncate(MAX_ACTION_RESULTS);
+        results
     }
 }
 

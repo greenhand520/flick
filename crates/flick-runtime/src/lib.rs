@@ -28,5 +28,5 @@ pub use flick_plugin::{
     PluginRegistrationError, PluginRuntimeError, PluginUiFactory, SurfaceError, SurfaceHandler,
     SurfaceSession, validate_manifest,
 };
-pub use registry::ActionRegistry;
+pub use registry::{ActionRegistry, MAX_ACTION_RESULTS};
 pub use runtime::{ActionRuntime, MAX_EXECUTION_ITEMS_PER_ACTION, SEARCH_INVOKE_TIMEOUT_MS};
