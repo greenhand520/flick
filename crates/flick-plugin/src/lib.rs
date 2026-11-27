@@ -13,3 +13,14 @@ pub use contract::{
 };
 pub use dependency::{DependencyResolution, resolve_dependencies};
 pub use manifest::validate_manifest;
+
+// 插件作者只需依赖 `flick-plugin`，即可拿到编写插件所需的全部领域类型。
+// 这些类型仍定义在 `flick-domain`（跨层共享的数据词汇），此处仅做转出，
+// 避免插件作者同时 import 两个 crate。
+pub use flick_domain::{
+    ActionContext, ActionDescriptor, ActionError, ActionId, ActionOutcome, ActionRequest,
+    ActionVisibility, Architecture, Category, DependencyRequirement, ExecutionEventKind,
+    ExecutionMode, InputType, OperatingSystem, PluginDependency, PluginKind, PluginManifest,
+    SettingDecl, SettingKind, SurfaceContent, SurfaceEventKind, SurfaceSessionId, SurfaceKind,
+    SurfacePlacement, UiSurfaceDecl,
+};
