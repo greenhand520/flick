@@ -379,6 +379,89 @@ impl DaemonIpcDispatcher {
     }
 }
 
+/// 把 [`SettingsService`] 适配成运行时需要的两个句柄：
+/// [`flick_plugin::SettingsProvider`]（快照 + 订阅）与
+/// [`flick_domain::settings::SettingSecretReader`]（实时解密 secret）。
+pub struct SettingsAdapter {
+    service: Arc<SettingsService>,
+}
+
+impl SettingsAdapter {
+    /// 用共享的设置服务构造适配器。
+    pub fn new(service: Arc<SettingsService>) -> Self {
+        Self { service }
+    }
+
+    /// 解析某插件的快照：合并声明默认值、**跳过 secret**。
+    fn snapshot_of(service: &SettingsService, plugin_id: &str) -> ConfigSnapshot {
+        let Some(schema) = service.schema(plugin_id) else {
+            return ConfigSnapshot::empty();
+        };
+        let namespace = SettingNamespace::Plugin(plugin_id.to_string());
+        let mut values = std::collections::BTreeMap::new();
+        for decl in &schema.declarations {
+            if decl.secret {
+                continue;
+            }
+            let key = SettingKey::new(namespace.clone(), decl.key.clone());
+            if let Ok(value) = service.resolved(&key) {
+                values.insert(decl.key.clone(), value);
+            }
+        }
+        let revision = service.list(plugin_id).map(|s| s.revision).unwrap_or(0);
+        ConfigSnapshot {
+            namespace: plugin_id.to_string(),
+            revision,
+            values,
+        }
+    }
+}
+
+impl flick_plugin::SettingsProvider for SettingsAdapter {
+    fn snapshot(&self, plugin_id: &str) -> ConfigSnapshot {
+        Self::snapshot_of(&self.service, plugin_id)
+    }
+
+    fn subscribe(&self, plugin_id: &str, listener: Arc<dyn Fn(ConfigSnapshot) + Send + Sync>) {
+        let weak = Arc::downgrade(&self.service);
+        let plugin = plugin_id.to_string();
+        let mut receiver = self.service.subscribe();
+        tokio::spawn(async move {
+            loop {
+                match receiver.recv().await {
+                    Ok(change) => {
+                        if change.namespace.as_str() != plugin {
+                            continue;
+                        }
+                        let Some(service) = weak.upgrade() else { break };
+                        listener(SettingsAdapter::snapshot_of(&service, &plugin));
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+                        tracing::warn!(plugin = %plugin, skipped, "设置变更订阅落后，重新推送快照");
+                        let Some(service) = weak.upgrade() else { break };
+                        listener(SettingsAdapter::snapshot_of(&service, &plugin));
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                }
+            }
+        });
+    }
+}
+
+impl flick_domain::settings::SettingSecretReader for SettingsAdapter {
+    fn secret(&self, plugin_id: &str, key: &str) -> Option<String> {
+        let key = SettingKey::new(SettingNamespace::Plugin(plugin_id.to_string()), key);
+        match self.service.get(&key) {
+            Ok(Some(flick_domain::settings::SettingValue::String(value))) => Some(value),
+            Ok(_) => None,
+            Err(error) => {
+                tracing::debug!(%error, plugin = %plugin_id, "读取 secret 失败");
+                None
+            }
+        }
+    }
+}
+
 /// 每日清理一次过期卸载数据的后台任务。
 ///
 /// 返回的句柄在 `cancel` 触发后结束；每次清理放到 blocking 线程池，
@@ -768,6 +851,11 @@ pub async fn init_settings_at(
         }
     }
 
+    let adapter = Arc::new(SettingsAdapter::new(Arc::clone(&service)));
+    runtime.set_settings_provider(Arc::clone(&adapter) as Arc<dyn flick_plugin::SettingsProvider>);
+    runtime
+        .set_settings_secrets(Arc::clone(&adapter) as Arc<dyn flick_domain::settings::SettingSecretReader>);
+
     match service
         .storage()
         .purge_uninstalled_older_than(UNINSTALLED_RETENTION_DAYS)
@@ -931,6 +1019,85 @@ mod init_settings_tests {
         std::fs::write(root.join("nested").join("b.bin"), vec![0u8; 32]).unwrap();
         assert_eq!(dir_size(root), 42);
         assert_eq!(dir_size(&root.join("missing")), 0);
+    }
+
+    fn adapter_service(temp: &tempfile::TempDir) -> Arc<SettingsService> {
+        let root = temp.path();
+        let dirs = flick_data::DataDirectories::with_roots(
+            root.join("config"),
+            root.join("data"),
+            root.join("cache"),
+            root.join("runtime"),
+        );
+        let keys: flick_data::SharedKeySource = Arc::new(flick_data::FixedMasterKeySource(
+            flick_data::MasterKey {
+                key_id: "test".into(),
+                bytes: [7u8; 32],
+            },
+        ));
+        Arc::new(SettingsService::new(Arc::new(
+            StorageManager::open(dirs, keys).unwrap(),
+        )))
+    }
+
+    fn plugin_schema() -> flick_domain::settings::SettingSchema {
+        use flick_domain::settings::{SettingDecl, SettingKind, SettingSchema, SettingValue};
+        let decl = |key: &str, kind: SettingKind, secret: bool| SettingDecl {
+            key: key.to_string(),
+            renamed_from: None,
+            label: key.to_string(),
+            description: String::new(),
+            kind,
+            default: None,
+            secret,
+        };
+        SettingSchema {
+            namespace: SettingNamespace::Plugin("flick.demo".into()),
+            declarations: vec![
+                SettingDecl {
+                    default: Some(SettingValue::Bool(true)),
+                    ..decl("enabled", SettingKind::Bool, false)
+                },
+                decl("api_token", SettingKind::String, true),
+            ],
+            schema_version: 1,
+        }
+    }
+
+    #[test]
+    fn adapter_snapshot_merges_defaults_and_skips_secret() {
+        use flick_domain::settings::SettingValue;
+        let temp = tempfile::tempdir().unwrap();
+        let service = adapter_service(&temp);
+        service
+            .register_schema(plugin_schema(), "1.0.0", "1.0.0")
+            .unwrap();
+        let adapter = SettingsAdapter::new(Arc::clone(&service));
+
+        use flick_plugin::SettingsProvider;
+        let snapshot = adapter.snapshot("flick.demo");
+        assert_eq!(snapshot.namespace, "flick.demo");
+        assert_eq!(snapshot.bool("enabled"), Some(true));
+        assert_eq!(snapshot.value("api_token"), None, "secret 不得进入快照");
+
+        // 写入 secret 后可通过 reader 实时取到，但快照仍然没有。
+        let key = SettingKey::new(SettingNamespace::Plugin("flick.demo".into()), "api_token");
+        service.set(&key, SettingValue::String("tok".into())).unwrap();
+        use flick_domain::settings::SettingSecretReader;
+        assert_eq!(adapter.secret("flick.demo", "api_token"), Some("tok".into()));
+        assert_eq!(adapter.snapshot("flick.demo").value("api_token"), None);
+    }
+
+    #[test]
+    fn adapter_snapshot_is_empty_for_unknown_plugin() {
+        let temp = tempfile::tempdir().unwrap();
+        let service = adapter_service(&temp);
+        let adapter = SettingsAdapter::new(service);
+        use flick_plugin::SettingsProvider;
+        let snapshot = adapter.snapshot("flick.unknown");
+        assert!(snapshot.is_empty());
+        use flick_domain::settings::SettingSecretReader;
+        assert_eq!(adapter.secret("flick.unknown", "x"), None);
     }
 
     #[tokio::test]

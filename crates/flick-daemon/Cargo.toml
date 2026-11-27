@@ -10,6 +10,7 @@ path = "src/main.rs"
 [dependencies]
 flick-domain = { path = "../flick-domain" }
 flick-application = { path = "../flick-application" }
+flick-plugin = { path = "../flick-plugin" }
 flick-runtime = { path = "../flick-runtime" }
 flick-builtins = { path = "../flick-builtins" }
 flick-settings = { path = "../flick-settings" }

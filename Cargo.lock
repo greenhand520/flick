@@ -1861,6 +1861,7 @@ dependencies = [
  "flick-data",
  "flick-domain",
  "flick-ipc",
+ "flick-plugin",
  "flick-runtime",
  "flick-settings",
  "flick-shell-gpui",
