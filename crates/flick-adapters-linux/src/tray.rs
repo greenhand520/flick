@@ -44,6 +44,12 @@ pub struct MenuItemSpec {
 /// 返回托盘菜单结构（与设计文档一致）。
 pub fn menu_spec() -> Vec<MenuItemSpec> {
     vec![
+        // 有些桌面（如部分 GNOME 配置）不响应 SNI 左键点击，提供一个显式入口。
+        MenuItemSpec {
+            id: Some("search"),
+            label: "显示搜索",
+        },
+        MenuItemSpec { id: None, label: "" },
         MenuItemSpec {
             id: Some("home"),
             label: "主页",
@@ -67,6 +73,7 @@ pub fn menu_spec() -> Vec<MenuItemSpec> {
 /// 把菜单 id 映射成托盘事件；未知 id（含分隔线）返回 `None`。
 pub fn map_menu_click(id: &str) -> Option<TrayEvent> {
     match id {
+        "search" => Some(TrayEvent::Activate),
         "home" => Some(TrayEvent::Home),
         "settings" => Some(TrayEvent::Settings),
         "about" => Some(TrayEvent::About),
@@ -298,11 +305,13 @@ mod tests {
     #[test]
     fn menu_spec_matches_design() {
         let spec = menu_spec();
-        assert_eq!(spec.len(), 5, "4 个菜单项 + 1 条分隔线");
+        assert_eq!(spec.len(), 7, "5 个菜单项 + 2 条分隔线");
         let ids: Vec<Option<&str>> = spec.iter().map(|item| item.id).collect();
         assert_eq!(
             ids,
             vec![
+                Some("search"),
+                None,
                 Some("home"),
                 Some("settings"),
                 Some("about"),
@@ -310,11 +319,13 @@ mod tests {
                 Some("quit")
             ]
         );
-        assert_eq!(spec[3].id, None, "第 4 项必须是分隔线");
+        assert_eq!(spec[1].id, None, "「显示搜索」下方必须是分隔线");
+        assert_eq!(spec[5].id, None, "「退出」上方必须是分隔线");
     }
 
     #[test]
     fn map_menu_click_maps_known_ids() {
+        assert_eq!(map_menu_click("search"), Some(TrayEvent::Activate));
         assert_eq!(map_menu_click("home"), Some(TrayEvent::Home));
         assert_eq!(map_menu_click("settings"), Some(TrayEvent::Settings));
         assert_eq!(map_menu_click("about"), Some(TrayEvent::About));
@@ -376,7 +387,7 @@ mod tests {
             warned: Arc::new(AtomicBool::new(false)),
         };
         let menu = tray.menu();
-        assert_eq!(menu.len(), 5);
+        assert_eq!(menu.len(), 7);
         let mut fired = Vec::new();
         for item in menu {
             if let ksni::MenuItem::Standard(item) = item {
@@ -389,6 +400,7 @@ mod tests {
         assert_eq!(
             fired,
             vec![
+                TrayEvent::Activate,
                 TrayEvent::Home,
                 TrayEvent::Settings,
                 TrayEvent::About,
