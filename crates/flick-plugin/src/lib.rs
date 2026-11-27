@@ -4,10 +4,12 @@
 //! 静态校验 / 依赖解析；不依赖 tokio，也不持有任何注册表状态。
 
 mod contract;
+mod dependency;
 mod manifest;
 
 pub use contract::{
     ActionHandler, ActionSpec, Plugin, PluginLifecycle, PluginRegistrationError, PluginRuntimeError,
     PluginUiFactory, SurfaceError, SurfaceHandler, SurfaceSession,
 };
+pub use dependency::{DependencyResolution, resolve_dependencies};
 pub use manifest::validate_manifest;
