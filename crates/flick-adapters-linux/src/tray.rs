@@ -3,6 +3,10 @@
 //! 只负责把 DBus 托盘事件翻译成 [`TrayEvent`]，不认识 daemon 的协调器与
 //! 生命周期类型；图标复用内置 SVG（见 [`crate::flick_icon`]）。
 
+use std::sync::OnceLock;
+
+use ksni::Icon;
+
 /// 托盘图标在 DBus 上的稳定标识。
 pub const TRAY_ID: &str = "flick";
 /// 托盘图标的展示名称。
@@ -87,6 +91,49 @@ pub fn argb_from_rgba(width: u32, height: u32, rgba: &[u8]) -> Vec<u8> {
     out
 }
 
+/// 渲染托盘图标（32px，ARGB32），结果进程内缓存。
+pub fn render_tray_icon() -> Icon {
+    static CACHE: OnceLock<Icon> = OnceLock::new();
+    CACHE.get_or_init(render_tray_icon_uncached).clone()
+}
+
+/// 真正的光栅化：复用 `portal_identity` 相同的 resvg 渲染路径。
+fn render_tray_icon_uncached() -> Icon {
+    let size = ICON_SIZE;
+    let blank = || Icon {
+        width: size as i32,
+        height: size as i32,
+        data: Vec::new(),
+    };
+
+    let options = resvg::usvg::Options::default();
+    let tree = match resvg::usvg::Tree::from_str(crate::flick_icon::FLICK_ICON_SVG, &options) {
+        Ok(tree) => tree,
+        Err(error) => {
+            tracing::warn!(%error, "托盘图标解析失败，使用无图标");
+            return blank();
+        }
+    };
+    let mut pixmap = match resvg::tiny_skia::Pixmap::new(size, size) {
+        Some(pixmap) => pixmap,
+        None => {
+            tracing::warn!("托盘图标画布创建失败");
+            return blank();
+        }
+    };
+    let scale = size as f32 / 1024.0;
+    resvg::render(
+        &tree,
+        resvg::tiny_skia::Transform::from_scale(scale, scale),
+        &mut pixmap.as_mut(),
+    );
+    Icon {
+        width: size as i32,
+        height: size as i32,
+        data: argb_from_rgba(size, size, pixmap.data()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -135,5 +182,23 @@ mod tests {
     fn map_menu_click_ignores_unknown_id() {
         assert_eq!(map_menu_click("nope"), None);
         assert_eq!(map_menu_click(""), None);
+    }
+
+    #[test]
+    fn render_tray_icon_produces_argb_pixels() {
+        let icon = render_tray_icon();
+        assert_eq!(icon.width, ICON_SIZE as i32);
+        assert_eq!(icon.height, ICON_SIZE as i32);
+        assert_eq!(icon.data.len(), (ICON_SIZE * ICON_SIZE * 4) as usize);
+        assert!(icon.data.iter().any(|byte| *byte != 0), "图标不能是全透明");
+    }
+
+    #[test]
+    fn render_tray_icon_is_deterministic() {
+        let first = render_tray_icon();
+        let second = render_tray_icon();
+        assert_eq!(first.width, second.width);
+        assert_eq!(first.height, second.height);
+        assert_eq!(first.data, second.data, "同一 SVG 渲染结果必须一致");
     }
 }
