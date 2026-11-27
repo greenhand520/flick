@@ -16,6 +16,7 @@ pub mod plugin;
 pub mod route;
 pub mod surface;
 pub mod ui;
+pub mod usage;
 
 /// 应用在桌面环境中的反向 DNS 标识；同时用作 portal app id、`.desktop`
 /// 文件名与 GPUI 窗口的 `app_id`，三者必须一致，否则 GNOME 会显示 "null"。
@@ -43,3 +44,4 @@ pub use surface::{
     SurfaceEventKind, SurfaceNode,
 };
 pub use ui::{HostToUi, RuntimeStatus, UiIntent, UiToHost};
+pub use usage::{UsageStat, UsageStore, now_secs};
