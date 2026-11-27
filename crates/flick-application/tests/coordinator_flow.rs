@@ -308,9 +308,9 @@ async fn invoke_without_current_routes_is_rejected() {
     }
 }
 
-/// 代次已过期（用户又敲了字）的候选必须被拒绝。
+/// 宿主从未发出过的「未来代次」必须被拒绝（UI 不可能持有）。
 #[tokio::test]
-async fn invoke_with_stale_generation_is_rejected() {
+async fn invoke_with_future_generation_is_rejected() {
     let action_id = ActionId::from_static("test.action.v1.run");
     let mut routes = HashMap::new();
     routes.insert(
@@ -331,10 +331,12 @@ async fn invoke_with_stale_generation_is_rejected() {
     let newer = QueryGeneration::INITIAL.next();
     coord.handle_ui(text_query(newer, "hello")).await;
 
+    // 宿主只见过 INITIAL 与 INITIAL.next()，INITIAL.next().next() 是未来代次。
+    let future = QueryGeneration::INITIAL.next().next();
     let inv_id = InvocationId::new();
     coord
         .handle_ui(UiToHost::Invoke {
-            generation: QueryGeneration::INITIAL,
+            generation: future,
             item_id: format!("action:{action_id}"),
             invocation_id: inv_id,
             action_id,
@@ -351,6 +353,70 @@ async fn invoke_with_stale_generation_is_rejected() {
             ..
         })
     ));
+}
+
+/// 手动累积多代候选后，提交「上一代遗留、不在最新批」的候选仍应被接受。
+#[tokio::test]
+async fn invoke_with_accumulated_older_candidate_is_accepted() {
+    let action_a = ActionId::from_static("test.action.v1.first");
+    let action_b = ActionId::from_static("test.action.v1.second");
+    let mut routes = HashMap::new();
+    routes.insert(
+        "first".to_string(),
+        (
+            vec![RouteItem::action(action_a.clone(), "First", 1.0)],
+            Duration::ZERO,
+        ),
+    );
+    // 第二批不含 A，只有 B。
+    routes.insert(
+        "second".to_string(),
+        (
+            vec![RouteItem::action(action_b.clone(), "Second", 1.0)],
+            Duration::ZERO,
+        ),
+    );
+    let runtime = Arc::new(FakeRuntime::with_routes(routes));
+    let invocations = runtime.invocations.clone();
+    let (sink, events) = FakeSink::new();
+    let coord = ApplicationCoordinator::new(runtime, Arc::new(sink));
+
+    let gen_a = QueryGeneration::INITIAL;
+    let gen_b = gen_a.next();
+    coord.handle_ui(text_query(gen_a, "first")).await;
+    coord.handle_ui(text_query(gen_b, "second")).await;
+
+    // A 属于旧代次、已不在最新批，但仍在会话并集里，应可提交。
+    let inv_id = InvocationId::new();
+    coord
+        .handle_ui(UiToHost::Invoke {
+            generation: gen_b,
+            item_id: format!("action:{action_a}"),
+            invocation_id: inv_id,
+            action_id: action_a.clone(),
+            input: ActionInput::plain_text("first"),
+        })
+        .await;
+
+    // 被接受并实际调用运行时。
+    {
+        let invocs = invocations.lock().unwrap();
+        assert_eq!(invocs.len(), 1, "accumulated older candidate must be accepted");
+        assert_eq!(invocs[0].action_id, action_a);
+    }
+    // 最后事件不是 UnknownAction。
+    let emitted = events.lock().unwrap();
+    assert!(
+        !matches!(
+            emitted.last(),
+            Some(HostToUi::InvocationCompleted {
+                outcome: ActionOutcome::Error(ActionError::UnknownAction { .. }),
+                ..
+            })
+        ),
+        "accepted invocation must not report UnknownAction, got {:?}",
+        emitted.last()
+    );
 }
 
 /// 代次正确但候选不在当前结果集里的也必须被拒绝。

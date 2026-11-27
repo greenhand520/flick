@@ -30,32 +30,51 @@ pub struct ApplicationCoordinator {
     panel_visible: AtomicBool,
 }
 
-/// 最近一次发给 UI 的路由快照，用于校验 UI 回传的候选身份。
+/// 本面板会话内已发出的候选并集，用于校验 UI 回传的候选身份。
 ///
-/// 设计文档 §12.2-3：`Invoke` 必须携带 `generation + item_id`，
-/// 宿主只接受属于当前代次、且仍在最近一次结果集中的候选。
+/// 设计文档 §12.2-3 要求 `Invoke` 携带 `generation + item_id`。由于手动输入
+/// 会把多代候选累积展示，校验必须覆盖整个会话内的并集，而非仅最新一批；
+/// 面板会话结束（`SearchPanelClosed`）时清空。
 #[derive(Debug, Default)]
 struct RouteSnapshot {
-    /// 快照所属的查询代次；`None` 表示尚未发出任何结果。
-    generation: Option<QueryGeneration>,
-    /// 该代次的候选列表。
+    /// 已发出过的全部候选（按 `(item_id, action_id)` 去重）。
     items: Vec<RouteItem>,
+    /// 见过的最大代次，用于拒绝 UI 不可能持有的「未来代次」。
+    latest_generation: Option<QueryGeneration>,
 }
 
 impl RouteSnapshot {
-    /// 记录一次已发出的路由结果。
+    /// 并入一次已发出的路由结果。
     fn record(&mut self, generation: QueryGeneration, items: &[RouteItem]) {
-        self.generation = Some(generation);
-        self.items = items.to_vec();
-    }
-
-    /// 候选是否属于当前代次且仍在结果集中。
-    fn contains(&self, generation: QueryGeneration, item_id: &str, action_id: &ActionId) -> bool {
-        self.generation == Some(generation)
-            && self
+        self.latest_generation = Some(match self.latest_generation {
+            Some(latest) if latest >= generation => latest,
+            _ => generation,
+        });
+        for item in items {
+            let known = self
                 .items
                 .iter()
-                .any(|item| item.item_id == item_id && &item.action_id == action_id)
+                .any(|existing| existing.item_id == item.item_id && existing.action_id == item.action_id);
+            if !known {
+                self.items.push(item.clone());
+            }
+        }
+    }
+
+    /// 候选是否属于本会话已发出的集合；未来代次一律拒绝。
+    fn contains(&self, generation: QueryGeneration, item_id: &str, action_id: &ActionId) -> bool {
+        if self.latest_generation.is_some_and(|latest| generation > latest) {
+            return false;
+        }
+        self.items
+            .iter()
+            .any(|item| item.item_id == item_id && &item.action_id == action_id)
+    }
+
+    /// 面板会话结束时清空。
+    fn clear(&mut self) {
+        self.items.clear();
+        self.latest_generation = None;
     }
 }
 
@@ -185,6 +204,10 @@ impl ApplicationCoordinator {
             UiToHost::SearchPanelClosed => {
                 // 记录面板不再可见。
                 self.panel_visible.store(false, Ordering::SeqCst);
+                // 面板会话结束：清空候选并集，避免下一会话误接受上一会话的候选。
+                if let Ok(mut snapshot) = self.routes.lock() {
+                    snapshot.clear();
+                }
             }
 
             // Surface 事件转发给运行时；结果作为 SurfaceUpdated 回送 UI，
