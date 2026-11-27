@@ -3,6 +3,7 @@ resolver = "3"
 members = [
     "crates/flick-domain",
     "crates/flick-data",
+    "crates/flick-settings",
     "crates/flick-application",
     "crates/flick-runtime",
     "crates/flick-plugin",

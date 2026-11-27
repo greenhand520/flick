@@ -364,6 +364,15 @@ impl SettingSchema {
     }
 }
 
+/// 设置变更通知：订阅者据此知道「哪个命名空间变到了哪个 revision」。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SettingChange {
+    /// 发生变化的命名空间。
+    pub namespace: SettingNamespace,
+    /// 变更后的 namespace 级 revision。
+    pub revision: u64,
+}
+
 /// 一次读取得到的一致快照：namespace、revision 与值集合。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SettingSnapshot {

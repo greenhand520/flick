@@ -41,8 +41,8 @@ pub use input::{
 pub use plugin::*;
 pub use route::{MatchField, RouteItem, RouteItemKey, RouteItemKind};
 pub use settings::{
-    SettingDecl, SettingKey, SettingKind, SettingNamespace, SettingSchema, SettingSnapshot,
-    SettingValue, SettingValueError,
+    SettingChange, SettingDecl, SettingKey, SettingKind, SettingNamespace, SettingSchema,
+    SettingSnapshot, SettingValue, SettingValueError,
 };
 pub use surface::{
     BadgeTone, ButtonTone, ListItem, SURFACE_SCHEMA_VERSION, SpacerSize, SurfaceContent,

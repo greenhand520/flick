@@ -1939,6 +1939,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "flick-settings"
+version = "0.1.0"
+dependencies = [
+ "flick-data",
+ "flick-domain",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "flick-shell-gpui"
 version = "0.2.0"
 dependencies = [
