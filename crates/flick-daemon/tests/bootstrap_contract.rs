@@ -68,6 +68,12 @@ impl RuntimePort for TestRuntimeAdapter {
     async fn surface_closed(&self, session: SurfaceSessionId) {
         self.runtime.surface_closed(session).await;
     }
+    async fn dependency_status(&self, plugin_id: &str) -> Vec<DependencyStatus> {
+        self.runtime.dependency_status(plugin_id).await
+    }
+    async fn registered_plugin_ids(&self) -> Vec<String> {
+        self.runtime.registered_plugin_ids().await
+    }
 }
 
 struct TestEventSink {
@@ -442,6 +448,36 @@ async fn doctor_merges_session_portal_and_ipc_facts() {
             assert!(value["ipc"]["socket"].is_string());
         }
         other => panic!("expected merged doctor result, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn doctor_reports_plugin_dependency_status() {
+    let (dispatcher, _) = build_dispatcher(None).await;
+
+    let result = dispatcher.dispatch(IpcCommand::Doctor).await;
+
+    match result {
+        IpcResult::Ok(value) => {
+            let plugins = value["plugins"]
+                .as_array()
+                .expect("doctor must report a plugins array");
+            let ids: Vec<&str> = plugins
+                .iter()
+                .filter_map(|entry| entry["plugin_id"].as_str())
+                .collect();
+            assert!(ids.contains(&"flick.builtin.echo"), "got {ids:?}");
+            assert!(ids.contains(&"flick.builtin.host"), "got {ids:?}");
+            assert!(ids.contains(&"flick.builtin.apps"), "got {ids:?}");
+            for entry in plugins {
+                assert_eq!(
+                    entry["dependencies"].as_array().map(Vec::len),
+                    Some(0),
+                    "builtin plugins declare no dependencies: {entry:?}"
+                );
+            }
+        }
+        other => panic!("expected doctor result, got {other:?}"),
     }
 }
 

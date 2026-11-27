@@ -3,8 +3,8 @@
 use crate::registry::ActionRegistry;
 use flick_domain::{
     ActionContext, ActionDescriptor, ActionError, ActionId, ActionInput, ActionOutcome,
-    ActionRequest, InputContext, InputType, InvocationId, RouteItem, SurfaceContent,
-    SurfaceEventKind, SurfaceSessionId,
+    ActionRequest, DependencyStatus, InputContext, InputType, InvocationId, RouteItem,
+    SurfaceContent, SurfaceEventKind, SurfaceSessionId,
 };
 use flick_plugin::{
     ActionHandler, Plugin, PluginRegistrationError, SurfaceError, SurfaceSession,
@@ -91,6 +91,28 @@ impl ActionRuntime {
                 tracing::warn!(?error, "plugin activate failed");
             }
         }
+    }
+
+    /// 解析所有插件的依赖关系并应用到注册表。
+    ///
+    /// 必需依赖缺失的插件会被标记为不可用，其动作从注册表移除
+    /// （不可搜索、不可调用）；manifest 保留以便诊断。返回全部
+    /// `DependencyMissing` 错误，不短路。
+    pub async fn resolve_dependencies(&self) -> Vec<PluginRegistrationError> {
+        let mut registry = self.registry.write().await;
+        registry.resolve_dependencies()
+    }
+
+    /// 查询某插件的依赖解析结果；未注册或没有依赖时返回空。
+    pub async fn dependency_status(&self, plugin_id: &str) -> Vec<DependencyStatus> {
+        let registry = self.registry.read().await;
+        registry.dependency_status(plugin_id)
+    }
+
+    /// 返回所有已注册插件 id（升序）。
+    pub async fn registered_plugin_ids(&self) -> Vec<String> {
+        let registry = self.registry.read().await;
+        registry.plugin_ids()
     }
 
     /// 为搜索查询返回匹配的 [`RouteItem`]s。

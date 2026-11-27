@@ -6,8 +6,9 @@
 
 use async_trait::async_trait;
 use flick_domain::{
-    ActionId, ActionOutcome, ActionRequest, ExecutionEventKind, HostToUi, InputContext, InputFacet,
-    InputType, InvocationId, RouteItem, SurfaceContent, SurfaceEventKind, SurfaceSessionId,
+    ActionId, ActionOutcome, ActionRequest, DependencyStatus, ExecutionEventKind, HostToUi,
+    InputContext, InputFacet, InputType, InvocationId, RouteItem, SurfaceContent, SurfaceEventKind,
+    SurfaceSessionId,
 };
 
 /// 对 Flick Runtime 的路由与调用能力的抽象。
@@ -80,6 +81,21 @@ pub trait RuntimePort: Send + Sync {
 
     /// 关闭一个 Surface 会话（幂等）。
     async fn surface_closed(&self, session: SurfaceSessionId);
+
+    /// 返回该插件声明的依赖解析结果。
+    ///
+    /// 默认返回空，便于测试替身逐步迁移；真实实现由
+    /// `RuntimeAdapter` 转发给 `ActionRuntime`。
+    async fn dependency_status(&self, _plugin_id: &str) -> Vec<DependencyStatus> {
+        Vec::new()
+    }
+
+    /// 返回所有已注册插件 id（升序）。
+    ///
+    /// 默认返回空，供测试替身省略。
+    async fn registered_plugin_ids(&self) -> Vec<String> {
+        Vec::new()
+    }
 }
 
 /// 协调器发出的 `HostToUi` 事件的接收器。

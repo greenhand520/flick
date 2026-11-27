@@ -66,6 +66,12 @@ impl RuntimePort for RuntimeAdapter {
     async fn surface_closed(&self, session: SurfaceSessionId) {
         self.runtime.surface_closed(session).await;
     }
+    async fn dependency_status(&self, plugin_id: &str) -> Vec<DependencyStatus> {
+        self.runtime.dependency_status(plugin_id).await
+    }
+    async fn registered_plugin_ids(&self) -> Vec<String> {
+        self.runtime.registered_plugin_ids().await
+    }
 }
 
 pub struct ChannelEventSink {
@@ -164,10 +170,12 @@ impl flick_ipc::server::IpcDispatcher for DaemonIpcDispatcher {
                     Some(portal) => portal_snapshot_value(&portal.diagnostics().await),
                     None => serde_json::json!({ "state": "headless_not_started" }),
                 };
+                let plugins = self.plugin_dependency_report().await;
                 IpcResult::Ok(serde_json::json!({
                     "session": probe_session(),
                     "portal": portal,
                     "ipc": { "socket": self.socket_path.display().to_string() },
+                    "plugins": plugins,
                 }))
             }
             IpcCommand::ShortcutsConfigure { preferred_trigger } => {
@@ -221,6 +229,24 @@ impl flick_ipc::server::IpcDispatcher for DaemonIpcDispatcher {
         if matches!(command, IpcCommand::Shutdown) {
             self.lifecycle.request_shutdown(ShutdownReason::Ipc);
         }
+    }
+}
+
+impl DaemonIpcDispatcher {
+    /// 汇总所有已注册插件的依赖状态，供 `flick doctor` 输出。
+    ///
+    /// 插件按 id 升序排列（注册表用 `BTreeMap` 存 manifest），
+    /// 保证同一台机器上多次 doctor 的输出稳定。
+    async fn plugin_dependency_report(&self) -> Vec<serde_json::Value> {
+        let mut report = Vec::new();
+        for plugin_id in self.runtime.registered_plugin_ids().await {
+            let dependencies = self.runtime.dependency_status(&plugin_id).await;
+            report.push(serde_json::json!({
+                "plugin_id": plugin_id,
+                "dependencies": dependencies,
+            }));
+        }
+        report
     }
 }
 
