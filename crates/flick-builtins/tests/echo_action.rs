@@ -1,7 +1,11 @@
 //! Echo 内置动作的测试。
 
+use std::collections::BTreeMap;
+
 use flick_builtins::echo::{ECHO_ACTION_ID, EchoHandler};
-use flick_domain::{PluginContext, ActionOutcome, ActionRequest, Caller};
+use flick_domain::{
+    ActionOutcome, ActionRequest, Caller, ConfigSnapshot, PluginContext, SettingValue,
+};
 use flick_runtime::ActionHandler;
 use tokio_util::sync::CancellationToken;
 
@@ -132,4 +136,36 @@ async fn register_builtin_resolves_dependencies_without_disabling_builtins() {
         .route("echo hello", flick_domain::InputType::PlainText)
         .await;
     assert_eq!(routes.len(), 1);
+}
+
+/// 插件设置 `prefix` 会拼在回显文本前；快照 revision 不影响语义。
+#[tokio::test]
+async fn echo_applies_prefix_from_plugin_settings() {
+    let snapshot = ConfigSnapshot {
+        namespace: "flick.builtin.echo".into(),
+        revision: 7,
+        values: BTreeMap::from([(
+            "prefix".to_string(),
+            SettingValue::String("[flick] ".into()),
+        )]),
+    };
+    let ctx = PluginContext::new(CancellationToken::new()).with_settings(snapshot);
+    let handler = EchoHandler;
+    let request = ActionRequest::new_echo("hello", Caller::ui("panel"));
+    match handler.invoke(request, ctx).await.expect("invoke ok") {
+        ActionOutcome::Data(val) => assert_eq!(val["echo"], "[flick] hello"),
+        other => panic!("expected Data, got {other:?}"),
+    }
+}
+
+/// 空快照（设置不可用）时按空前缀降级，不报错。
+#[tokio::test]
+async fn echo_falls_back_to_empty_prefix_without_settings() {
+    let ctx = PluginContext::new(CancellationToken::new()).with_settings(ConfigSnapshot::empty());
+    let handler = EchoHandler;
+    let request = ActionRequest::new_echo("hello", Caller::ui("panel"));
+    match handler.invoke(request, ctx).await.expect("invoke ok") {
+        ActionOutcome::Data(val) => assert_eq!(val["echo"], "hello"),
+        other => panic!("expected Data, got {other:?}"),
+    }
 }
