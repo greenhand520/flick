@@ -21,7 +21,7 @@ pub mod ports;
 pub mod presenter;
 pub mod query;
 
-pub use accumulate::{MAX_ACCUMULATED_RESULTS, merge_batch};
+pub use accumulate::{MAX_ACCUMULATED_RESULTS, SearchSession, merge_batch};
 pub use coordinator::ApplicationCoordinator;
 pub use ports::{HostEventSink, RuntimePort};
 pub use presenter::{PanelAction, PanelEvent, PanelState, SelectionState};

@@ -3,7 +3,7 @@
 //! 本模块只做纯数据合并，不接触 UI 或 Runtime：`PanelState` 在收到
 //! `HostToUi::Routes` 时调用 [`merge_batch`]，把新批次并入会话累积。
 
-use flick_domain::{RouteItem, RouteItemKey};
+use flick_domain::{RouteItem, UiInputKind};
 
 /// 累积结果上限；超出时按分数保留高分项（设计文档 §9 不变量 8）。
 pub const MAX_ACCUMULATED_RESULTS: usize = 200;
@@ -47,6 +47,104 @@ fn truncate_by_score(items: &mut Vec<RouteItem>) {
     // 恢复这些幸存项的原始相对顺序。
     order.sort_unstable();
     *items = order.into_iter().map(|index| items[index].clone()).collect();
+}
+
+/// 一次搜索面板会话的累积状态。
+///
+/// 生命周期与 `PanelState` 的可见性对齐：面板显示时 [`Self::begin`]，
+/// 隐藏/关闭时 [`Self::end`]。只有手动输入（`InputSource::Manual`）
+/// 的批次才累积；粘贴、拖拽、剪贴板图片只替换。
+#[derive(Debug, Clone)]
+pub struct SearchSession {
+    /// 已累积的结果（旧 → 新）。
+    accumulated: Vec<RouteItem>,
+    /// 本次会话是否处于手动累积模式。
+    manual: bool,
+    /// 会话当前的输入种类；种类变化会重置累积。
+    kind: UiInputKind,
+    /// 会话是否有效；隐藏/关闭之后失效，拒绝迟到的批次。
+    active: bool,
+}
+
+impl SearchSession {
+    /// 创建一个未激活的空会话。
+    pub fn new() -> Self {
+        Self {
+            accumulated: Vec::new(),
+            manual: false,
+            kind: UiInputKind::Text,
+            active: false,
+        }
+    }
+
+    /// 开始一个新会话；已激活时只更新模式与种类。
+    pub fn begin(&mut self, kind: UiInputKind, manual: bool) {
+        if self.active {
+            self.note_kind(kind, manual);
+            return;
+        }
+        self.accumulated.clear();
+        self.kind = kind;
+        self.manual = manual;
+        self.active = true;
+    }
+
+    /// 结束会话并清空累积。
+    pub fn end(&mut self) {
+        self.accumulated.clear();
+        self.manual = false;
+        self.active = false;
+    }
+
+    /// 只清空累积，保持会话有效（输入被清空时使用）。
+    pub fn clear(&mut self) {
+        self.accumulated.clear();
+    }
+
+    /// 会话是否有效。
+    pub fn is_active(&self) -> bool {
+        self.active
+    }
+
+    /// 会话是否处于手动累积模式；失效会话永远返回 `false`。
+    pub fn is_manual(&self) -> bool {
+        self.active && self.manual
+    }
+
+    /// 通知当前输入种类与来源；种类或模式变化时清空累积。
+    ///
+    /// 对应设计文档 §6.1 的重置条件 3：输入类型在
+    /// `Text` ↔ `Files`/`ClipboardImage` 之间切换即重置。
+    pub fn note_kind(&mut self, kind: UiInputKind, manual: bool) {
+        if self.kind != kind || self.manual != manual {
+            self.accumulated.clear();
+            self.kind = kind;
+            self.manual = manual;
+        }
+    }
+
+    /// 并入一批新结果并返回当前累积视图。
+    ///
+    /// 手动模式走累积合并；非手动模式直接替换（§6.1「对非手动输入不累积」）。
+    pub fn merge(&mut self, batch: Vec<RouteItem>) -> Vec<RouteItem> {
+        if !self.is_manual() {
+            self.accumulated = batch;
+            return self.accumulated.clone();
+        }
+        merge_batch(&mut self.accumulated, batch);
+        self.accumulated.clone()
+    }
+
+    /// 当前累积结果。
+    pub fn items(&self) -> &[RouteItem] {
+        &self.accumulated
+    }
+}
+
+impl Default for SearchSession {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 #[cfg(test)]
@@ -145,5 +243,73 @@ mod tests {
         merge_batch(&mut accumulated, vec![make("Firefox")]);
         assert_eq!(accumulated.len(), 1);
         assert_eq!(accumulated[0].kind, RouteItemKind::Execution);
+    }
+
+    /// 会话开始后处于有效状态，`end` 之后失效且累积被清空。
+    #[test]
+    fn session_lifecycle_begin_and_end() {
+        let mut session = SearchSession::new();
+        assert!(!session.is_active());
+        session.begin(UiInputKind::Text, true);
+        assert!(session.is_active());
+        assert!(session.is_manual());
+
+        session.merge(vec![action("a.v1.one", "A", 1.0)]);
+        assert_eq!(session.items().len(), 1);
+
+        session.end();
+        assert!(!session.is_active());
+        assert!(!session.is_manual());
+        assert!(session.items().is_empty());
+    }
+
+    /// 手动模式：新批次与旧批次合并。
+    #[test]
+    fn manual_session_merges_batches() {
+        let mut session = SearchSession::new();
+        session.begin(UiInputKind::Text, true);
+        session.merge(vec![action("a.v1.one", "A", 1.0)]);
+        let merged = session.merge(vec![action("a.v1.two", "B", 1.0)]);
+        assert_eq!(merged.len(), 2);
+        assert_eq!(merged[0].title, "A");
+        assert_eq!(merged[1].title, "B");
+    }
+
+    /// 非手动模式：新批次替换旧批次。
+    #[test]
+    fn non_manual_session_replaces_batches() {
+        let mut session = SearchSession::new();
+        session.begin(UiInputKind::Text, true);
+        session.merge(vec![action("a.v1.one", "A", 1.0)]);
+        session.begin(UiInputKind::Files, false);
+        let replaced = session.merge(vec![action("a.v1.two", "B", 1.0)]);
+        assert_eq!(replaced.len(), 1);
+        assert_eq!(replaced[0].title, "B");
+    }
+
+    /// 输入种类切换会清空累积（Text → Files，或反向）。
+    #[test]
+    fn kind_switch_clears_accumulation() {
+        let mut session = SearchSession::new();
+        session.begin(UiInputKind::Text, true);
+        session.merge(vec![action("a.v1.one", "A", 1.0)]);
+        assert_eq!(session.items().len(), 1);
+
+        session.note_kind(UiInputKind::Files, false);
+        assert!(session.items().is_empty());
+
+        session.note_kind(UiInputKind::Files, false);
+        assert!(session.items().is_empty());
+    }
+
+    /// `clear` 只清累积，不结束会话。
+    #[test]
+    fn clear_keeps_session_active() {
+        let mut session = SearchSession::new();
+        session.begin(UiInputKind::Text, true);
+        session.merge(vec![action("a.v1.one", "A", 1.0)]);
+        session.clear();
+        assert!(session.is_active());
+        assert!(session.items().is_empty());
     }
 }
