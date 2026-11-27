@@ -4,12 +4,12 @@
 //! `RuntimePort`，并通过 `HostEventSink` 发出 `HostToUi` 事件。
 //! 它与运行时无关：使用 `async_trait`，不依赖任何特定的异步运行时。
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use flick_domain::{
-    ActionRequest, Caller, Deadline, HostToUi, InputContext, RouteItem, RouteItemKind, UiIntent,
-    UiToHost,
+    ActionError, ActionId, ActionOutcome, ActionRequest, Caller, Deadline, HostToUi, InputContext,
+    QueryGeneration, RouteItem, RouteItemKind, UiIntent, UiToHost,
 };
 
 use crate::ports::{HostEventSink, RuntimePort};
@@ -25,6 +25,8 @@ pub struct ApplicationCoordinator {
     runtime: Arc<dyn RuntimePort>,
     sink: Arc<dyn HostEventSink>,
     query_tracker: QueryTracker,
+    /// 最近一次发出的路由快照（同步锁，临界区内不做 `.await`）。
+    routes: Mutex<RouteSnapshot>,
     panel_visible: AtomicBool,
 }
 
@@ -60,6 +62,35 @@ fn merge_search_results(
     merged
 }
 
+/// 最近一次发给 UI 的路由快照，用于校验 UI 回传的候选身份。
+///
+/// 设计文档 §12.2-3：`Invoke` 必须携带 `generation + item_id`，
+/// 宿主只接受属于当前代次、且仍在最近一次结果集中的候选。
+#[derive(Debug, Default)]
+struct RouteSnapshot {
+    /// 快照所属的查询代次；`None` 表示尚未发出任何结果。
+    generation: Option<QueryGeneration>,
+    /// 该代次的候选列表。
+    items: Vec<RouteItem>,
+}
+
+impl RouteSnapshot {
+    /// 记录一次已发出的路由结果。
+    fn record(&mut self, generation: QueryGeneration, items: &[RouteItem]) {
+        self.generation = Some(generation);
+        self.items = items.to_vec();
+    }
+
+    /// 候选是否属于当前代次且仍在结果集中。
+    fn contains(&self, generation: QueryGeneration, item_id: &str, action_id: &ActionId) -> bool {
+        self.generation == Some(generation)
+            && self
+                .items
+                .iter()
+                .any(|item| item.item_id == item_id && &item.action_id == action_id)
+    }
+}
+
 impl ApplicationCoordinator {
     /// 使用给定的运行时和事件接收器创建一个新的协调器。
     pub fn new(runtime: Arc<dyn RuntimePort>, sink: Arc<dyn HostEventSink>) -> Self {
@@ -67,6 +98,7 @@ impl ApplicationCoordinator {
             runtime,
             sink,
             query_tracker: QueryTracker::new(),
+            routes: Mutex::new(RouteSnapshot::default()),
             panel_visible: AtomicBool::new(false),
         }
     }
@@ -94,8 +126,12 @@ impl ApplicationCoordinator {
                 );
                 let items = merge_search_results(action_items, execution_items);
 
-                // 仅当此代次仍为最新时才发出结果。
+                // 仅当此代次仍为最新时才发出结果，并留下快照供
+                // 后续 `Invoke` 做候选身份校验。
                 if self.query_tracker.is_current(generation) {
+                    if let Ok(mut snapshot) = self.routes.lock() {
+                        snapshot.record(generation, &items);
+                    }
                     self.sink.send(HostToUi::Routes { generation, items });
                 }
                 // 否则：有更新的查询取代了此查询 —— 静默丢弃。
@@ -127,12 +163,30 @@ impl ApplicationCoordinator {
             }
 
             UiToHost::Invoke {
+                generation,
+                item_id,
                 invocation_id,
                 action_id,
                 input,
-                // `generation` / `item_id` 在下一个 Task 用于候选身份校验。
-                ..
             } => {
+                // 候选身份校验：拒绝陈旧代次与不在结果集中的候选。
+                // 拒绝也要回 `InvocationCompleted`，否则 UI 会一直停在
+                // 「调用中」状态（`active_invocation` 不会被清掉）。
+                let known = self
+                    .routes
+                    .lock()
+                    .map(|snapshot| snapshot.contains(generation, &item_id, &action_id))
+                    .unwrap_or(false);
+                if !known {
+                    self.sink.send(HostToUi::InvocationCompleted {
+                        invocation_id,
+                        outcome: ActionOutcome::Error(ActionError::UnknownAction {
+                            action_id: action_id.to_string(),
+                        }),
+                    });
+                    return;
+                }
+
                 let request = ActionRequest {
                     invocation_id,
                     action_id,

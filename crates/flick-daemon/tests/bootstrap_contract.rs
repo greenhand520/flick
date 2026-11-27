@@ -282,10 +282,29 @@ async fn coordinator_portal_intent_does_not_invoke_runtime() {
 async fn coordinator_invoke_from_ui_returns_completion() {
     let (coordinator, _, mut events) = build_test_stack().await;
 
+    // 候选身份校验（§12.2-3）要求先有当前代次的 Routes。
+    coordinator
+        .handle_ui(UiToHost::QueryChanged {
+            generation: QueryGeneration::INITIAL,
+            input: SearchInputSnapshot::text("echo", InputSource::Manual),
+        })
+        .await;
+    let item_id = match events.recv().await.unwrap() {
+        HostToUi::Routes { generation, items } => {
+            assert_eq!(generation, QueryGeneration::INITIAL);
+            let echo = items
+                .iter()
+                .find(|item| item.action_id.as_str() == "flick.builtin.echo.v1.echo")
+                .expect("echo candidate");
+            echo.item_id.clone()
+        }
+        other => panic!("expected Routes, got {other:?}"),
+    };
+
     coordinator
         .handle_ui(UiToHost::Invoke {
             generation: QueryGeneration::INITIAL,
-            item_id: "action:flick.builtin.echo.v1.echo".into(),
+            item_id,
             invocation_id: InvocationId::new(),
             action_id: ActionId::from_static("flick.builtin.echo.v1.echo"),
             input: ActionInput::plain_text("hello"),

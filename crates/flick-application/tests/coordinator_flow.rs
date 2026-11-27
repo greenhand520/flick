@@ -66,12 +66,6 @@ impl FakeRuntime {
         *s.route_responses.try_lock().unwrap() = routes;
         s
     }
-
-    fn with_invoke_outcome(outcome: ActionOutcome) -> Self {
-        let s = Self::new();
-        *s.invoke_outcome.lock().unwrap() = outcome;
-        s
-    }
 }
 
 #[async_trait]
@@ -211,10 +205,24 @@ async fn invoke_from_ui_uses_ui_caller_and_forwards_completion() {
         message: "done".into(),
     };
 
-    let runtime = Arc::new(FakeRuntime::with_invoke_outcome(expected_outcome.clone()));
+    // 候选身份校验要求先有当前代次的结果集。
+    let mut routes = HashMap::new();
+    routes.insert(
+        "hello".to_string(),
+        (
+            vec![RouteItem::action(action_id.clone(), "Run", 1.0)],
+            Duration::ZERO,
+        ),
+    );
+    let runtime = Arc::new(FakeRuntime::with_routes(routes));
+    *runtime.invoke_outcome.lock().unwrap() = expected_outcome.clone();
     let invocations = runtime.invocations.clone();
     let (sink, events) = FakeSink::new();
     let coord = ApplicationCoordinator::new(runtime, Arc::new(sink));
+
+    coord
+        .handle_ui(text_query(QueryGeneration::INITIAL, "hello"))
+        .await;
 
     coord
         .handle_ui(UiToHost::Invoke {
@@ -236,11 +244,11 @@ async fn invoke_from_ui_uses_ui_caller_and_forwards_completion() {
         assert_eq!(invocs[0].input.text, "hello");
     }
 
-    // 验证完成事件已被转发。
+    // 验证完成事件已被转发（第一条是 Routes）。
     {
         let emitted = events.lock().unwrap();
-        assert_eq!(emitted.len(), 1);
-        match &emitted[0] {
+        assert_eq!(emitted.len(), 2, "Routes then InvocationCompleted");
+        match &emitted[1] {
             HostToUi::InvocationCompleted {
                 invocation_id,
                 outcome,
@@ -251,6 +259,126 @@ async fn invoke_from_ui_uses_ui_caller_and_forwards_completion() {
             other => panic!("expected InvocationCompleted, got {other:?}"),
         }
     }
+}
+
+/// 没有当前路由快照时（例如 UI 直接构造 Invoke），宿主必须拒绝。
+#[tokio::test]
+async fn invoke_without_current_routes_is_rejected() {
+    let inv_id = InvocationId::new();
+    let runtime = Arc::new(FakeRuntime::new());
+    let invocations = runtime.invocations.clone();
+    let (sink, events) = FakeSink::new();
+    let coord = ApplicationCoordinator::new(runtime, Arc::new(sink));
+
+    coord
+        .handle_ui(UiToHost::Invoke {
+            generation: QueryGeneration::INITIAL,
+            item_id: "action:test.action.v1.run".into(),
+            invocation_id: inv_id,
+            action_id: ActionId::from_static("test.action.v1.run"),
+            input: ActionInput::plain_text("hello"),
+        })
+        .await;
+
+    assert!(
+        invocations.lock().unwrap().is_empty(),
+        "runtime must not be invoked"
+    );
+    let emitted = events.lock().unwrap();
+    match emitted.as_slice() {
+        [HostToUi::InvocationCompleted {
+            invocation_id,
+            outcome: ActionOutcome::Error(ActionError::UnknownAction { .. }),
+        }] => assert_eq!(*invocation_id, inv_id),
+        other => panic!("expected rejection completion, got {other:?}"),
+    }
+}
+
+/// 代次已过期（用户又敲了字）的候选必须被拒绝。
+#[tokio::test]
+async fn invoke_with_stale_generation_is_rejected() {
+    let action_id = ActionId::from_static("test.action.v1.run");
+    let mut routes = HashMap::new();
+    routes.insert(
+        "hello".to_string(),
+        (
+            vec![RouteItem::action(action_id.clone(), "Run", 1.0)],
+            Duration::ZERO,
+        ),
+    );
+    let runtime = Arc::new(FakeRuntime::with_routes(routes));
+    let invocations = runtime.invocations.clone();
+    let (sink, events) = FakeSink::new();
+    let coord = ApplicationCoordinator::new(runtime, Arc::new(sink));
+
+    coord
+        .handle_ui(text_query(QueryGeneration::INITIAL, "hello"))
+        .await;
+    let newer = QueryGeneration::INITIAL.next();
+    coord.handle_ui(text_query(newer, "hello")).await;
+
+    let inv_id = InvocationId::new();
+    coord
+        .handle_ui(UiToHost::Invoke {
+            generation: QueryGeneration::INITIAL,
+            item_id: format!("action:{action_id}"),
+            invocation_id: inv_id,
+            action_id,
+            input: ActionInput::plain_text("hello"),
+        })
+        .await;
+
+    assert!(invocations.lock().unwrap().is_empty());
+    let emitted = events.lock().unwrap();
+    assert!(matches!(
+        emitted.last(),
+        Some(HostToUi::InvocationCompleted {
+            outcome: ActionOutcome::Error(ActionError::UnknownAction { .. }),
+            ..
+        })
+    ));
+}
+
+/// 代次正确但候选不在当前结果集里的也必须被拒绝。
+#[tokio::test]
+async fn invoke_with_unknown_item_id_is_rejected() {
+    let action_id = ActionId::from_static("test.action.v1.run");
+    let mut routes = HashMap::new();
+    routes.insert(
+        "hello".to_string(),
+        (
+            vec![RouteItem::action(action_id.clone(), "Run", 1.0)],
+            Duration::ZERO,
+        ),
+    );
+    let runtime = Arc::new(FakeRuntime::with_routes(routes));
+    let invocations = runtime.invocations.clone();
+    let (sink, events) = FakeSink::new();
+    let coord = ApplicationCoordinator::new(runtime, Arc::new(sink));
+
+    coord
+        .handle_ui(text_query(QueryGeneration::INITIAL, "hello"))
+        .await;
+
+    coord
+        .handle_ui(UiToHost::Invoke {
+            generation: QueryGeneration::INITIAL,
+            item_id: "action:not.in.routes".into(),
+            invocation_id: InvocationId::new(),
+            action_id,
+            input: ActionInput::plain_text("hello"),
+        })
+        .await;
+
+    assert!(invocations.lock().unwrap().is_empty());
+    let emitted = events.lock().unwrap();
+    assert!(matches!(
+        emitted.last(),
+        Some(HostToUi::InvocationCompleted {
+            outcome: ActionOutcome::Error(ActionError::UnknownAction { .. }),
+            ..
+        })
+    ));
 }
 
 /// 来自 Portal 的 `ShowSearchPanel` 意图必须发出相应的
