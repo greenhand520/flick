@@ -2,6 +2,7 @@
 resolver = "3"
 members = [
     "crates/flick-domain",
+    "crates/flick-data",
     "crates/flick-application",
     "crates/flick-runtime",
     "crates/flick-plugin",
@@ -37,6 +38,9 @@ ib_pinyin = { package = "ib-pinyin", version = "0.3" }
 
 # Storage
 rusqlite = {version = "0.40"}
+directories = "6.0"
+chacha20poly1305 = "0.10"
+rand = "0.8"
 
 # Linux / Portal
 ashpd = { version = "0.13", default-features = false, features = ["async-io"] }
