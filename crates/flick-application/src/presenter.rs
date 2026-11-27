@@ -231,16 +231,48 @@ impl PanelState {
         self.created = true;
         self.visible = true;
         self.hidden_at = None;
-        // 面板显示即开启一次新会话；隐藏期间的旧累积不会带进来。
-        self.session
-            .begin(self.input.kind, self.input.source == InputSource::Manual);
-        // 面板重新显示（含 resume 窗口内的快速重开）视为新会话：
-        // 推进代次，使隐藏前同代次在途的批次一律变陈旧，避免孤儿执行项混入。
-        if !was_visible {
-            self.generation = self.generation.next();
-        }
         self.activation_token = activation_token;
         self.activation_token_applied = false;
+
+        // 面板重新显示（含 resume 窗口内的快速重开）视为新会话：推进代次、
+        // 清空上一会话遗留的候选与选择，并按当前输入重建，避免激活已失效的行。
+        if !was_visible {
+            self.generation = self.generation.next();
+            self.session.clear();
+            self.session
+                .begin(self.input.kind, self.input.source == InputSource::Manual);
+            self.routes.clear();
+            self.selection.set_total(0);
+            self.active_invocation = None;
+            self.last_outcome = None;
+            // 让宿主按当前输入重新查询，重建本会话的候选（快照与展示保持一致）。
+            if self.surface_search {
+                // `surface_search` 为真但会话为空时不发 SurfaceEvent（不硬造 id）。
+                if let Some(session_id) = self.surface_session {
+                    if !self.query.is_empty() {
+                        return vec![PanelAction::SendToHost(UiToHost::SurfaceEvent {
+                            session_id,
+                            kind: flick_domain::SurfaceEventKind::SearchChanged {
+                                text: self.query.clone(),
+                            },
+                        })];
+                    }
+                }
+            } else if !self.input.text.is_empty()
+                || !self.input.files.is_empty()
+                || self.input.image.is_some()
+            {
+                return vec![PanelAction::SendToHost(UiToHost::QueryChanged {
+                    generation: self.generation,
+                    input: self.input.clone(),
+                })];
+            }
+            return vec![];
+        }
+
+        // 已可见（例如重复 Show）：沿用当前累积会话，只更新模式与种类。
+        self.session
+            .begin(self.input.kind, self.input.source == InputSource::Manual);
         vec![]
     }
 
@@ -544,7 +576,6 @@ impl PanelState {
         self.query.clear();
         self.input = SearchInputSnapshot::text(String::new(), InputSource::Manual);
         self.pending_query.clear();
-        self.generation = self.generation.next();
         self.debounce_revision = self.debounce_revision.wrapping_add(1);
         self.flushed_debounce_revision = None;
         self.session.end();
@@ -1037,14 +1068,25 @@ mod tests {
             },
             now,
         );
+        assert_eq!(st.routes.len(), 1);
 
         st.update_at(PanelEvent::Hide, now);
         // 1s 后重开，仍在 PANEL_RESUME_WINDOW 内（不触发 reset_expired_session）。
-        st.update_at(
+        // 重开视为新会话：旧候选被清空，不再点亮结果区。
+        let actions = st.update_at(
             PanelEvent::Show {
                 activation_token: None,
             },
             now + Duration::from_secs(1),
+        );
+        assert!(
+            st.routes.is_empty(),
+            "reopened panel must clear previous candidates"
+        );
+        // visible_manual_panel() 的 query 为空，重开不应触发重新查询。
+        assert!(
+            actions.is_empty(),
+            "empty query should not requery on reopen, got {actions:?}"
         );
 
         // 隐藏前同代次的在途执行项在重开后到达：应被判为陈旧丢弃。
@@ -1056,10 +1098,49 @@ mod tests {
             now + Duration::from_secs(1),
         );
 
-        // 结果区只剩那一条父 Action，没有 Execution 项混入。
-        assert_eq!(st.routes.len(), 1, "stale execution must not leak into resumed session");
-        let titles: Vec<&str> = st.routes.iter().map(|i| i.title.as_str()).collect();
-        assert_eq!(titles, vec!["父"], "only the parent action should remain");
+        // 结果区仍为空：陈旧执行项不会点亮结果区。
+        assert!(
+            st.routes.is_empty(),
+            "stale execution must not light up results in resumed session"
+        );
+    }
+
+    /// resume 窗口内快速重开且输入非空：应清空旧候选并让宿主按当前输入重新查询。
+    #[test]
+    fn resume_within_window_requeries_and_clears_routes() {
+        let mut st = visible_manual_panel();
+        let now = Instant::now();
+
+        st.update_at(PanelEvent::InputChanged("ho".into()), now);
+        let generation = st.generation;
+        st.update_at(
+            PanelEvent::Routes {
+                generation,
+                items: vec![action_route("a.v1.host", "Host", 1.0)],
+            },
+            now,
+        );
+        assert_eq!(st.routes.len(), 1);
+
+        st.update_at(PanelEvent::Hide, now);
+        // 1s 后重开（仍在 resume 窗口内）。
+        let actions = st.update_at(
+            PanelEvent::Show {
+                activation_token: None,
+            },
+            now + Duration::from_secs(1),
+        );
+
+        // 重开推进代次并按当前输入（"ho"）重新查询。
+        assert!(
+            actions.iter().any(|action| matches!(
+                action,
+                PanelAction::SendToHost(UiToHost::QueryChanged { generation, .. })
+                    if *generation == st.generation
+            )),
+            "reopen with non-empty input must requery, got {actions:?}"
+        );
+        assert!(st.routes.is_empty(), "reopened panel must clear previous candidates");
     }
 
     /// 附件输入（非手动）只替换，不累积。
