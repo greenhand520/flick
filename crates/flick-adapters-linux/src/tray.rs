@@ -50,7 +50,7 @@ pub fn menu_spec() -> Vec<MenuItemSpec> {
         },
         MenuItemSpec {
             id: Some("settings"),
-            label: "设置…",
+            label: "设置",
         },
         MenuItemSpec {
             id: Some("about"),
@@ -124,12 +124,22 @@ fn render_tray_icon_uncached() -> Icon {
             return blank();
         }
     };
-    let scale = size as f32 / 1024.0;
-    resvg::render(
-        &tree,
-        resvg::tiny_skia::Transform::from_scale(scale, scale),
-        &mut pixmap.as_mut(),
-    );
+    // 内置 SVG 的画布是 1024×1024，但内容（圆角方块）只占 112..912，
+    // 直接等比缩放到 32px 会留下约 11% 的透明边，视觉上比别的托盘图标小一圈。
+    // 因此按内容包围盒裁剪并居中，只保留 1px 呼吸位。
+    let bbox = tree.root().abs_bounding_box();
+    let pad = 1.0_f32;
+    let inner = (size as f32 - 2.0 * pad).max(1.0);
+    let (bw, bh) = (bbox.width(), bbox.height());
+    let transform = if bw > 0.0 && bh > 0.0 && bw.is_finite() && bh.is_finite() {
+        let scale = (inner / bw).min(inner / bh);
+        let tx = pad + (inner - bw * scale) / 2.0 - bbox.x() * scale;
+        let ty = pad + (inner - bh * scale) / 2.0 - bbox.y() * scale;
+        resvg::tiny_skia::Transform::from_row(scale, 0.0, 0.0, scale, tx, ty)
+    } else {
+        resvg::tiny_skia::Transform::from_scale(size as f32 / 1024.0, size as f32 / 1024.0)
+    };
+    resvg::render(&tree, transform, &mut pixmap.as_mut());
     Icon {
         width: size as i32,
         height: size as i32,
@@ -242,6 +252,34 @@ pub fn spawn_tray(events: UnboundedSender<TrayEvent>) -> Result<(), TrayError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tray_icon_content_fills_most_of_canvas() {
+        let icon = render_tray_icon();
+        let side = icon.width as usize;
+        let mut min_x = side;
+        let mut min_y = side;
+        let mut max_x = 0usize;
+        let mut max_y = 0usize;
+        for y in 0..side {
+            for x in 0..side {
+                let alpha = icon.data[(y * side + x) * 4];
+                if alpha > 8 {
+                    min_x = min_x.min(x);
+                    min_y = min_y.min(y);
+                    max_x = max_x.max(x);
+                    max_y = max_y.max(y);
+                }
+            }
+        }
+        let coverage_x = (max_x - min_x + 1) as f32 / side as f32;
+        let coverage_y = (max_y - min_y + 1) as f32 / side as f32;
+        // 不裁剪时只有约 0.81（SVG 画布自带 10.9% 透明边），裁剪后应达到 ~0.94。
+        assert!(
+            coverage_x >= 0.9 && coverage_y >= 0.9,
+            "图标内容应基本铺满画布，实际 coverage_x={coverage_x}, coverage_y={coverage_y}"
+        );
+    }
 
     #[test]
     fn argb_from_rgba_swaps_channels() {
