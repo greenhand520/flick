@@ -14,18 +14,17 @@
 //! * [`ActionRuntime`] — 顶层编排器：路由查询、
 //!   调用动作、管理截止时间和取消。
 
-pub mod handler;
 pub mod invocation;
-pub mod plugin;
 pub mod registry;
 pub mod runtime;
 mod search;
 
 // 在 crate 根重新导出主要的公共 API。
-pub use handler::ActionHandler;
 pub use invocation::InvocationHandle;
-pub use plugin::{
-    ActionSpec, Plugin, PluginLifecycle, PluginRegistrationError, PluginRuntimeError,
+// 插件契约已抽到 `flick-plugin`；此处 re-export 保持下游
+// （`flick-builtins` / `flick-testkit`）import 路径不变。
+pub use flick_plugin::{
+    ActionHandler, ActionSpec, Plugin, PluginLifecycle, PluginRegistrationError, PluginRuntimeError,
     PluginUiFactory, SurfaceError, SurfaceHandler, SurfaceSession,
 };
 pub use registry::ActionRegistry;

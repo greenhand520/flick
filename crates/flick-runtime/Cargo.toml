@@ -5,6 +5,7 @@ edition.workspace = true
 
 [dependencies]
 flick-domain = { path = "../flick-domain" }
+flick-plugin = { path = "../flick-plugin" }
 tokio = { workspace = true }
 tokio-util = { workspace = true }
 async-trait = { workspace = true }

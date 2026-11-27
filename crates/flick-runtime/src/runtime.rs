@@ -1,12 +1,13 @@
 //! ActionRuntime — 编排路由、调用和生命周期。
 
-use crate::handler::ActionHandler;
-use crate::plugin::{Plugin, PluginRegistrationError, SurfaceError, SurfaceSession};
 use crate::registry::ActionRegistry;
 use flick_domain::{
     ActionContext, ActionDescriptor, ActionError, ActionId, ActionInput, ActionOutcome,
     ActionRequest, InputContext, InputType, InvocationId, RouteItem, SurfaceContent,
     SurfaceEventKind, SurfaceSessionId,
+};
+use flick_plugin::{
+    ActionHandler, Plugin, PluginRegistrationError, SurfaceError, SurfaceSession,
 };
 use std::collections::HashMap;
 use std::sync::Arc;

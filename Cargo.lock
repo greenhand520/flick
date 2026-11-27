@@ -1845,11 +1845,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "flick-plugin"
+version = "0.2.0"
+dependencies = [
+ "async-trait",
+ "flick-domain",
+]
+
+[[package]]
 name = "flick-runtime"
 version = "0.2.0"
 dependencies = [
  "async-trait",
  "flick-domain",
+ "flick-plugin",
  "serde_json",
  "tokio",
  "tokio-util",

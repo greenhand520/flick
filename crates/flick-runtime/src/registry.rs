@@ -1,12 +1,11 @@
 //! ActionRegistry — 存储与其处理器配对的 ActionDescriptors。
 
-use crate::handler::ActionHandler;
-use crate::plugin::{Plugin, PluginLifecycle, PluginRegistrationError, SurfaceHandler};
 use crate::search::score_action;
 use flick_domain::{
     ActionDescriptor, ActionId, ActionVisibility, InputContext, InputType, PluginManifest,
     RouteItem,
 };
+use flick_plugin::{ActionHandler, Plugin, PluginLifecycle, PluginRegistrationError, SurfaceHandler};
 use std::collections::HashMap;
 use std::sync::Arc;
 

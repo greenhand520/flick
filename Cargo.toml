@@ -4,6 +4,7 @@ members = [
     "crates/flick-domain",
     "crates/flick-application",
     "crates/flick-runtime",
+    "crates/flick-plugin",
     "crates/flick-builtins",
     "crates/flick-ipc",
     "crates/flick-adapters-linux",
