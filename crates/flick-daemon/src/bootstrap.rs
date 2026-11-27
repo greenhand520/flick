@@ -20,7 +20,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 // ─── 适配器类型 ───────────────────────────────────────────────────────────
 
@@ -43,7 +43,7 @@ impl RuntimePort for RuntimeAdapter {
     ) -> Vec<RouteItem> {
         self.runtime.search_invoke(generation, input).await
     }
-    fn set_usage_store(&self, store: std::sync::Arc<dyn flick_domain::UsageStore>) {
+    fn set_usage_store(&self, store: Arc<dyn UsageStore>) {
         self.runtime.set_usage_store(store);
     }
     async fn execution_event(
@@ -140,7 +140,7 @@ impl flick_ipc::server::IpcDispatcher for DaemonIpcDispatcher {
                     action_id,
                     input: ActionInput::plain_text(&text),
                     caller: Caller::cli("flick-cli"),
-                    source: flick_domain::ActionSource::Ui,
+                    source: ActionSource::Ui,
                     deadline: Deadline::from_secs(30),
                 };
                 let outcome = self.runtime.invoke(request).await;
@@ -269,14 +269,9 @@ impl flick_ipc::server::IpcDispatcher for DaemonIpcDispatcher {
                 let Some(settings) = &self.settings else {
                     return settings_unavailable();
                 };
-                let parsed = match SettingKey::parse(&key) {
+                let parsed = match parse_setting_key(&key) {
                     Ok(parsed) => parsed,
-                    Err(error) => {
-                        return IpcResult::Error {
-                            code: IpcErrorCode::InvalidInput,
-                            message: error.to_string(),
-                        };
-                    }
+                    Err(error) => return error,
                 };
                 match settings.get(&parsed) {
                     Ok(Some(value)) => IpcResult::Ok(serde_json::json!({
@@ -299,14 +294,9 @@ impl flick_ipc::server::IpcDispatcher for DaemonIpcDispatcher {
                 let Some(settings) = &self.settings else {
                     return settings_unavailable();
                 };
-                let parsed = match SettingKey::parse(&key) {
+                let parsed = match parse_setting_key(&key) {
                     Ok(parsed) => parsed,
-                    Err(error) => {
-                        return IpcResult::Error {
-                            code: IpcErrorCode::InvalidInput,
-                            message: error.to_string(),
-                        };
-                    }
+                    Err(error) => return error,
                 };
                 match settings.set(&parsed, value) {
                     Ok(revision) => IpcResult::Ok(serde_json::json!({
@@ -322,14 +312,9 @@ impl flick_ipc::server::IpcDispatcher for DaemonIpcDispatcher {
                 };
                 match (key, namespace) {
                     (Some(key), None) => {
-                        let parsed = match SettingKey::parse(&key) {
+                        let parsed = match parse_setting_key(&key) {
                             Ok(parsed) => parsed,
-                            Err(error) => {
-                                return IpcResult::Error {
-                                    code: IpcErrorCode::InvalidInput,
-                                    message: error.to_string(),
-                                };
-                            }
+                            Err(error) => return error,
                         };
                         match settings.reset_key(&parsed) {
                             Ok(revision) => IpcResult::Ok(
@@ -347,7 +332,7 @@ impl flick_ipc::server::IpcDispatcher for DaemonIpcDispatcher {
                     },
                     _ => IpcResult::Error {
                         code: IpcErrorCode::InvalidInput,
-                        message: "settings reset 需要且只接受 key 或 namespace 之一".into(),
+                        message: "Settings reset requires and only accepts one of either a key or a namespace.".into(),
                     },
                 }
             }
@@ -381,7 +366,7 @@ impl DaemonIpcDispatcher {
 
 /// 把 [`SettingsService`] 适配成运行时需要的两个句柄：
 /// [`flick_plugin::SettingsProvider`]（快照 + 订阅）与
-/// [`flick_domain::settings::SettingSecretReader`]（实时解密 secret）。
+/// [`SettingSecretReader`]（实时解密 secret）。
 pub struct SettingsAdapter {
     service: Arc<SettingsService>,
 }
@@ -437,7 +422,7 @@ impl flick_plugin::SettingsProvider for SettingsAdapter {
                         listener(SettingsAdapter::snapshot_of(&service, &plugin));
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
-                        tracing::warn!(plugin = %plugin, skipped, "设置变更订阅落后，重新推送快照");
+                        warn!(plugin = %plugin, skipped, "After setting up subscription changes, re-pull snapshots.");
                         let Some(service) = weak.upgrade() else { break };
                         listener(SettingsAdapter::snapshot_of(&service, &plugin));
                     }
@@ -448,14 +433,14 @@ impl flick_plugin::SettingsProvider for SettingsAdapter {
     }
 }
 
-impl flick_domain::settings::SettingSecretReader for SettingsAdapter {
+impl SettingSecretReader for SettingsAdapter {
     fn secret(&self, plugin_id: &str, key: &str) -> Option<String> {
         let key = SettingKey::new(SettingNamespace::Plugin(plugin_id.to_string()), key);
         match self.service.get(&key) {
-            Ok(Some(flick_domain::settings::SettingValue::String(value))) => Some(value),
+            Ok(Some(SettingValue::String(value))) => Some(value),
             Ok(_) => None,
             Err(error) => {
-                tracing::debug!(%error, plugin = %plugin_id, "读取 secret 失败");
+                debug!(%error, plugin = %plugin_id, "Failed to read secret");
                 None
             }
         }
@@ -472,7 +457,7 @@ impl flick_domain::settings::SettingSecretReader for SettingsAdapter {
 /// 避免每次写入都触发一次无谓的重绘。任务在 `cancel` 触发或广播通道关闭时退出。
 pub fn spawn_settings_forwarder(
     service: Arc<SettingsService>,
-    host_tx: tokio::sync::mpsc::UnboundedSender<HostToUi>,
+    host_tx: mpsc::UnboundedSender<HostToUi>,
     cancel: CancellationToken,
 ) -> tokio::task::JoinHandle<()> {
     // 同步订阅：若在任务体内订阅，调用方在 spawn 之后立刻写设置可能先于订阅发布，
@@ -486,7 +471,7 @@ pub fn spawn_settings_forwarder(
                 _ = cancel.cancelled() => break,
                 changed = rx.recv() => match changed {
                     Ok(change) => {
-                        if change.namespace != flick_domain::SettingNamespace::Core {
+                        if change.namespace != SettingNamespace::Core {
                             continue;
                         }
                         let theme = theme_mode(&service);
@@ -531,11 +516,11 @@ pub fn spawn_retention_worker(
                     .await;
                     match result {
                         Ok(Ok(purged)) if !purged.is_empty() => {
-                            tracing::info!(count = purged.len(), ?purged, "已清理过期卸载数据");
+                            info!(count = purged.len(), ?purged, "Expired uninstallation data has been cleaned up.");
                         }
                         Ok(Ok(_)) => {}
-                        Ok(Err(error)) => tracing::warn!(%error, "清理过期卸载数据失败"),
-                        Err(error) => tracing::warn!(%error, "清理任务 join 失败"),
+                        Ok(Err(error)) => warn!(%error, "Failed to clean up expired uninstallation data"),
+                        Err(error) => warn!(%error, "Cleanup task join failed"),
                     }
                 }
             }
@@ -544,7 +529,7 @@ pub fn spawn_retention_worker(
 }
 
 /// 目录总大小（字节）；读取失败的文件按 0 计。
-pub fn dir_size(path: &std::path::Path) -> u64 {
+pub fn dir_size(path: &Path) -> u64 {
     let mut total = 0u64;
     let Ok(entries) = std::fs::read_dir(path) else {
         return 0;
@@ -562,11 +547,19 @@ pub fn dir_size(path: &std::path::Path) -> u64 {
     total
 }
 
+/// 解析设置键；失败时返回统一的 `InvalidInput` IPC 错误。
+fn parse_setting_key(key: &str) -> Result<SettingKey, IpcResult> {
+    SettingKey::parse(key).map_err(|error| IpcResult::Error {
+        code: IpcErrorCode::InvalidInput,
+        message: error.to_string(),
+    })
+}
+
 /// 设置系统不可用时的统一错误。
 fn settings_unavailable() -> IpcResult {
     IpcResult::Error {
         code: IpcErrorCode::SettingsUnavailable,
-        message: "设置系统不可用（守护进程未能打开设置存储）".into(),
+        message: "Settings system unavailable: The daemon failed to open settings storage.".into(),
     }
 }
 
@@ -679,7 +672,7 @@ pub fn create_ipc_dispatcher(
 
 pub struct DaemonHandle {
     pub cancel_token: CancellationToken,
-    pub socket_path: std::path::PathBuf,
+    pub socket_path: PathBuf,
     pub ipc_handle: Option<tokio::task::JoinHandle<Result<(), TransportError>>>,
 }
 
@@ -719,7 +712,7 @@ pub async fn shutdown(mut handle: DaemonHandle) {
 
 // ─── 无头模式 ──────────────────────────────────────────────────────────
 
-pub async fn run_headless(socket_path: std::path::PathBuf) -> Result<(), String> {
+pub async fn run_headless(socket_path: PathBuf) -> Result<(), String> {
     use crate::headless::HeadlessRuntime;
     use tokio::signal::unix::{SignalKind, signal};
 
@@ -781,6 +774,7 @@ pub async fn run_headless(socket_path: std::path::PathBuf) -> Result<(), String>
 
     let settings = init_settings(&runtime, headless.dirs).await;
     if let Some(service) = &settings {
+        wire_settings(&runtime, service);
         spawn_retention_worker(Arc::clone(service), lifecycle.token());
     }
     let dispatcher = create_ipc_dispatcher(
@@ -846,37 +840,36 @@ pub async fn run_headless(socket_path: std::path::PathBuf) -> Result<(), String>
 /// 软卸载数据保留期（天）。
 pub const UNINSTALLED_RETENTION_DAYS: u64 = 30;
 
-/// 初始化设置服务。
+/// 构造设置服务，但**不**注入运行时。
 ///
 /// 返回 `None` 表示设置系统不可用（例如主进程无法打开设置存储）；
 /// 调用方应继续启动，相关 IPC 命令返回不可用即可。
+/// 构造成功后需显式调用 [`wire_settings`] 才能让运行时中的插件读到设置。
 pub async fn init_settings(
     runtime: &ActionRuntime,
     dirs: Option<flick_data::DataDirectories>,
 ) -> Option<Arc<SettingsService>> {
     let Some(dirs) = dirs else {
-        tracing::warn!("设置系统不可用：无法解析数据目录");
+        warn!("Settings system unavailable：Unable to resolve data directory");
         return None;
     };
-    let keys: flick_data::SharedKeySource = if std::env::var_os("FLICK_MASTER_KEY").is_some() {
-        Arc::new(flick_data::EnvMasterKeySource)
-    } else {
-        // 密钥来源缺失时仍可启动：明文字段可用，secret 读写会明确报错。
-        Arc::new(flick_data::UnavailableMasterKeySource)
-    };
-    init_settings_at(runtime, dirs, keys).await
+    let keys = flick_data::default_master_key_source();
+    let manifests = runtime.plugin_manifests().await;
+    build_settings_at(manifests, dirs, keys)
 }
 
-/// 在指定目录与主密钥来源上初始化设置服务（便于测试注入）。
-pub async fn init_settings_at(
-    runtime: &ActionRuntime,
+/// 仅根据插件清单、目录与主密钥来源构造设置服务；不接触 `ActionRuntime`。
+///
+/// 返回值需要交给 [`wire_settings`] 才能让运行时中的插件读到设置。
+pub fn build_settings_at(
+    manifests: Vec<PluginManifest>,
     dirs: flick_data::DataDirectories,
     keys: flick_data::SharedKeySource,
 ) -> Option<Arc<SettingsService>> {
     let storage = match StorageManager::open(dirs, keys) {
         Ok(storage) => Arc::new(storage),
         Err(error) => {
-            tracing::warn!(%error, "设置系统不可用：无法打开设置存储");
+            warn!(%error, "Settings system unavailable: Unable to open settings storage");
             return None;
         }
     };
@@ -885,38 +878,39 @@ pub async fn init_settings_at(
 
     let version = env!("CARGO_PKG_VERSION");
     if let Err(error) = service.register_schema(core_schema(), version, version) {
-        tracing::warn!(%error, "核心设置 schema 注册失败");
+        warn!(%error, "Flick core schema registration failed.");
     }
 
-    for manifest in runtime.plugin_manifests().await {
+    for manifest in manifests {
         let schema = SettingSchema {
             namespace: SettingNamespace::Plugin(manifest.id.clone()),
             declarations: manifest.settings.clone(),
             schema_version: 1,
         };
         if let Err(error) = service.register_schema(schema, &manifest.version, &manifest.version) {
-            tracing::warn!(plugin = %manifest.id, %error, "插件设置 schema 注册失败");
+            warn!(plugin = %manifest.id, %error, "Plugin schema registration failed.");
         }
     }
-
-    let adapter = Arc::new(SettingsAdapter::new(Arc::clone(&service)));
-    runtime.set_settings_provider(Arc::clone(&adapter) as Arc<dyn flick_plugin::SettingsProvider>);
-    runtime.set_settings_secrets(
-        Arc::clone(&adapter) as Arc<dyn flick_domain::settings::SettingSecretReader>
-    );
 
     match service
         .storage()
         .purge_uninstalled_older_than(UNINSTALLED_RETENTION_DAYS)
     {
         Ok(purged) if !purged.is_empty() => {
-            tracing::info!(count = purged.len(), ?purged, "已清理过期卸载数据");
+            info!(count = purged.len(), ?purged, "Expired uninstallation data has been cleaned up.");
         }
         Ok(_) => {}
-        Err(error) => tracing::warn!(%error, "清理过期卸载数据失败"),
+        Err(error) => warn!(%error, "Failed to clean up expired uninstallation data"),
     }
 
     Some(service)
+}
+
+/// 把设置服务作为 `SettingsProvider` 与 `SettingSecretReader` 装进运行时。
+pub fn wire_settings(runtime: &ActionRuntime, service: &Arc<SettingsService>) {
+    let adapter = Arc::new(SettingsAdapter::new(Arc::clone(service)));
+    runtime.set_settings_provider(adapter.clone() as Arc<dyn flick_plugin::SettingsProvider>);
+    runtime.set_settings_secrets(adapter as Arc<dyn SettingSecretReader>);
 }
 /// 读取外壳启动配置：主题模式 + 结果条数上限。
 ///
@@ -932,11 +926,7 @@ pub fn load_shell_config() -> flick_shell_gpui::ShellConfig {
             };
         }
     };
-    let keys: flick_data::SharedKeySource = if std::env::var_os("FLICK_MASTER_KEY").is_some() {
-        Arc::new(flick_data::EnvMasterKeySource)
-    } else {
-        Arc::new(flick_data::UnavailableMasterKeySource)
-    };
+    let keys = flick_data::default_master_key_source();
     shell_config_at(dirs, keys)
 }
 
@@ -952,14 +942,14 @@ pub fn shell_config_at(
     let storage = match StorageManager::open(dirs.clone(), keys) {
         Ok(storage) => Arc::new(storage),
         Err(error) => {
-            tracing::warn!(%error, "读取外壳配置失败：设置存储不可用，回退默认值");
+            warn!(%error, "Failed to read shell configuration: Settings storage unavailable, rollback to default values.");
             return fallback;
         }
     };
     let service = SettingsService::new(storage);
     let version = env!("CARGO_PKG_VERSION");
     if let Err(error) = service.register_schema(core_schema(), version, version) {
-        tracing::warn!(%error, "读取外壳配置失败：core schema 注册失败");
+        warn!(%error, "Failed to read shell configuration: core schema registration failed.");
         return fallback;
     }
     flick_shell_gpui::ShellConfig {
@@ -970,24 +960,19 @@ pub fn shell_config_at(
 
 /// 从设置系统读取结果条数上限；未设置或取值非法时返回声明默认值。
 pub fn result_limit(service: &SettingsService) -> usize {
-    let key =
-        flick_domain::SettingKey::new(flick_domain::SettingNamespace::Core, "search.result_limit");
+    let key = SettingKey::new(SettingNamespace::Core, "search.result_limit");
     match service.resolved(&key) {
-        Ok(flick_domain::settings::SettingValue::Integer(value)) if value >= 1 => value as usize,
+        Ok(SettingValue::Integer(value)) if value >= 1 => value as usize,
         _ => flick_application::presenter::DEFAULT_RESULT_LIMIT,
     }
 }
 
 /// 从设置系统读取主题模式；未设置或取值非法时返回 `None`。
 pub fn theme_mode(service: &SettingsService) -> Option<flick_shell_gpui::ThemeMode> {
-    let key = flick_domain::SettingKey::new(flick_domain::SettingNamespace::Core, "theme.mode");
+    let key = SettingKey::new(SettingNamespace::Core, "theme.mode");
     match service.resolved(&key).ok()? {
-        flick_domain::settings::SettingValue::Enum(mode) if mode == "light" => {
-            Some(flick_shell_gpui::ThemeMode::Light)
-        }
-        flick_domain::settings::SettingValue::Enum(mode) if mode == "dark" => {
-            Some(flick_shell_gpui::ThemeMode::Dark)
-        }
+        SettingValue::Enum(mode) if mode == "light" => Some(flick_shell_gpui::ThemeMode::Light),
+        SettingValue::Enum(mode) if mode == "dark" => Some(flick_shell_gpui::ThemeMode::Dark),
         _ => None,
     }
 }
@@ -1034,32 +1019,25 @@ mod init_settings_tests {
         let worker = spawn_settings_forwarder(Arc::clone(&service), tx, cancel.clone());
 
         // 主题变化 → 只收到 ThemeChanged。
-        let theme_key =
-            flick_domain::SettingKey::new(flick_domain::SettingNamespace::Core, "theme.mode");
+        let theme_key = SettingKey::new(SettingNamespace::Core, "theme.mode");
         service
-            .set(
-                &theme_key,
-                flick_domain::settings::SettingValue::Enum("light".into()),
-            )
+            .set(&theme_key, SettingValue::Enum("light".into()))
             .unwrap();
         match rx.recv().await {
             Some(HostToUi::ThemeChanged { mode }) => {
-                assert_eq!(mode, flick_domain::ThemeMode::Light)
+                assert_eq!(mode, ThemeMode::Light)
             }
-            other => panic!("期望 ThemeChanged，实际 {other:?}"),
+            other => panic!("Expected ThemeChanged, actually {other:?}"),
         }
 
         // 上限变化 → 只收到 ResultLimitChanged。
-        let limit_key = flick_domain::SettingKey::new(
-            flick_domain::SettingNamespace::Core,
-            "search.result_limit",
-        );
+        let limit_key = SettingKey::new(SettingNamespace::Core, "search.result_limit");
         service
-            .set(&limit_key, flick_domain::settings::SettingValue::Integer(5))
+            .set(&limit_key, SettingValue::Integer(5))
             .unwrap();
         match rx.recv().await {
             Some(HostToUi::ResultLimitChanged { limit }) => assert_eq!(limit, 5),
-            other => panic!("期望 ResultLimitChanged，实际 {other:?}"),
+            other => panic!("Expected ResultLimitChanged, but actually {other:?}"),
         }
 
         cancel.cancel();
@@ -1089,13 +1067,8 @@ mod init_settings_tests {
             service
                 .register_schema(core_schema(), version, version)
                 .unwrap();
-            let key = flick_domain::SettingKey::new(
-                flick_domain::SettingNamespace::Core,
-                "search.result_limit",
-            );
-            service
-                .set(&key, flick_domain::settings::SettingValue::Integer(7))
-                .unwrap();
+            let key = SettingKey::new(SettingNamespace::Core, "search.result_limit");
+            service.set(&key, SettingValue::Integer(7)).unwrap();
         }
         let config = shell_config_at(dirs, keys);
         assert_eq!(config.result_limit, 7);
@@ -1130,8 +1103,8 @@ mod init_settings_tests {
         )))
     }
 
-    fn plugin_schema() -> flick_domain::settings::SettingSchema {
-        use flick_domain::settings::{SettingDecl, SettingKind, SettingSchema, SettingValue};
+    fn plugin_schema() -> SettingSchema {
+        use settings::{SettingDecl, SettingKind, SettingSchema, SettingValue};
         let decl = |key: &str, kind: SettingKind, secret: bool| SettingDecl {
             key: key.to_string(),
             renamed_from: None,
@@ -1156,7 +1129,7 @@ mod init_settings_tests {
 
     #[test]
     fn adapter_snapshot_merges_defaults_and_skips_secret() {
-        use flick_domain::settings::SettingValue;
+        use settings::SettingValue;
         let temp = tempfile::tempdir().unwrap();
         let service = adapter_service(&temp);
         service
@@ -1168,14 +1141,14 @@ mod init_settings_tests {
         let snapshot = adapter.snapshot("flick.demo");
         assert_eq!(snapshot.namespace, "flick.demo");
         assert_eq!(snapshot.bool("enabled"), Some(true));
-        assert_eq!(snapshot.value("api_token"), None, "secret 不得进入快照");
+        assert_eq!(snapshot.value("api_token"), None, "secret Snapshot must not be accessed");
 
         // 写入 secret 后可通过 reader 实时取到，但快照仍然没有。
         let key = SettingKey::new(SettingNamespace::Plugin("flick.demo".into()), "api_token");
         service
             .set(&key, SettingValue::String("tok".into()))
             .unwrap();
-        use flick_domain::settings::SettingSecretReader;
+        use settings::SettingSecretReader;
         assert_eq!(
             adapter.secret("flick.demo", "api_token"),
             Some("tok".into())
@@ -1191,7 +1164,7 @@ mod init_settings_tests {
         use flick_plugin::SettingsProvider;
         let snapshot = adapter.snapshot("flick.unknown");
         assert!(snapshot.is_empty());
-        use flick_domain::settings::SettingSecretReader;
+        use settings::SettingSecretReader;
         assert_eq!(adapter.secret("flick.unknown", "x"), None);
     }
 
@@ -1211,10 +1184,9 @@ mod init_settings_tests {
                 bytes: [3u8; 32],
             }));
         let runtime = runtime_with_builtins().await;
+        let manifests = runtime.plugin_manifests().await;
 
-        let service = init_settings_at(&runtime, dirs, keys)
-            .await
-            .expect("设置服务应可用");
+        let service = build_settings_at(manifests, dirs, keys).expect("The settings system unavailable.");
         assert!(
             service
                 .registered_namespaces()
@@ -1222,18 +1194,48 @@ mod init_settings_tests {
                 .any(|ns| ns == "core")
         );
 
-        let mode =
-            flick_domain::SettingKey::new(flick_domain::SettingNamespace::Core, "theme.mode");
+        let mode = SettingKey::new(SettingNamespace::Core, "theme.mode");
         assert_eq!(
             service.resolved(&mode).unwrap(),
-            flick_domain::SettingValue::Enum("dark".into())
+            SettingValue::Enum("dark".into())
         );
 
         for plugin_id in runtime.registered_plugin_ids().await {
             assert!(
                 service.schema(&plugin_id).is_some(),
-                "插件 {plugin_id} 的设置 schema 应已注册"
+                "The schema settings for plugin {plugin_id} should already be registered."
             );
         }
+    }
+
+    /// 构造设置服务只需要清单，不需要 ActionRuntime。
+    #[test]
+    fn build_settings_at_registers_manifests_without_runtime() {
+        use flick_plugin::Plugin;
+
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        let dirs = flick_data::DataDirectories::with_roots(
+            root.join("config"),
+            root.join("data"),
+            root.join("cache"),
+            root.join("runtime"),
+        );
+        let keys: flick_data::SharedKeySource =
+            Arc::new(flick_data::FixedMasterKeySource(flick_data::MasterKey {
+                key_id: "test".into(),
+                bytes: [5u8; 32],
+            }));
+
+        let manifests = vec![flick_builtins::echo::EchoPlugin.manifest()];
+        let service = build_settings_at(manifests, dirs, keys).expect("The settings system unavailable.");
+
+        assert!(
+            service
+                .registered_namespaces()
+                .iter()
+                .any(|ns| ns == "core")
+        );
+        assert!(service.schema("flick.builtin.echo").is_some());
     }
 }

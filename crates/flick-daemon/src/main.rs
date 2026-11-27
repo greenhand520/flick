@@ -159,13 +159,24 @@ fn run_graphical(socket_path: PathBuf) -> Result<(), String> {
             let rt = tokio::runtime::Runtime::new().expect("failed to create bg runtime");
             rt.block_on(async move {
                 let lifecycle = background_lifecycle;
-                let dirs = flick_data::DataDirectories::discover().ok();
-                let paths: std::sync::Arc<dyn flick_domain::PluginPaths> = match &dirs {
-                    Some(dirs) => std::sync::Arc::new(dirs.clone()),
-                    None => std::sync::Arc::new(flick_domain::NoopPaths),
+                // 数据目录是启动前提：解析失败时拒绝启动，不用 NoopPaths 降级，
+                // 否则插件会静默拿不到数据目录，设置系统也无从初始化。
+                let dirs = match flick_data::DataDirectories::discover() {
+                    Ok(dirs) => dirs,
+                    Err(error) => {
+                        let message = format!("DataDirectories: {error}");
+                        tracing::error!(%error, "无法解析数据目录，拒绝启动");
+                        *background_error_for_thread
+                            .lock()
+                            .expect("background error mutex poisoned") = Some(message);
+                        lifecycle.request_shutdown(ShutdownReason::StartupFailed);
+                        let _ = host_event_tx.send(HostToUi::Shutdown);
+                        return;
+                    }
                 };
+                let paths: Arc<dyn PluginPaths> = Arc::new(dirs.clone());
                 let runtime = Arc::new(ActionRuntime::new(
-                    std::sync::Arc::new(flick_adapters_linux::host_info::collect_host_info()),
+                    Arc::new(flick_adapters_linux::host_info::collect_host_info()),
                     paths,
                 ));
                 flick_builtins::register_builtin(&runtime)
@@ -183,8 +194,9 @@ fn run_graphical(socket_path: PathBuf) -> Result<(), String> {
 
                 // 设置系统先于 UI 工作线程初始化：UI 线程要处理 `SetTheme`，
                 // 还要把设置变更热转发给 shell（主题、结果条数上限）。
-                let settings = bootstrap::init_settings(&runtime, dirs).await;
+                let settings = bootstrap::init_settings(&runtime, Some(dirs)).await;
                 if let Some(service) = &settings {
+                    bootstrap::wire_settings(&runtime, service);
                     bootstrap::spawn_retention_worker(Arc::clone(service), lifecycle.token());
                     bootstrap::spawn_settings_forwarder(
                         Arc::clone(service),
@@ -205,11 +217,11 @@ fn run_graphical(socket_path: PathBuf) -> Result<(), String> {
                                 // 主题切换需要落库：写设置系统后由变更转发广播给所有窗口。
                                 Some(UiToHost::SetTheme { mode }) => {
                                     if let Some(service) = &ui_settings {
-                                        let key = flick_domain::SettingKey::new(
-                                            flick_domain::SettingNamespace::Core,
+                                        let key = SettingKey::new(
+                                            SettingNamespace::Core,
                                             "theme.mode",
                                         );
-                                        let value = flick_domain::settings::SettingValue::Enum(
+                                        let value = SettingValue::Enum(
                                             mode.as_str().to_string(),
                                         );
                                         if let Err(error) = service.set(&key, value) {

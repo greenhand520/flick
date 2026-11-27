@@ -17,6 +17,7 @@ pub mod store;
 pub use crypto::{
     AAD_PREFIX, CRYPTO_VERSION, EncryptedSecret, EnvMasterKeySource, FixedMasterKeySource,
     MasterKey, MasterKeySource, SharedKeySource, UnavailableMasterKeySource,
+    default_master_key_source,
 };
 pub use error::DataError;
 pub use paths::DataDirectories;

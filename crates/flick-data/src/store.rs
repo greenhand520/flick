@@ -6,7 +6,7 @@
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Mutex, MutexGuard};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use flick_domain::settings::{SettingDecl, SettingKind, SettingValue};
@@ -86,12 +86,7 @@ impl StorageManager {
     /// 按平台默认目录打开；主密钥优先取 `FLICK_MASTER_KEY`，否则不可用。
     pub fn open_default() -> Result<Self, DataError> {
         let dirs = DataDirectories::discover()?;
-        let keys: SharedKeySource = if std::env::var_os("FLICK_MASTER_KEY").is_some() {
-            Arc::new(crate::crypto::EnvMasterKeySource)
-        } else {
-            Arc::new(crate::crypto::UnavailableMasterKeySource)
-        };
-        Self::open(dirs, keys)
+        Self::open(dirs, crate::crypto::default_master_key_source())
     }
 
     /// 物理目录句柄。

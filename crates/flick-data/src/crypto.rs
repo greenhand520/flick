@@ -174,6 +174,18 @@ pub fn decrypt(
 /// 共享的主密钥来源句柄。
 pub type SharedKeySource = Arc<dyn MasterKeySource>;
 
+/// 按环境选择默认主密钥来源。
+///
+/// 设置了 `FLICK_MASTER_KEY` 时用 [`EnvMasterKeySource`]（测试/开发）；
+/// 否则用 [`UnavailableMasterKeySource`]，明文设置仍可用，secret 读写返回结构化错误。
+pub fn default_master_key_source() -> SharedKeySource {
+    if std::env::var_os("FLICK_MASTER_KEY").is_some() {
+        Arc::new(EnvMasterKeySource)
+    } else {
+        Arc::new(UnavailableMasterKeySource)
+    }
+}
+
 fn hex_decode(raw: &str) -> Result<Vec<u8>, DataError> {
     let trimmed = raw.trim();
     if trimmed.len() % 2 != 0 {
