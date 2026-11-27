@@ -43,9 +43,19 @@ pub enum UiToHost {
         input: SearchInputSnapshot,
     },
     /// 用户选择了一个路由项进行调用。
+    ///
+    /// `generation` 与 `item_id` 用于候选身份校验：宿主只接受属于当前
+    /// 查询代次、且仍在最近一次结果集中的候选（设计文档 §12.2-3）。
     Invoke {
+        /// 该候选所属的查询代次。
+        generation: QueryGeneration,
+        /// 候选的稳定标识（`RouteItem::item_id`）。
+        item_id: String,
+        /// 本次调用标识。
         invocation_id: InvocationId,
+        /// 候选对应的 Action。
         action_id: ActionId,
+        /// 调用输入。
         input: ActionInput,
     },
     /// 用户激活了一个搜索阶段 Execution 项。

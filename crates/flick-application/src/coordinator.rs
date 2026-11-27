@@ -32,6 +32,7 @@ pub struct ApplicationCoordinator {
 ///
 /// 同一父 Action 的 Execution 项紧跟在该 Action 之后；若父 Action 本身
 /// 没有命中关键词（例如只靠 `search_invocable` 产出的结果），则追加在末尾。
+/// todo: 这个合并逻辑是否可以放到runtime？另外这2种结果真的会重复吗？
 fn merge_search_results(
     action_items: Vec<RouteItem>,
     execution_items: Vec<RouteItem>,
@@ -129,6 +130,8 @@ impl ApplicationCoordinator {
                 invocation_id,
                 action_id,
                 input,
+                // `generation` / `item_id` 在下一个 Task 用于候选身份校验。
+                ..
             } => {
                 let request = ActionRequest {
                     invocation_id,

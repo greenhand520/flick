@@ -110,6 +110,13 @@ fn ui_to_host_round_trips() {
             input: SearchInputSnapshot::text("hello", InputSource::Manual),
         },
         UiToHost::SearchPanelClosed,
+        UiToHost::Invoke {
+            generation: QueryGeneration::INITIAL,
+            item_id: "action:flick.builtin.echo.v1.echo".into(),
+            invocation_id: InvocationId::new(),
+            action_id: ActionId::from_static("flick.builtin.echo.v1.echo"),
+            input: ActionInput::plain_text("hello"),
+        },
         UiToHost::Cancel {
             invocation_id: InvocationId::new(),
         },

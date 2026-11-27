@@ -218,6 +218,8 @@ async fn invoke_from_ui_uses_ui_caller_and_forwards_completion() {
 
     coord
         .handle_ui(UiToHost::Invoke {
+            generation: QueryGeneration::INITIAL,
+            item_id: format!("action:{action_id}"),
             invocation_id: inv_id,
             action_id: action_id.clone(),
             input: ActionInput::plain_text("hello"),

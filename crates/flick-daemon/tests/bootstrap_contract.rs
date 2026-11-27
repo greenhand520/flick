@@ -284,6 +284,8 @@ async fn coordinator_invoke_from_ui_returns_completion() {
 
     coordinator
         .handle_ui(UiToHost::Invoke {
+            generation: QueryGeneration::INITIAL,
+            item_id: "action:flick.builtin.echo.v1.echo".into(),
             invocation_id: InvocationId::new(),
             action_id: ActionId::from_static("flick.builtin.echo.v1.echo"),
             input: ActionInput::plain_text("hello"),

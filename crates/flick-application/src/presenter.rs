@@ -428,6 +428,8 @@ impl PanelState {
         self.active_invocation = Some(invocation_id);
         let input = self.input.to_action_input();
         vec![PanelAction::SendToHost(UiToHost::Invoke {
+            generation: self.generation,
+            item_id: route.item_id.clone(),
             invocation_id,
             action_id: route.action_id.clone(),
             input,

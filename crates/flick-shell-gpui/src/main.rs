@@ -301,6 +301,7 @@ async fn fake_host(
                 invocation_id,
                 action_id,
                 input,
+                ..
             } => {
                 let request = ActionRequest {
                     invocation_id,
