@@ -7,6 +7,7 @@ pub mod host_info;
 pub mod portal;
 pub mod portal_client;
 pub mod portal_identity;
+pub mod screen;
 pub mod session;
 pub mod shortcut_state;
 pub mod tray;

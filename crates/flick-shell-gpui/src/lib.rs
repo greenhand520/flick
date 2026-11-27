@@ -229,7 +229,7 @@ fn open_panel_window(
                 //   混合，透明区域变黑并盖住壁纸。
                 // - 最大化窗口仍由合成器混合 alpha，且最大化/平铺窗口不绘制窗口
                 //   阴影，正好避免「阴影边框」。
-                window_bounds: Some(WindowBounds::Maximized(bounds)),
+                window_bounds: Some(fallback_panel_window_bounds(bounds)),
                 window_background: WindowBackgroundAppearance::Transparent,
                 window_decorations: Some(WindowDecorations::Client),
                 focus: true,
@@ -257,6 +257,32 @@ fn open_panel_window(
     match result {
         Ok(handle) => Ok(handle.into()),
         Err(err) => Err(err.to_string()),
+    }
+}
+
+/// 无 layer-shell 回退窗口的尺寸：优先「鼠标所在屏」的精确逻辑矩形，
+/// 探测失败时退化为最大化（落在工作区）。探测要读 Mutter `DisplayConfig`
+/// 与 XWayland 指针，失败一律回退，不影响开窗。
+fn fallback_panel_window_bounds(bounds: Bounds<Pixels>) -> WindowBounds {
+    match flick_adapters_linux::screen::pointer_monitor() {
+        Some(monitor) => {
+            tracing::debug!(
+                name = %monitor.name,
+                x = monitor.x,
+                y = monitor.y,
+                width = monitor.width,
+                height = monitor.height,
+                "面板窗口按鼠标所在屏建窗"
+            );
+            WindowBounds::Windowed(Bounds::new(
+                point(px(monitor.x as f32), px(monitor.y as f32)),
+                size(px(monitor.width as f32), px(monitor.height as f32)),
+            ))
+        }
+        None => {
+            tracing::debug!("显示器探测不可用，回退最大化建窗");
+            WindowBounds::Maximized(bounds)
+        }
     }
 }
 
