@@ -14,6 +14,7 @@ use flick_domain::{
 
 use crate::ports::{HostEventSink, RuntimePort};
 use crate::query::QueryTracker;
+use crate::usage::InMemoryUsageStore;
 
 /// 连接 UI 事件与 Flick Runtime 的中央协调器。
 ///
@@ -28,6 +29,8 @@ pub struct ApplicationCoordinator {
     /// 最近一次发出的路由快照（同步锁，临界区内不做 `.await`）。
     routes: Mutex<RouteSnapshot>,
     panel_visible: AtomicBool,
+    /// 使用频率存储（frecency）；与注入 Runtime 的是同一份。
+    usage: Arc<dyn flick_domain::UsageStore>,
 }
 
 /// 本面板会话内已发出的候选并集，用于校验 UI 回传的候选身份。
@@ -81,13 +84,22 @@ impl RouteSnapshot {
 impl ApplicationCoordinator {
     /// 使用给定的运行时和事件接收器创建一个新的协调器。
     pub fn new(runtime: Arc<dyn RuntimePort>, sink: Arc<dyn HostEventSink>) -> Self {
+        let usage: Arc<dyn flick_domain::UsageStore> = Arc::new(InMemoryUsageStore::new());
+        // 让 Runtime 的检索也能读到同一份 frecency 数据。
+        runtime.set_usage_store(Arc::clone(&usage));
         Self {
             runtime,
             sink,
             query_tracker: Arc::new(QueryTracker::new()),
             routes: Mutex::new(RouteSnapshot::default()),
             panel_visible: AtomicBool::new(false),
+            usage,
         }
+    }
+
+    /// 返回使用频率存储（测试与诊断用）。
+    pub fn usage_store(&self) -> Arc<dyn flick_domain::UsageStore> {
+        Arc::clone(&self.usage)
     }
 
     // ── UI → Host 消息处理 ────────────────────────────────────────
@@ -152,9 +164,10 @@ impl ApplicationCoordinator {
                 let item_id = item_id.unwrap_or_default();
                 if let Some(outcome) = self
                     .runtime
-                    .execution_event(parent_action_id, &item_id, event)
+                    .execution_event(parent_action_id.clone(), &item_id, event)
                     .await
                 {
+                    self.record_usage_on_success(&parent_action_id, &outcome);
                     self.sink.send(HostToUi::InvocationCompleted {
                         invocation_id,
                         outcome,
@@ -190,13 +203,14 @@ impl ApplicationCoordinator {
 
                 let request = ActionRequest {
                     invocation_id,
-                    action_id,
+                    action_id: action_id.clone(),
                     input,
                     caller: Caller::ui("search-panel"),
                     source: flick_domain::ActionSource::Ui,
                     deadline: Deadline::from_secs(30),
                 };
                 let outcome = self.runtime.invoke(request).await;
+                self.record_usage_on_success(&action_id, &outcome);
                 self.sink.send(HostToUi::InvocationCompleted {
                     invocation_id,
                     outcome,
@@ -267,6 +281,13 @@ impl ApplicationCoordinator {
     }
 
     // ── 面板切换 ──────────────────────────────────────────────────────
+
+    /// 调用成功时记录一次使用（frecency）；`Error` 结果不计入。
+    fn record_usage_on_success(&self, action_id: &ActionId, outcome: &ActionOutcome) {
+        if !matches!(outcome, ActionOutcome::Error(_)) {
+            self.usage.record_use(action_id);
+        }
+    }
 
     /// 在显示与隐藏状态之间切换搜索面板。
     ///

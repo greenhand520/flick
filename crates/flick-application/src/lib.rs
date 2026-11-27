@@ -20,9 +20,11 @@ pub mod coordinator;
 pub mod ports;
 pub mod presenter;
 pub mod query;
+pub mod usage;
 
 pub use accumulate::{MAX_ACCUMULATED_RESULTS, SearchSession, merge_batch, merge_execution_batch};
 pub use coordinator::ApplicationCoordinator;
 pub use ports::{HostEventSink, RuntimePort};
 pub use presenter::{PanelAction, PanelEvent, PanelState, SelectionState};
 pub use query::QueryTracker;
+pub use usage::InMemoryUsageStore;

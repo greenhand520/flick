@@ -289,6 +289,66 @@ async fn invoke_from_ui_uses_ui_caller_and_forwards_completion() {
     }
 }
 
+/// 成功调用后应记录一次使用（frecency）；错误结果不应记录。
+#[tokio::test]
+async fn successful_invoke_records_usage_and_error_does_not() {
+    let action_id = ActionId::from_static("test.action.v1.run");
+    let mut routes = HashMap::new();
+    routes.insert(
+        "hello".to_string(),
+        (
+            vec![RouteItem::action(action_id.clone(), "Run", 1.0)],
+            Duration::ZERO,
+        ),
+    );
+
+    // 情况一：成功（Notice）。
+    let runtime = Arc::new(FakeRuntime::with_routes(routes.clone()));
+    let (sink, _events) = FakeSink::new();
+    let coord = ApplicationCoordinator::new(runtime, Arc::new(sink));
+    let usage = coord.usage_store();
+    coord
+        .handle_ui(text_query(QueryGeneration::INITIAL, "hello"))
+        .await;
+    coord
+        .handle_ui(UiToHost::Invoke {
+            generation: QueryGeneration::INITIAL,
+            item_id: format!("action:{action_id}"),
+            invocation_id: InvocationId::new(),
+            action_id: action_id.clone(),
+            input: ActionInput::plain_text("hello"),
+        })
+        .await;
+    assert!(
+        usage.frecency_boost(&action_id) > 0.0,
+        "成功调用应记录一次使用"
+    );
+
+    // 情况二：失败（Error）不应记录。
+    let runtime = Arc::new(FakeRuntime::with_routes(routes));
+    *runtime.invoke_outcome.lock().unwrap() = ActionOutcome::Error(ActionError::DeadlineExceeded);
+    let (sink, _events) = FakeSink::new();
+    let coord = ApplicationCoordinator::new(runtime, Arc::new(sink));
+    let usage = coord.usage_store();
+    coord
+        .handle_ui(text_query(QueryGeneration::INITIAL, "hello"))
+        .await;
+    coord
+        .handle_ui(UiToHost::Invoke {
+            generation: QueryGeneration::INITIAL,
+            item_id: format!("action:{action_id}"),
+            invocation_id: InvocationId::new(),
+            action_id: action_id.clone(),
+            input: ActionInput::plain_text("hello"),
+        })
+        .await;
+    assert_eq!(
+        usage.frecency_boost(&action_id),
+        0.0,
+        "错误结果不应记录使用"
+    );
+}
+
 /// 没有当前路由快照时（例如 UI 直接构造 Invoke），宿主必须拒绝。
 #[tokio::test]
 async fn invoke_without_current_routes_is_rejected() {

@@ -57,6 +57,9 @@ impl RuntimePort for RuntimeAdapter {
     async fn cancel(&self, invocation_id: InvocationId) -> bool {
         self.runtime.cancel(invocation_id).await
     }
+    fn set_usage_store(&self, store: std::sync::Arc<dyn flick_domain::UsageStore>) {
+        self.runtime.set_usage_store(store);
+    }
     async fn surface_event(
         &self,
         session: SurfaceSessionId,

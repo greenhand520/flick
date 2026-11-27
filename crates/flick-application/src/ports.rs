@@ -54,6 +54,11 @@ pub trait RuntimePort: Send + Sync {
         Vec::new()
     }
 
+    /// 注入使用频率存储，用于搜索结果里的 frecency 加成。
+    ///
+    /// 默认实现忽略该存储（测试替身无需关心 frecency）。
+    fn set_usage_store(&self, _store: std::sync::Arc<dyn flick_domain::UsageStore>) {}
+
     /// 把 Execution 项的激活事件交给父 Action 处理。
     ///
     /// 返回 `None` 表示父 Action 未实现该事件（no-op）。默认实现即 no-op。
