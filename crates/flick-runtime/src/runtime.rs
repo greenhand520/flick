@@ -14,6 +14,14 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 
+/// 搜索阶段单个 Action 最多展开多少条执行项（设计文档 §7.4 / §9 约束 8）。
+pub const MAX_EXECUTION_ITEMS_PER_ACTION: usize = 20;
+
+/// 搜索阶段调用单个 Action 的截止时间（毫秒）。
+///
+/// 由宿主固定，插件不能通过 manifest 或 descriptor 延长（设计文档 §9 约束 9）。
+pub const SEARCH_INVOKE_TIMEOUT_MS: u64 = 150;
+
 /// 活动调用映射中的条目。
 ///
 /// 仅存储 [`CancellationToken`]，以便外部调用方
@@ -38,8 +46,27 @@ struct SurfaceSessionState {
 pub struct ActionRuntime {
     registry: Arc<RwLock<ActionRegistry>>,
     active: Arc<tokio::sync::Mutex<HashMap<InvocationId, ActiveEntry>>>,
-    host_info: std::sync::RwLock<Option<Arc<flick_domain::HostInfo>>>,
+    /// 宿主信息；用 `Arc` 包裹以便随 [`InvocationCore`] 克隆进并行任务。
+    host_info: Arc<std::sync::RwLock<Option<Arc<flick_domain::HostInfo>>>>,
     /// 活动 Surface 会话映射（会话 id → 状态）。
+    surface_sessions: Arc<RwLock<HashMap<SurfaceSessionId, SurfaceSessionState>>>,
+    /// 搜索代次取消槽：记录当前搜索代次与其取消令牌。
+    search_cancel: std::sync::Mutex<Option<(QueryGeneration, CancellationToken)>>,
+}
+
+/// 一次动作调用所需的最小运行时上下文。
+///
+/// 抽出来是为了让调用逻辑能被 `tokio::task::JoinSet::spawn`：
+/// `JoinSet` 要求任务 `'static`，而 `&ActionRuntime` 不是。
+#[derive(Clone)]
+struct InvocationCore {
+    /// 动作注册表。
+    registry: Arc<RwLock<ActionRegistry>>,
+    /// 活动调用表（用于外部取消）。
+    active: Arc<tokio::sync::Mutex<HashMap<InvocationId, ActiveEntry>>>,
+    /// 宿主信息。
+    host_info: Arc<std::sync::RwLock<Option<Arc<flick_domain::HostInfo>>>>,
+    /// 活动 Surface 会话表（`OpenSurface` 回填需要）。
     surface_sessions: Arc<RwLock<HashMap<SurfaceSessionId, SurfaceSessionState>>>,
 }
 
@@ -49,8 +76,19 @@ impl ActionRuntime {
         Self {
             registry: Arc::new(RwLock::new(ActionRegistry::new())),
             active: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
-            host_info: std::sync::RwLock::new(None),
+            host_info: Arc::new(std::sync::RwLock::new(None)),
             surface_sessions: Arc::new(RwLock::new(HashMap::new())),
+            search_cancel: std::sync::Mutex::new(None),
+        }
+    }
+
+    /// 克隆出一次调用所需的最小上下文。
+    fn core(&self) -> InvocationCore {
+        InvocationCore {
+            registry: Arc::clone(&self.registry),
+            active: Arc::clone(&self.active),
+            host_info: Arc::clone(&self.host_info),
+            surface_sessions: Arc::clone(&self.surface_sessions),
         }
     }
 
@@ -131,42 +169,86 @@ impl ActionRuntime {
         reg.search_input(context)
     }
 
-    /// 搜索阶段执行：只调用 `search_invocable` Action，固定 150ms 超时。
+    /// 搜索阶段执行：对所有 `search_invocable` Action **并行**调用。
     ///
     /// 这些 Action 必须只读、无副作用；每个 Action 的结果经
     /// [`execution_route_items`] 归一化为 [`RouteItem`] 执行项。
-    /// 错误与超时只记录日志并丢弃，不影响其它 Action。
+    /// 错误、超时与取消只记录日志并丢弃，不影响其它 Action。
     ///
-    /// `input` 是完整输入（含 `files` / `image`）；`generation` 目前未使用，
-    /// 由 Task 4 接入代次取消。
+    /// 新代次进来时先取消旧代次的在途调用（`generation` 由协调器透传）。
+    /// 跨父 Action 的顺序不在这里保证：`JoinSet` 先完成的先返回，
+    /// 排序由 Presenter 按父项位置决定。
     pub async fn search_invoke(
         &self,
-        _generation: QueryGeneration,
+        generation: QueryGeneration,
         input: ActionInput,
     ) -> Vec<RouteItem> {
+        // 空文本且无附件时无事可做。
         if input.text.trim().is_empty() && input.files.is_empty() && input.image.is_none() {
             return Vec::new();
         }
+
+        // 新代次进来先取消旧代次。
+        let parent = self.begin_search_generation(generation);
+
         let action_ids = {
             let reg = self.registry.read().await;
             reg.search_invocable_actions(input.kind)
         };
-        let mut out = Vec::new();
+        if action_ids.is_empty() {
+            return Vec::new();
+        }
+
+        let core = self.core();
+        let mut set = tokio::task::JoinSet::new();
         for action_id in action_ids {
-            let request = ActionRequest {
-                invocation_id: InvocationId::new(),
-                action_id: action_id.clone(),
-                input: input.clone(),
-                caller: flick_domain::Caller::ui("search-route"),
-                source: flick_domain::ActionSource::SearchRoute,
-                deadline: flick_domain::Deadline {
-                    timeout: std::time::Duration::from_millis(150),
-                },
+            let core = core.clone();
+            let input = input.clone();
+            let parent = parent.clone();
+            set.spawn(async move {
+                let invocation_id = InvocationId::new();
+                let request = ActionRequest {
+                    invocation_id,
+                    action_id: action_id.clone(),
+                    input,
+                    caller: flick_domain::Caller::ui("search-route"),
+                    source: flick_domain::ActionSource::SearchRoute,
+                    deadline: flick_domain::Deadline {
+                        timeout: std::time::Duration::from_millis(SEARCH_INVOKE_TIMEOUT_MS),
+                    },
+                };
+                let outcome = core.invoke(request, Some(parent)).await;
+                (action_id, invocation_id, outcome)
+            });
+        }
+
+        let mut out = Vec::new();
+        while let Some(joined) = set.join_next().await {
+            // 任务 panic 已由 `InvocationCore::invoke` 转成 Internal 错误，
+            // 这里只防 join 失败（例如任务被 abort）。
+            let Ok((action_id, invocation_id, outcome)) = joined else {
+                continue;
             };
-            let outcome = self.invoke(request).await;
-            out.extend(execution_route_items(action_id, outcome));
+            out.extend(execution_route_items(action_id, invocation_id, outcome));
         }
         out
+    }
+
+    /// 开始一个新的搜索代次，返回该代次的父取消令牌。
+    ///
+    /// 若槽里存的是**别的**代次，先 `cancel()` 旧令牌再替换；
+    /// 同代次重复调用则复用原令牌。
+    fn begin_search_generation(&self, generation: QueryGeneration) -> CancellationToken {
+        let mut slot = self.search_cancel.lock().unwrap();
+        if let Some((current, token)) = slot.as_ref() {
+            if *current == generation {
+                return token.clone();
+            }
+            token.cancel();
+        }
+        let token = CancellationToken::new();
+        *slot = Some((generation, token.clone()));
+        token
     }
 
     /// 用户对 Execution 项操作时，交给父 Action 的 handler 处理。
@@ -207,13 +289,85 @@ impl ActionRuntime {
 
     /// 调用一个动作。
     ///
-    /// 1. 在注册表中查找处理器（读锁，立即
-    ///    释放）。
-    /// 2. 使用新的 [`CancellationToken`] 生成处理器任务。
-    /// 3. 将处理器的完成与请求截止时间和
-    ///    外部取消进行竞速。
+    /// 委托给 [`InvocationCore::invoke`]，不附带父取消令牌。
+    pub async fn invoke(&self, request: ActionRequest) -> ActionOutcome {
+        self.core().invoke(request, None).await
+    }
+
+    /// 向会话的插件处理器转发一次 Surface 交互事件，返回更新后的内容。
+    pub async fn surface_event(
+        &self,
+        session_id: SurfaceSessionId,
+        event: SurfaceEventKind,
+    ) -> Result<SurfaceContent, SurfaceError> {
+        let session = {
+            let sessions = self.surface_sessions.read().await;
+            sessions
+                .get(&session_id)
+                .map(|s| s.session.clone())
+                .ok_or(SurfaceError {
+                    message: "surface session not found".into(),
+                })?
+        };
+        let handler = {
+            let reg = self.registry.read().await;
+            reg.surface_handler_for(&session.plugin_id)
+        }
+        .ok_or(SurfaceError {
+            message: "surface handler not found".into(),
+        })?;
+        handler.on_event(&session, event).await
+    }
+
+    /// 关闭一个 Surface 会话（幂等）：触发 `on_close` 并移除会话。
+    pub async fn surface_closed(&self, session_id: SurfaceSessionId) {
+        let removed = {
+            let mut sessions = self.surface_sessions.write().await;
+            sessions.remove(&session_id)
+        };
+        if let Some(state) = removed {
+            let handler = {
+                let reg = self.registry.read().await;
+                reg.surface_handler_for(&state.session.plugin_id)
+            };
+            if let Some(h) = handler {
+                h.on_close(&state.session).await;
+            }
+        }
+    }
+
+    /// 取消正在执行中的调用。
+    ///
+    /// 如果找到了该调用且其取消令牌是首次收到信号
+    /// （即此前尚未取消），则返回 `true`。
+    pub async fn cancel(&self, invocation_id: InvocationId) -> bool {
+        let active = self.active.lock().await;
+        match active.get(&invocation_id) {
+            Some(entry) => {
+                if entry.cancel_token.is_cancelled() {
+                    false
+                } else {
+                    entry.cancel_token.cancel();
+                    true
+                }
+            }
+            None => false,
+        }
+    }
+}
+
+impl InvocationCore {
+    /// 调用一个动作。
+    ///
+    /// 1. 在注册表中查找处理器（读锁，立即释放）。
+    /// 2. 使用取消令牌（`parent_token` 存在时取其子令牌）生成处理器任务。
+    /// 3. 将处理器的完成与请求截止时间、外部取消进行竞速。
     /// 4. 完成后清理活动条目。
-    pub async fn invoke(&self, mut request: ActionRequest) -> ActionOutcome {
+    async fn invoke(
+        &self,
+        mut request: ActionRequest,
+        parent_token: Option<CancellationToken>,
+    ) -> ActionOutcome {
         let invocation_id = request.invocation_id;
         let deadline = request.deadline.timeout;
 
@@ -244,7 +398,11 @@ impl ActionRuntime {
         }
 
         // ── 2. 准备取消令牌并生成任务 ───────────────────
-        let token = CancellationToken::new();
+        // 有父令牌时用子令牌，父令牌取消会级联到本次调用。
+        let token = match parent_token {
+            Some(parent) => parent.child_token(),
+            None => CancellationToken::new(),
+        };
         let ctx = ActionContext {
             cancellation: token.clone(),
             host_info: self.host_info.read().unwrap().clone(),
@@ -284,7 +442,7 @@ impl ActionRuntime {
                 token.cancel();
                 ActionOutcome::Error(ActionError::DeadlineExceeded)
             }
-            // 分支 C — 外部取消（有人调用了 `cancel()`）
+            // 分支 C — 外部取消（有人调用了 `cancel()` 或父令牌被取消）
             _ = token.cancelled() => {
                 ActionOutcome::Error(ActionError::Cancelled)
             }
@@ -352,67 +510,6 @@ impl ActionRuntime {
             needs_search,
         }
     }
-
-    /// 向会话的插件处理器转发一次 Surface 交互事件，返回更新后的内容。
-    pub async fn surface_event(
-        &self,
-        session_id: SurfaceSessionId,
-        event: SurfaceEventKind,
-    ) -> Result<SurfaceContent, SurfaceError> {
-        let session = {
-            let sessions = self.surface_sessions.read().await;
-            sessions
-                .get(&session_id)
-                .map(|s| s.session.clone())
-                .ok_or(SurfaceError {
-                    message: "surface session not found".into(),
-                })?
-        };
-        let handler = {
-            let reg = self.registry.read().await;
-            reg.surface_handler_for(&session.plugin_id)
-        }
-        .ok_or(SurfaceError {
-            message: "surface handler not found".into(),
-        })?;
-        handler.on_event(&session, event).await
-    }
-
-    /// 关闭一个 Surface 会话（幂等）：触发 `on_close` 并移除会话。
-    pub async fn surface_closed(&self, session_id: SurfaceSessionId) {
-        let removed = {
-            let mut sessions = self.surface_sessions.write().await;
-            sessions.remove(&session_id)
-        };
-        if let Some(state) = removed {
-            let handler = {
-                let reg = self.registry.read().await;
-                reg.surface_handler_for(&state.session.plugin_id)
-            };
-            if let Some(h) = handler {
-                h.on_close(&state.session).await;
-            }
-        }
-    }
-
-    /// 取消正在执行中的调用。
-    ///
-    /// 如果找到了该调用且其取消令牌是首次收到信号
-    /// （即此前尚未取消），则返回 `true`。
-    pub async fn cancel(&self, invocation_id: InvocationId) -> bool {
-        let active = self.active.lock().await;
-        match active.get(&invocation_id) {
-            Some(entry) => {
-                if entry.cancel_token.is_cancelled() {
-                    false
-                } else {
-                    entry.cancel_token.cancel();
-                    true
-                }
-            }
-            None => false,
-        }
-    }
 }
 
 impl Default for ActionRuntime {
@@ -425,7 +522,14 @@ impl Default for ActionRuntime {
 ///
 /// 数组结果逐项展开，单项结果作为单条执行项；`Error`/`OpenSurface`
 /// 不产生执行项（仅记录日志）。标题按 `title`/`name`/`label` 回退。
-fn execution_route_items(parent_action_id: ActionId, outcome: ActionOutcome) -> Vec<RouteItem> {
+/// 结果按 [`MAX_EXECUTION_ITEMS_PER_ACTION`] 截断。
+///
+/// 分数统一为 `0.0`：Runtime 没有父 Action 的分数，由 Presenter 合并时继承。
+fn execution_route_items(
+    parent_action_id: ActionId,
+    invocation_id: InvocationId,
+    outcome: ActionOutcome,
+) -> Vec<RouteItem> {
     let mut items = Vec::new();
     let mut push = |raw: serde_json::Value, fallback_title: String, index: usize| {
         let object = raw.as_object();
@@ -458,7 +562,7 @@ fn execution_route_items(parent_action_id: ActionId, outcome: ActionOutcome) -> 
         let item = flick_domain::ExecutionItem {
             item_id,
             parent_action_id: parent_action_id.clone(),
-            invocation_id: InvocationId::new(),
+            invocation_id,
             title,
             subtitle,
             icon,
@@ -491,5 +595,7 @@ fn execution_route_items(parent_action_id: ActionId, outcome: ActionOutcome) -> 
             tracing::warn!("search_invoke returned OpenSurface; dropped");
         }
     }
+    // 单个 Action 最多展开 20 条执行项，避免插件返回大列表时撑爆候选面板。
+    items.truncate(MAX_EXECUTION_ITEMS_PER_ACTION);
     items
 }

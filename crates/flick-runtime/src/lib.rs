@@ -29,4 +29,4 @@ pub use flick_plugin::{
     SurfaceSession, validate_manifest,
 };
 pub use registry::ActionRegistry;
-pub use runtime::ActionRuntime;
+pub use runtime::{ActionRuntime, MAX_EXECUTION_ITEMS_PER_ACTION, SEARCH_INVOKE_TIMEOUT_MS};

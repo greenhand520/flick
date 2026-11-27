@@ -216,3 +216,341 @@ async fn search_route_open_surface_has_no_side_effects() {
         "on_open must not fire for search-stage OpenSurface"
     );
 }
+
+// ─── 并行、取消、上限与输入透传 ───────────────────────────────────────
+
+// 复用文件中部已有的 `use std::sync::atomic::{AtomicUsize, Ordering};`
+// （为 `CountingSurfaceHandler` 服务的那一行），此处只补下面两个 import，
+// 否则会触发 E0252 重复导入。
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
+
+/// 记录收到的输入，并在固定延迟后返回一条执行项。
+struct SlowSearchHandler {
+    /// 处理器被调用次数。
+    calls: Arc<AtomicUsize>,
+    /// 处理器观察到的输入。
+    seen: Arc<Mutex<Vec<ActionInput>>>,
+    /// 模拟耗时。
+    delay: Duration,
+}
+
+#[async_trait]
+impl ActionHandler for SlowSearchHandler {
+    async fn invoke(
+        &self,
+        request: ActionRequest,
+        _: ActionContext,
+    ) -> Result<ActionOutcome, ActionError> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        self.seen.lock().unwrap().push(request.input.clone());
+        tokio::time::sleep(self.delay).await;
+        Ok(ActionOutcome::Data(serde_json::json!([
+            {"id": "slow:item", "title": "Slow"}
+        ])))
+    }
+}
+
+/// 返回固定条数执行项的处理器。
+struct BulkSearchHandler {
+    /// 返回条数。
+    count: usize,
+}
+
+#[async_trait]
+impl ActionHandler for BulkSearchHandler {
+    async fn invoke(
+        &self,
+        _request: ActionRequest,
+        _: ActionContext,
+    ) -> Result<ActionOutcome, ActionError> {
+        let values: Vec<serde_json::Value> = (0..self.count)
+            .map(|i| serde_json::json!({ "id": format!("bulk:{i}"), "title": format!("Bulk {i}") }))
+            .collect();
+        Ok(ActionOutcome::Data(serde_json::Value::Array(values)))
+    }
+}
+
+/// 阻塞到取消令牌触发才返回的处理器。
+struct CancellableSearchHandler {
+    /// 通知测试「已经进入处理器」。
+    started: Arc<tokio::sync::Notify>,
+}
+
+#[async_trait]
+impl ActionHandler for CancellableSearchHandler {
+    async fn invoke(
+        &self,
+        _request: ActionRequest,
+        context: ActionContext,
+    ) -> Result<ActionOutcome, ActionError> {
+        self.started.notify_one();
+        context.cancellation.cancelled().await;
+        Ok(ActionOutcome::Data(serde_json::json!([
+            {"id": "cancelled:item", "title": "Should not appear"}
+        ])))
+    }
+}
+
+/// 构造一个声明了 `search_invocable` 的插件。
+struct SearchablePlugin {
+    /// 插件 id（动作 id 必须以 `{id}.` 开头）。
+    plugin_id: String,
+    /// 每个动作的 (动作 id, 处理器, 支持的输入类型)。
+    actions: Vec<(ActionId, Arc<dyn ActionHandler>, Vec<InputType>)>,
+}
+
+impl Plugin for SearchablePlugin {
+    fn manifest(&self) -> PluginManifest {
+        PluginManifest {
+            id: self.plugin_id.clone(),
+            name: "Searchable".into(),
+            author: "test".into(),
+            version: "1.0.0".into(),
+            kind: PluginKind::BuiltInRust,
+            keywords: vec![],
+            icon: None,
+            profile: PluginProfile::default(),
+            permissions: vec![],
+            plugin_dependencies: vec![],
+            settings: vec![],
+            surfaces: vec![],
+            supported_os: vec![],
+            supported_architectures: vec![],
+            needs_search: false,
+        }
+    }
+
+    fn actions(&self) -> Vec<ActionSpec> {
+        self.actions
+            .iter()
+            .map(|(id, handler, inputs)| {
+                let mut d = ActionDescriptor::new(
+                    id.clone(),
+                    id.as_str(),
+                    vec![],
+                    ConcurrencyPolicy::Parallel,
+                );
+                d.search_invocable = true;
+                d.supported_inputs = inputs.clone();
+                ActionSpec {
+                    descriptor: d,
+                    handler: Arc::clone(handler),
+                }
+            })
+            .collect()
+    }
+}
+
+#[tokio::test]
+async fn search_invoke_runs_actions_in_parallel() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let handler = Arc::new(SlowSearchHandler {
+        calls: Arc::clone(&calls),
+        seen,
+        delay: Duration::from_millis(100),
+    });
+    let plugin = SearchablePlugin {
+        plugin_id: "test.parallel".into(),
+        actions: vec![
+            (
+                ActionId::from_static("test.parallel.v1.a"),
+                handler.clone(),
+                vec![InputType::PlainText],
+            ),
+            (
+                ActionId::from_static("test.parallel.v1.b"),
+                handler.clone(),
+                vec![InputType::PlainText],
+            ),
+            (
+                ActionId::from_static("test.parallel.v1.c"),
+                handler.clone(),
+                vec![InputType::PlainText],
+            ),
+        ],
+    };
+    let runtime = ActionRuntime::new();
+    runtime.register_plugin(&plugin).await.unwrap();
+
+    let started = Instant::now();
+    let items = runtime
+        .search_invoke(
+            QueryGeneration::INITIAL,
+            ActionInput::plain_text("slow"),
+        )
+        .await;
+    let elapsed = started.elapsed();
+
+    assert_eq!(calls.load(Ordering::SeqCst), 3);
+    assert_eq!(items.len(), 3);
+    assert!(
+        elapsed < Duration::from_millis(250),
+        "3 x 100ms must run in parallel, took {elapsed:?}"
+    );
+}
+
+#[tokio::test]
+async fn search_invoke_truncates_to_twenty_items_per_action() {
+    let plugin = SearchablePlugin {
+        plugin_id: "test.bulk".into(),
+        actions: vec![(
+            ActionId::from_static("test.bulk.v1.search"),
+            Arc::new(BulkSearchHandler { count: 50 }),
+            vec![InputType::PlainText],
+        )],
+    };
+    let runtime = ActionRuntime::new();
+    runtime.register_plugin(&plugin).await.unwrap();
+
+    let items = runtime
+        .search_invoke(
+            QueryGeneration::INITIAL,
+            ActionInput::plain_text("bulk"),
+        )
+        .await;
+
+    assert_eq!(items.len(), MAX_EXECUTION_ITEMS_PER_ACTION);
+    assert_eq!(items[0].item_id, "bulk:0");
+    assert_eq!(items[MAX_EXECUTION_ITEMS_PER_ACTION - 1].item_id, "bulk:19");
+}
+
+#[tokio::test]
+async fn search_invoke_passes_files_and_image_to_handler() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let plugin = SearchablePlugin {
+        plugin_id: "test.attach".into(),
+        actions: vec![(
+            ActionId::from_static("test.attach.v1.search"),
+            Arc::new(SlowSearchHandler {
+                calls: Arc::new(AtomicUsize::new(0)),
+                seen: Arc::clone(&seen),
+                delay: Duration::ZERO,
+            }),
+            vec![InputType::Files],
+        )],
+    };
+    let runtime = ActionRuntime::new();
+    runtime.register_plugin(&plugin).await.unwrap();
+
+    let mut input = ActionInput::plain_text("a.txt b.txt");
+    input.kind = InputType::Files;
+    input.files = vec![FileInput {
+        uri: "file:///tmp/a.txt".into(),
+        display_name: "a.txt".into(),
+        extension: Some("txt".into()),
+        is_dir: false,
+        mime: None,
+    }];
+
+    let items = runtime
+        .search_invoke(QueryGeneration::INITIAL, input)
+        .await;
+
+    assert_eq!(items.len(), 1);
+    let seen = seen.lock().unwrap();
+    assert_eq!(seen.len(), 1);
+    assert_eq!(seen[0].kind, InputType::Files);
+    assert_eq!(seen[0].files.len(), 1);
+    assert_eq!(seen[0].files[0].display_name, "a.txt");
+}
+
+#[tokio::test]
+async fn new_generation_cancels_previous_search() {
+    let started = Arc::new(tokio::sync::Notify::new());
+    let plugin = SearchablePlugin {
+        plugin_id: "test.cancel".into(),
+        actions: vec![(
+            ActionId::from_static("test.cancel.v1.search"),
+            Arc::new(CancellableSearchHandler {
+                started: Arc::clone(&started),
+            }),
+            vec![InputType::PlainText],
+        )],
+    };
+    let runtime = Arc::new(ActionRuntime::new());
+    runtime.register_plugin(&plugin).await.unwrap();
+
+    let gen1 = QueryGeneration::INITIAL;
+    let gen2 = gen1.next();
+
+    let runtime_for_task = Arc::clone(&runtime);
+    let first = tokio::spawn(async move {
+        runtime_for_task
+            .search_invoke(gen1, ActionInput::plain_text("cancel"))
+            .await
+    });
+
+    // 等第一个代次真正进入处理器。
+    started.notified().await;
+
+    // 新代次用图片输入：该 Action 只支持 PlainText，因此不会被再次调用，
+    // 但 `search_invoke` 仍会先取消旧代次的令牌。
+    let second = runtime
+        .search_invoke(gen2, ActionInput::clipboard_image("image/png", vec![1, 2, 3]))
+        .await;
+    assert!(second.is_empty());
+
+    let first_items = tokio::time::timeout(Duration::from_secs(2), first)
+        .await
+        .expect("cancelled search must return promptly")
+        .unwrap();
+    assert!(
+        first_items.is_empty(),
+        "cancelled generation must not produce items"
+    );
+}
+
+#[tokio::test]
+async fn execution_item_carries_real_invocation_id() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let plugin = SearchablePlugin {
+        plugin_id: "test.ids".into(),
+        actions: vec![(
+            ActionId::from_static("test.ids.v1.search"),
+            Arc::new(RecordingInvocationHandler {
+                seen: Arc::clone(&seen),
+            }),
+            vec![InputType::PlainText],
+        )],
+    };
+    let runtime = ActionRuntime::new();
+    runtime.register_plugin(&plugin).await.unwrap();
+
+    let items = runtime
+        .search_invoke(
+            QueryGeneration::INITIAL,
+            ActionInput::plain_text("ids"),
+        )
+        .await;
+
+    assert_eq!(items.len(), 1);
+    let seen = seen.lock().unwrap();
+    assert_eq!(seen.len(), 1);
+    assert_eq!(
+        items[0].invocation_id,
+        Some(seen[0]),
+        "execution item must carry the real invocation id"
+    );
+}
+
+/// 记录收到的 `invocation_id` 并返回一条执行项。
+struct RecordingInvocationHandler {
+    /// 收到的调用 id。
+    seen: Arc<Mutex<Vec<InvocationId>>>,
+}
+
+#[async_trait]
+impl ActionHandler for RecordingInvocationHandler {
+    async fn invoke(
+        &self,
+        request: ActionRequest,
+        _: ActionContext,
+    ) -> Result<ActionOutcome, ActionError> {
+        self.seen.lock().unwrap().push(request.invocation_id);
+        Ok(ActionOutcome::Data(serde_json::json!([
+            {"id": "ids:item", "title": "Ids"}
+        ])))
+    }
+}
