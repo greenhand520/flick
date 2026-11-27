@@ -193,7 +193,10 @@ impl ActionRuntime {
 
         let action_ids = {
             let reg = self.registry.read().await;
-            reg.search_invocable_actions(input.kind)
+            let mut action_ids = reg.search_invocable_actions(input.kind);
+            // 与 action 候选上限保持一致，避免插件过多时一次性并发打爆宿主（设计文档 §9 风险表）。
+            action_ids.truncate(crate::registry::MAX_ACTION_RESULTS);
+            action_ids
         };
         if action_ids.is_empty() {
             return Vec::new();
