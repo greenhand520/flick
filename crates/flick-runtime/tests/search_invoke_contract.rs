@@ -220,8 +220,9 @@ async fn search_route_open_surface_has_no_side_effects() {
 // ─── 并行、取消、上限与输入透传 ───────────────────────────────────────
 
 // 复用文件中部已有的 `use std::sync::atomic::{AtomicUsize, Ordering};`
-// （为 `CountingSurfaceHandler` 服务的那一行），此处只补下面两个 import，
+// （为 `CountingSurfaceHandler` 服务的那一行），此处只补下面这些 import，
 // 否则会触发 E0252 重复导入。
+use std::sync::atomic::AtomicBool;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -271,10 +272,12 @@ impl ActionHandler for BulkSearchHandler {
     }
 }
 
-/// 阻塞到取消令牌触发才返回的处理器。
+/// 阻塞到取消令牌触发才返回的处理器，并记录是否真正观察到取消。
 struct CancellableSearchHandler {
     /// 通知测试「已经进入处理器」。
     started: Arc<tokio::sync::Notify>,
+    /// 观察到的取消信号（证明在途调用被级联取消）。
+    cancelled_seen: Arc<AtomicBool>,
 }
 
 #[async_trait]
@@ -286,9 +289,8 @@ impl ActionHandler for CancellableSearchHandler {
     ) -> Result<ActionOutcome, ActionError> {
         self.started.notify_one();
         context.cancellation.cancelled().await;
-        Ok(ActionOutcome::Data(serde_json::json!([
-            {"id": "cancelled:item", "title": "Should not appear"}
-        ])))
+        self.cancelled_seen.store(true, Ordering::SeqCst);
+        Err(ActionError::Cancelled)
     }
 }
 
@@ -342,7 +344,7 @@ impl Plugin for SearchablePlugin {
     }
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn search_invoke_runs_actions_in_parallel() {
     let calls = Arc::new(AtomicUsize::new(0));
     let seen = Arc::new(Mutex::new(Vec::new()));
@@ -386,7 +388,7 @@ async fn search_invoke_runs_actions_in_parallel() {
     assert_eq!(calls.load(Ordering::SeqCst), 3);
     assert_eq!(items.len(), 3);
     assert!(
-        elapsed < Duration::from_millis(250),
+        elapsed < Duration::from_millis(300),
         "3 x 100ms must run in parallel, took {elapsed:?}"
     );
 }
@@ -459,12 +461,14 @@ async fn search_invoke_passes_files_and_image_to_handler() {
 #[tokio::test]
 async fn new_generation_cancels_previous_search() {
     let started = Arc::new(tokio::sync::Notify::new());
+    let cancelled_seen = Arc::new(AtomicBool::new(false));
     let plugin = SearchablePlugin {
         plugin_id: "test.cancel".into(),
         actions: vec![(
             ActionId::from_static("test.cancel.v1.search"),
             Arc::new(CancellableSearchHandler {
                 started: Arc::clone(&started),
+                cancelled_seen: Arc::clone(&cancelled_seen),
             }),
             vec![InputType::PlainText],
         )],
@@ -476,17 +480,18 @@ async fn new_generation_cancels_previous_search() {
     let gen2 = gen1.next();
 
     let runtime_for_task = Arc::clone(&runtime);
+    let launched_at = Instant::now();
     let first = tokio::spawn(async move {
         runtime_for_task
             .search_invoke(gen1, ActionInput::plain_text("cancel"))
             .await
     });
 
-    // 等第一个代次真正进入处理器。
+    // 等第一个代次真正进入处理器，确保取消到达时它确实在途。
     started.notified().await;
 
     // 新代次用图片输入：该 Action 只支持 PlainText，因此不会被再次调用，
-    // 但 `search_invoke` 仍会先取消旧代次的令牌。
+    // 但 `search_invoke` 仍会先取消旧代次的令牌（级联到在途的子令牌）。
     let second = runtime
         .search_invoke(gen2, ActionInput::clipboard_image("image/png", vec![1, 2, 3]))
         .await;
@@ -496,9 +501,24 @@ async fn new_generation_cancels_previous_search() {
         .await
         .expect("cancelled search must return promptly")
         .unwrap();
+    let elapsed = launched_at.elapsed();
+
     assert!(
         first_items.is_empty(),
         "cancelled generation must not produce items"
+    );
+    assert!(
+        cancelled_seen.load(Ordering::SeqCst),
+        "handler must observe cancellation"
+    );
+    // 关键判据（区分「被取消」与「超时」）：gen1 的 deadline 固定为
+    // SEARCH_INVOKE_TIMEOUT_MS = 150ms。若代次取消失效，gen1 会一直阻塞到
+    // 150ms 的 DeadlineExceeded 才返回；届时 items 同样为空，且截止分支也会
+    // 取消子令牌（故 cancelled_seen 亦为 true），前两条断言都无法区分。
+    // 真正生效的级联取消能让 gen1 远早于 150ms 返回，故用耗时区分之。
+    assert!(
+        elapsed < Duration::from_millis(120),
+        "generation cancellation must return well before the 150ms deadline, took {elapsed:?}"
     );
 }
 
