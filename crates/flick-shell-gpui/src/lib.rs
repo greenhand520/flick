@@ -148,7 +148,7 @@ fn open_panel_window(
     clipboard_watch: crate::clipboard_watch::ClipboardWatch,
     initial: ThemeMode,
     result_limit: usize,
-) -> Result<AnyWindowHandle, String> {
+) -> Result<(AnyWindowHandle, bool), String> {
     // GNOME/Wayland 下 `primary_display()` 在窗口创建前可能返回 None；此时退回
     // `displays()` 的第一块显示器，否则窗口会退化成 1280×800，四周露出一大片
     // 透明区域（用户看到的“大的透明背景/边框”）。
@@ -159,6 +159,14 @@ fn open_panel_window(
         Some(display) => display.bounds(),
         None => Bounds::new(point(px(0.0), px(0.0)), size(px(1280.0), px(800.0))),
     };
+    tracing::debug!(
+        x = f32::from(bounds.origin.x),
+        y = f32::from(bounds.origin.y),
+        width = f32::from(bounds.size.width),
+        height = f32::from(bounds.size.height),
+        displays = app.displays().len(),
+        "打开搜索面板窗口"
+    );
 
     let layer_options = LayerShellOptions {
         namespace: "flick:launcher".into(),
@@ -206,13 +214,17 @@ fn open_panel_window(
 
     // GNOME/Mutter 等无 `wlr-layer-shell` 的合成器：回退到普通全屏透明窗口。
     let result = match result {
-        Ok(handle) => Ok(handle),
+        Ok(handle) => return Ok((handle.into(), false)),
         Err(err) if err.downcast_ref::<LayerShellNotSupportedError>().is_some() => {
             let fallback = WindowOptions {
                 titlebar: None,
                 is_resizable: false,
                 is_movable: false,
                 kind: WindowKind::Normal,
+                // 先按显示器 bounds 建窗，映射后再请求全屏（见调用方）。
+                // `Display::bounds()` 在分数缩放下按整数倍缩放算错
+                // （如 2880×1800 @1.6667 会算成 1440×900），直接用它建窗会
+                // 在屏幕右侧/底部露出透明条；只有合成器全屏配置后的尺寸才是准的。
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 window_background: WindowBackgroundAppearance::Transparent,
                 window_decorations: Some(WindowDecorations::Client),
@@ -238,9 +250,12 @@ fn open_panel_window(
         }
         Err(err) => Err(err),
     };
-    result
-        .map(|handle| handle.into())
-        .map_err(|err| err.to_string())
+    match result {
+        // 回退分支（无 layer-shell）需要在窗口映射后显式请求全屏，
+        // 才能拿到合成器给出的真实尺寸；layer-shell 分支由 anchor 铺满。
+        Ok(handle) => Ok((handle.into(), true)),
+        Err(err) => Err(err.to_string()),
+    }
 }
 
 /// 打开一个独立 Surface 窗口（快照渲染 + 会话交互）。
@@ -412,6 +427,10 @@ pub fn run_with_config(
             let mut current_theme = initial;
             // 结果条数上限可被设置系统热更新；新窗口也用最新值。
             let mut current_limit = result_limit;
+            // 回退分支（无 layer-shell）需要显式请求全屏，否则窗口大小取自
+            // `Display::bounds()`，在分数缩放下会比真实屏幕小一圈。
+            let mut fullscreen_requested = false;
+            let mut pending_fullscreen = false;
 
             // 应用级宿主事件泵（与窗口解耦）：窗口销毁后它仍存活，可再创建新窗口。
             cx.spawn(async move |cx: &mut AsyncApp| {
@@ -457,7 +476,10 @@ pub fn run_with_config(
                                                 current_limit,
                                             )
                                         }) {
-                                            Ok(h) => handle = Some(h),
+                                            Ok((h, needs_fullscreen)) => {
+                                                pending_fullscreen = needs_fullscreen;
+                                                handle = Some(h)
+                                            }
                                             Err(err) => {
                                                 eprintln!("flick: failed to open GPUI panel window: {err}");
                                                 continue;
@@ -468,6 +490,20 @@ pub fn run_with_config(
                                         let show = HostToUi::ShowSearchPanel { activation_token };
                                         let _ = cx.update(|app| {
                                             let _ = h.update(app, |anyview, window, app2| {
+                                                if pending_fullscreen && !fullscreen_requested {
+                                                    fullscreen_requested = true;
+                                                    window.toggle_fullscreen();
+                                                }
+                                                let viewport = window.viewport_size();
+                                                let bounds = window.bounds();
+                                                tracing::debug!(
+                                                    viewport_width = f32::from(viewport.width),
+                                                    viewport_height = f32::from(viewport.height),
+                                                    bounds_width = f32::from(bounds.size.width),
+                                                    bounds_height = f32::from(bounds.size.height),
+                                                    scale = window.scale_factor(),
+                                                    "面板窗口尺寸"
+                                                );
                                                 // 新窗口映射后请求激活并聚焦输入框。
                                                 window.activate_window();
                                                 if let Ok(view) = anyview.downcast::<AppView>() {
@@ -481,6 +517,7 @@ pub fn run_with_config(
                                     }
                                 }
                                 HostToUi::HideSearchPanel => {
+                                    fullscreen_requested = false;
                                     if let Some(h) = handle.take() {
                                         let _ = cx.update(|app| {
                                             let _ = h.update(app, |_, window, _| {
