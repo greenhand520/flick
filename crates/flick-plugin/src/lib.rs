@@ -9,7 +9,7 @@ mod manifest;
 
 pub use contract::{
     ActionHandler, ActionSpec, Plugin, PluginLifecycle, PluginRegistrationError, PluginRuntimeError,
-    PluginUiFactory, SurfaceError, SurfaceHandler, SurfaceSession,
+    PluginUiFactory, SettingsProvider, SurfaceError, SurfaceHandler, SurfaceSession,
 };
 pub use dependency::{DependencyResolution, resolve_dependencies};
 pub use manifest::validate_manifest;

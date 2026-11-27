@@ -8,9 +8,10 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use flick_domain::{
-    PluginContext, ActionDescriptor, ActionError, ActionId, ActionOutcome, ActionRequest,
-    ExecutionEventKind, PluginManifest, SurfaceContent, SurfaceEventKind, SurfaceSessionId,
+    ActionDescriptor, ActionError, ActionId, ActionOutcome, ActionRequest, ExecutionEventKind,
+    PluginContext, PluginManifest, SurfaceContent, SurfaceEventKind, SurfaceSessionId,
 };
+use flick_domain::settings::ConfigSnapshot;
 
 /// 每个注册的 Action 所实现的 trait。
 ///
@@ -44,6 +45,22 @@ pub trait ActionHandler: Send + Sync {
     ) -> Result<Option<ActionOutcome>, ActionError> {
         Ok(None)
     }
+}
+
+/// 宿主向运行时提供"插件设置"的抽象。
+///
+/// 本 crate 是纯契约层、**不依赖 tokio**，因此订阅用"回调注册"而不是
+/// watch channel：真正的 `watch::Receiver` 由 `flick-runtime` 在回调之上实现。
+///
+/// 实现者（`flick-daemon` 的 `SettingsAdapter`）必须：
+/// - `snapshot` 返回该插件命名空间的当前值（已合并声明默认值，**不含 secret**）；
+/// - `subscribe` 在该命名空间 revision 变化时，用新快照调用 `listener`。
+pub trait SettingsProvider: Send + Sync {
+    /// 解析某插件的当前设置快照。
+    fn snapshot(&self, plugin_id: &str) -> ConfigSnapshot;
+
+    /// 注册一个变更监听器（同一插件可有多个订阅者）。
+    fn subscribe(&self, plugin_id: &str, listener: Arc<dyn Fn(ConfigSnapshot) + Send + Sync>);
 }
 
 /// 一个动作 = 描述符 + 执行体。
@@ -150,4 +167,43 @@ pub enum PluginRuntimeError {
     HandlerPanicked,
     DeadlineExceeded,
     Cancelled,
+}
+
+#[cfg(test)]
+mod settings_provider_tests {
+    use super::SettingsProvider;
+    use flick_domain::settings::ConfigSnapshot;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    struct FixedProvider {
+        listeners: AtomicUsize,
+    }
+
+    impl SettingsProvider for FixedProvider {
+        fn snapshot(&self, plugin_id: &str) -> ConfigSnapshot {
+            ConfigSnapshot {
+                namespace: plugin_id.to_string(),
+                revision: 3,
+                ..Default::default()
+            }
+        }
+
+        fn subscribe(
+            &self,
+            _plugin_id: &str,
+            _listener: Arc<dyn Fn(ConfigSnapshot) + Send + Sync>,
+        ) {
+            self.listeners.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    #[test]
+    fn provider_is_object_safe_and_reports_snapshot() {
+        let provider: Arc<dyn SettingsProvider> = Arc::new(FixedProvider {
+            listeners: AtomicUsize::new(0),
+        });
+        assert_eq!(provider.snapshot("flick.demo").revision(), 3);
+        provider.subscribe("flick.demo", Arc::new(|_| {}));
+    }
 }
