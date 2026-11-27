@@ -104,3 +104,35 @@ async fn echo_registered_in_runtime_is_findable() {
     assert!(!results.is_empty(), "echo should be routable");
     assert_eq!(results[0].action_id, id);
 }
+
+#[tokio::test]
+async fn register_builtin_resolves_dependencies_without_disabling_builtins() {
+    let runtime = flick_runtime::ActionRuntime::new();
+    flick_builtins::register_builtin(&runtime)
+        .await
+        .expect("builtin registration succeeds");
+
+    // 三个内置插件都不声明依赖，因此都可用。
+    let mut ids = runtime.registered_plugin_ids().await;
+    ids.sort();
+    assert_eq!(
+        ids,
+        vec![
+            "flick.builtin.apps".to_string(),
+            "flick.builtin.echo".to_string(),
+            "flick.builtin.host".to_string(),
+        ]
+    );
+    for id in &ids {
+        assert!(
+            runtime.dependency_status(id).await.is_empty(),
+            "{id} must declare no dependencies"
+        );
+    }
+
+    // 解析不得移除任何内置动作。
+    let routes = runtime
+        .route("echo hello", flick_domain::InputType::PlainText)
+        .await;
+    assert_eq!(routes.len(), 1);
+}
