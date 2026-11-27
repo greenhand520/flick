@@ -91,58 +91,15 @@ pub fn ui_mono_font_family() -> &'static str {
         )
     })
 }
-
-/// 主题持久化配置路径：`$XDG_CONFIG_HOME/flick/shell-gpui.toml`
-/// （未设置时回退 `$HOME/.config/flick/shell-gpui.toml`）。
-pub(crate) fn theme_config_path() -> std::path::PathBuf {
-    let base = std::env::var_os("XDG_CONFIG_HOME")
-        .map(std::path::PathBuf::from)
-        .or_else(|| {
-            std::env::var_os("HOME").map(|home| {
-                let mut p = std::path::PathBuf::from(home);
-                p.push(".config");
-                p
-            })
-        })
-        .unwrap_or_default();
-    base.join("flick").join("shell-gpui.toml")
-}
-
-/// 解析主题配置文件：接受 `mode = "dark"` / `mode = "light"`（允许引号与注释）。
-pub(crate) fn parse_theme_toml(text: &str) -> Option<ThemeMode> {
-    for line in text.lines() {
-        let line = line.trim();
-        if line.is_empty() || line.starts_with('#') {
-            continue;
-        }
-        if let Some((key, value)) = line.split_once('=') {
-            if key.trim() != "mode" {
-                continue;
-            }
-            let value = value.trim().trim_matches('"').trim_matches('\'');
-            return match value {
-                "dark" => Some(ThemeMode::Dark),
-                "light" => Some(ThemeMode::Light),
-                _ => None,
-            };
-        }
-    }
-    None
-}
-
-/// 探测初始主题：持久化文件 > env 覆盖 > 系统颜色方案（gsettings）> 暗色回退。
+/// 探测初始主题：env 覆盖 > 系统颜色方案（gsettings）> 暗色回退。
+///
+/// 主题的权威来源是设置数据库（`core.theme.mode`，由守护进程经
+/// [`ShellConfig`] 注入）；本函数只在该来源不可用时兜底。
 ///
 /// 不使用 ashpd 的 portal —— 其 `tokio` feature 与 gpui 的 `async-io` feature 冲突，
 /// 会触发 compile_error。这里用 `gsettings` 做尽力而为的探测。
 pub fn detect_initial_theme() -> ThemeMode {
-    // 1) 用户上次通过 ctrl-shift-l 持久化的选择。
-    if let Ok(text) = std::fs::read_to_string(theme_config_path()) {
-        if let Some(mode) = parse_theme_toml(&text) {
-            return mode;
-        }
-    }
-
-    // 2) 显式环境变量覆盖。
+    // 1) 显式环境变量覆盖。
     if let Ok(v) = std::env::var("FLICK_SHELL_THEME") {
         match v.trim().to_ascii_lowercase().as_str() {
             "light" => return ThemeMode::Light,
@@ -453,6 +410,8 @@ pub fn run_with_config(
             let theme_tx_open = theme_tx.clone();
             // 新开窗口（面板/独立窗口）都用当前主题；面板内切换后更新。
             let mut current_theme = initial;
+            // 结果条数上限可被设置系统热更新；新窗口也用最新值。
+            let mut current_limit = result_limit;
 
             // 应用级宿主事件泵（与窗口解耦）：窗口销毁后它仍存活，可再创建新窗口。
             cx.spawn(async move |cx: &mut AsyncApp| {
@@ -495,7 +454,7 @@ pub fn run_with_config(
                                                 theme_tx_open.clone(),
                                                 clipboard_watch.clone(),
                                                 current_theme,
-                                                result_limit,
+                                                current_limit,
                                             )
                                         }) {
                                             Ok(h) => handle = Some(h),
@@ -607,6 +566,25 @@ pub fn run_with_config(
                                         }
                                     }
                                 }
+                                // 设置热更新：主题走既有的 theme 通道（同步 gpui-kit 主题、
+                                // 面板与所有独立窗口）；结果上限直接应用到面板视图。
+                                HostToUi::ThemeChanged { mode } => {
+                                    let _ = theme_tx_open.send(mode.into());
+                                }
+                                HostToUi::ResultLimitChanged { limit } => {
+                                    current_limit = limit;
+                                    if let Some(h) = handle {
+                                        let _ = cx.update(|app| {
+                                            let _ = h.update(app, |anyview, _, app2| {
+                                                if let Ok(view) = anyview.downcast::<AppView>() {
+                                                    view.update(app2, |v, cx2| {
+                                                        v.set_result_limit(limit, cx2)
+                                                    });
+                                                }
+                                            });
+                                        });
+                                    }
+                                }
                                 other => {
                                     if let Some(h) = handle {
                                         cx.update(|app| {
@@ -705,24 +683,4 @@ pub fn run_with_config(
             })
             .detach();
         });
-}
-
-#[cfg(test)]
-mod theme_config_tests {
-    // 注意：不要 `use super::*`——crate 根的 `use gpui_kit::*` 会把 gpui 的 `test` 宏
-    // 带进作用域，令内置 `#[test]` 解析到 gpui 宏而递归爆栈。只显式引入所需项。
-    use super::{ThemeMode, parse_theme_toml};
-
-    #[test]
-    fn parse_theme_toml_reads_mode() {
-        assert_eq!(parse_theme_toml("mode = \"dark\"\n"), Some(ThemeMode::Dark));
-        assert_eq!(parse_theme_toml("mode = 'light'"), Some(ThemeMode::Light));
-        assert_eq!(
-            parse_theme_toml("# 注释\nmode = \"light\""),
-            Some(ThemeMode::Light)
-        );
-        // 旧键名 / 空内容 → 回退 None（再由 detect 继续 env/gsettings/默认）。
-        assert_eq!(parse_theme_toml("theme = \"dark\""), None);
-        assert_eq!(parse_theme_toml(""), None);
-    }
 }

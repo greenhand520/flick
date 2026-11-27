@@ -252,6 +252,8 @@ impl ApplicationCoordinator {
             UiToHost::SurfaceClosed { session_id } => {
                 self.runtime.surface_closed(session_id).await;
             }
+            // 主题持久化由宿主外壳在投递到协调器之前拦截；协调器不关心主题。
+            UiToHost::SetTheme { .. } => {}
         }
     }
 

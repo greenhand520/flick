@@ -8,6 +8,45 @@ use crate::route::RouteItem;
 use crate::surface::{SurfaceContent, SurfaceEventKind};
 use serde::{Deserialize, Serialize};
 
+/// 主题模式，取值与设置系统 `core.theme.mode` 一致。
+///
+/// 定义在协议层而不是某个外壳里：主题需要经 IPC 在宿主与 UI 之间同步
+/// （`HostToUi::ThemeChanged` / `UiToHost::SetTheme`）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ThemeMode {
+    /// 暗色主题。
+    Dark,
+    /// 亮色主题。
+    Light,
+}
+
+impl ThemeMode {
+    /// 设置的序列化取值（`day`/`night` 以外的稳定字符串）。
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ThemeMode::Dark => "dark",
+            ThemeMode::Light => "light",
+        }
+    }
+
+    /// 从设置字符串解析；非法值返回 `None`。
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "dark" => Some(ThemeMode::Dark),
+            "light" => Some(ThemeMode::Light),
+            _ => None,
+        }
+    }
+
+    /// 返回相反的模式。
+    pub fn toggled(self) -> Self {
+        match self {
+            ThemeMode::Dark => ThemeMode::Light,
+            ThemeMode::Light => ThemeMode::Dark,
+        }
+    }
+}
+
 // ─── UI 意图（来自 Portal / 外部触发器）─────────────────────────────
 
 /// 用于控制 Flick 自身 UI 状态的意图。
@@ -85,6 +124,13 @@ pub enum UiToHost {
     },
     /// 用户关闭了某个 Surface 会话。
     SurfaceClosed { session_id: SurfaceSessionId },
+    /// 用户在面板内切换主题（快捷键），要求宿主持久化到
+    /// 设置系统 `core.theme.mode`；写入成功后宿主再广播
+    /// [`HostToUi::ThemeChanged`] 给所有窗口。
+    SetTheme {
+        /// 目标主题模式。
+        mode: ThemeMode,
+    },
 }
 
 // ─── Host → UI 消息 ──────────────────────────────────────────────────────
@@ -130,6 +176,16 @@ pub enum HostToUi {
     SurfaceFailed {
         session_id: SurfaceSessionId,
         message: String,
+    },
+    /// 主题设置发生变化（来自设置系统的变更通知），UI 应立即切换。
+    ThemeChanged {
+        /// 新的主题模式。
+        mode: ThemeMode,
+    },
+    /// 结果条数上限设置发生变化（`core.search.result_limit`）。
+    ResultLimitChanged {
+        /// 新的上限（已保证 >= 1）。
+        limit: usize,
     },
 }
 

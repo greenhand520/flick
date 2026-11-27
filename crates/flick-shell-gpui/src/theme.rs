@@ -13,7 +13,33 @@ pub enum ThemeMode {
     Light,
 }
 
+impl From<flick_domain::ThemeMode> for ThemeMode {
+    fn from(mode: flick_domain::ThemeMode) -> Self {
+        match mode {
+            flick_domain::ThemeMode::Dark => ThemeMode::Dark,
+            flick_domain::ThemeMode::Light => ThemeMode::Light,
+        }
+    }
+}
+
+impl From<ThemeMode> for flick_domain::ThemeMode {
+    fn from(mode: ThemeMode) -> Self {
+        match mode {
+            ThemeMode::Dark => flick_domain::ThemeMode::Dark,
+            ThemeMode::Light => flick_domain::ThemeMode::Light,
+        }
+    }
+}
+
 impl ThemeMode {
+    /// 设置的序列化取值（与 `core.theme.mode` 一致）。
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ThemeMode::Dark => "dark",
+            ThemeMode::Light => "light",
+        }
+    }
+
     /// 返回相反的模式。
     pub fn toggled(self) -> ThemeMode {
         match self {

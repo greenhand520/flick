@@ -337,6 +337,8 @@ async fn fake_host(
             UiToHost::SurfaceClosed { session_id } => {
                 runtime.surface_closed(session_id).await;
             }
+            // demo 不持久化主题。
+            UiToHost::SetTheme { .. } => {}
         }
     }
 }

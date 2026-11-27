@@ -121,6 +121,16 @@ impl AppState {
                         }
                         return Vec::new();
                     }
+                    // 主题/上限变更由 lib.rs 的窗口泵统一应用；这里仅同步本地状态，
+                    // 保证单独驱动 `AppState::update` 时行为一致。
+                    HostToUi::ThemeChanged { mode } => {
+                        self.theme = mode.into();
+                        return Vec::new();
+                    }
+                    HostToUi::ResultLimitChanged { limit } => {
+                        self.panel.set_result_limit(limit);
+                        return Vec::new();
+                    }
                     HostToUi::Shutdown => unreachable!("handled above"),
                 };
                 self.apply_panel_event(panel_event)
@@ -249,6 +259,17 @@ mod tests {
 
     fn state() -> AppState {
         AppState::new(ThemeMode::Dark)
+    }
+
+    #[test]
+    fn theme_and_result_limit_events_update_state() {
+        let mut s = state();
+        s.update(UiEvent::Host(HostToUi::ThemeChanged {
+            mode: flick_domain::ThemeMode::Light,
+        }));
+        assert_eq!(s.theme, ThemeMode::Light);
+        s.update(UiEvent::Host(HostToUi::ResultLimitChanged { limit: 3 }));
+        assert_eq!(s.panel.result_limit(), 3);
     }
 
     #[test]

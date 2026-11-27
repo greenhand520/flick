@@ -49,5 +49,5 @@ pub use surface::{
     BadgeTone, ButtonTone, ListItem, SURFACE_SCHEMA_VERSION, SpacerSize, SurfaceContent,
     SurfaceEventKind, SurfaceNode,
 };
-pub use ui::{HostToUi, RuntimeStatus, UiIntent, UiToHost};
+pub use ui::{HostToUi, RuntimeStatus, ThemeMode, UiIntent, UiToHost};
 pub use usage::{UsageStat, UsageStore, now_secs};

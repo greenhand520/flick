@@ -492,6 +492,12 @@ impl AppView {
         }
     }
 
+    /// 应用来自宿主的「结果条数上限」变更（设置热更新）。
+    pub(crate) fn set_result_limit(&mut self, limit: usize, cx: &mut Context<Self>) {
+        self.state.panel.set_result_limit(limit);
+        cx.notify();
+    }
+
     fn on_toggle_theme(
         &mut self,
         _: &ToggleThemeAction,
@@ -514,8 +520,11 @@ impl AppView {
             theme.font_family = crate::ui_font_family().into();
             theme.mono_font_family = crate::ui_mono_font_family().into();
         });
-        persist_theme(self.state.theme);
         let _ = self.theme_tx.send(self.state.theme);
+        // 持久化到设置系统：宿主写库成功后会广播 `ThemeChanged` 给所有窗口。
+        let _ = self.host_tx.send(UiToHost::SetTheme {
+            mode: self.state.theme.into(),
+        });
     }
 }
 
@@ -1079,20 +1088,6 @@ pub(crate) fn collect_inputs(nodes: &[SurfaceNode], out: &mut Vec<InputSpec>) {
             _ => {}
         }
     }
-}
-
-/// 尽力持久化主题覆盖；失败静默（$HOME 只读时预期失败）。
-/// 与 `detect_initial_theme` 共用同一路径与 `mode = "dark"|"light"` 键。
-fn persist_theme(mode: ThemeMode) {
-    let path = crate::theme_config_path();
-    if let Some(dir) = path.parent() {
-        let _ = std::fs::create_dir_all(dir);
-    }
-    let value = match mode {
-        ThemeMode::Dark => "dark",
-        ThemeMode::Light => "light",
-    };
-    let _ = std::fs::write(path, format!("mode = \"{value}\"\n"));
 }
 
 #[cfg(test)]

@@ -43,6 +43,9 @@ impl RuntimePort for RuntimeAdapter {
     ) -> Vec<RouteItem> {
         self.runtime.search_invoke(generation, input).await
     }
+    fn set_usage_store(&self, store: std::sync::Arc<dyn flick_domain::UsageStore>) {
+        self.runtime.set_usage_store(store);
+    }
     async fn execution_event(
         &self,
         parent_action_id: ActionId,
@@ -58,9 +61,6 @@ impl RuntimePort for RuntimeAdapter {
     }
     async fn cancel(&self, invocation_id: InvocationId) -> bool {
         self.runtime.cancel(invocation_id).await
-    }
-    fn set_usage_store(&self, store: std::sync::Arc<dyn flick_domain::UsageStore>) {
-        self.runtime.set_usage_store(store);
     }
     async fn surface_event(
         &self,
@@ -466,6 +466,50 @@ impl flick_domain::settings::SettingSecretReader for SettingsAdapter {
 ///
 /// 返回的句柄在 `cancel` 触发后结束；每次清理放到 blocking 线程池，
 /// 避免 SQLite 读写阻塞异步执行器。
+/// 把设置系统的变更事件转发给 UI（主题、结果条数上限热生效）。
+///
+/// 只有 `core` 命名空间的变化才会重读受 UI 关注的键；且仅当值真的变了才发事件，
+/// 避免每次写入都触发一次无谓的重绘。任务在 `cancel` 触发或广播通道关闭时退出。
+pub fn spawn_settings_forwarder(
+    service: Arc<SettingsService>,
+    host_tx: tokio::sync::mpsc::UnboundedSender<HostToUi>,
+    cancel: CancellationToken,
+) -> tokio::task::JoinHandle<()> {
+    // 同步订阅：若在任务体内订阅，调用方在 spawn 之后立刻写设置可能先于订阅发布，
+    // 变更会被广播丢弃（没有接收者）。
+    let mut rx = service.subscribe();
+    let mut last_theme = theme_mode(&service);
+    let mut last_limit = result_limit(&service);
+    tokio::spawn(async move {
+        loop {
+            tokio::select! {
+                _ = cancel.cancelled() => break,
+                changed = rx.recv() => match changed {
+                    Ok(change) => {
+                        if change.namespace != flick_domain::SettingNamespace::Core {
+                            continue;
+                        }
+                        let theme = theme_mode(&service);
+                        if theme != last_theme {
+                            last_theme = theme;
+                            if let Some(mode) = theme {
+                                let _ = host_tx.send(HostToUi::ThemeChanged { mode: mode.into() });
+                            }
+                        }
+                        let limit = result_limit(&service);
+                        if limit != last_limit {
+                            last_limit = limit;
+                            let _ = host_tx.send(HostToUi::ResultLimitChanged { limit });
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(_) => break,
+                },
+            }
+        }
+    })
+}
+
 pub fn spawn_retention_worker(
     service: Arc<SettingsService>,
     cancel: CancellationToken,
@@ -724,6 +768,12 @@ pub async fn run_headless(socket_path: std::path::PathBuf) -> Result<(), String>
                     Some(HostToUi::SurfaceFailed { session_id, message }) => {
                         info!("UI: Surface {session_id} failed: {message}")
                     }
+                    Some(HostToUi::ThemeChanged { mode }) => {
+                        info!("UI: theme changed to {mode:?}")
+                    }
+                    Some(HostToUi::ResultLimitChanged { limit }) => {
+                        info!("UI: result limit changed to {limit}")
+                    }
                 }
             }
         }
@@ -869,18 +919,6 @@ pub async fn init_settings_at(
 
     Some(service)
 }
-
-/// 读取初始主题。
-///
-/// 顺序：设置系统 `core.theme.mode` > 旧 `shell-gpui.toml` 迁移 > shell 自带探测。
-#[cfg(test)]
-pub fn initial_theme_at(
-    dirs: flick_data::DataDirectories,
-    keys: flick_data::SharedKeySource,
-) -> flick_shell_gpui::ThemeMode {
-    shell_config_at(dirs, keys).theme
-}
-
 /// 读取外壳启动配置：主题模式 + 结果条数上限。
 ///
 /// 设置系统不可用时整体回退：主题走自动探测，条数上限用声明默认值，
@@ -925,7 +963,6 @@ pub fn shell_config_at(
         tracing::warn!(%error, "读取外壳配置失败：core schema 注册失败");
         return fallback;
     }
-    migrate_legacy_theme(&service, &dirs);
     flick_shell_gpui::ShellConfig {
         theme: theme_mode(&service).unwrap_or_else(flick_shell_gpui::detect_initial_theme),
         result_limit: result_limit(&service),
@@ -956,54 +993,6 @@ pub fn theme_mode(service: &SettingsService) -> Option<flick_shell_gpui::ThemeMo
     }
 }
 
-/// 把旧的 `shell-gpui.toml`（仅 `mode` 字段）迁移进设置系统，然后重命名文件。
-///
-/// 只在设置系统里还没有显式值时写入；无论是否写入，迁移完成后都会把文件
-/// 重命名为 `shell-gpui.toml.migrated`，避免下次重复迁移。
-pub fn migrate_legacy_theme(service: &SettingsService, dirs: &flick_data::DataDirectories) {
-    let path = dirs.config_root().join("shell-gpui.toml");
-    if !path.exists() {
-        return;
-    }
-    let key = flick_domain::SettingKey::new(flick_domain::SettingNamespace::Core, "theme.mode");
-    let already_set = matches!(service.get(&key), Ok(Some(_)));
-    if !already_set {
-        if let Some(mode) = std::fs::read_to_string(&path)
-            .ok()
-            .and_then(|text| parse_legacy_theme_mode(&text))
-        {
-            let value = flick_domain::settings::SettingValue::Enum(mode);
-            match service.set(&key, value) {
-                Ok(_) => tracing::info!("已把旧主题配置迁移进设置系统"),
-                Err(error) => tracing::warn!(%error, "迁移旧主题配置失败"),
-            }
-        }
-    }
-    let migrated = path.with_extension("toml.migrated");
-    if let Err(error) = std::fs::rename(&path, &migrated) {
-        tracing::warn!(%error, "重命名旧主题配置文件失败");
-    }
-}
-
-/// 解析旧主题文件里的 `mode = "dark" | "light"`。
-fn parse_legacy_theme_mode(text: &str) -> Option<String> {
-    for line in text.lines() {
-        let line = line.trim();
-        if line.is_empty() || line.starts_with('#') {
-            continue;
-        }
-        let (key, value) = line.split_once('=')?;
-        if key.trim() != "mode" {
-            continue;
-        }
-        let value = value.trim().trim_matches('"').trim_matches('\'');
-        return match value {
-            "dark" | "light" => Some(value.to_string()),
-            _ => None,
-        };
-    }
-    None
-}
 
 #[cfg(test)]
 mod init_settings_tests {
@@ -1018,8 +1007,9 @@ mod init_settings_tests {
         runtime
     }
 
-    #[test]
-    fn legacy_theme_is_migrated_and_file_renamed() {
+    /// 设置变更应转发成 UI 事件（主题 + 结果上限），且只发值真的变了的那一个。
+    #[tokio::test]
+    async fn settings_changes_are_forwarded_to_ui() {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path();
         let dirs = flick_data::DataDirectories::with_roots(
@@ -1028,20 +1018,54 @@ mod init_settings_tests {
             root.join("cache"),
             root.join("runtime"),
         );
-        std::fs::create_dir_all(dirs.config_root()).unwrap();
-        let legacy = dirs.config_root().join("shell-gpui.toml");
-        std::fs::write(&legacy, "mode = \"light\"\n").unwrap();
-
         let keys: flick_data::SharedKeySource = Arc::new(flick_data::FixedMasterKeySource(
             flick_data::MasterKey {
                 key_id: "test".into(),
-                bytes: [4u8; 32],
+                bytes: [9u8; 32],
             },
         ));
-        let theme = initial_theme_at(dirs.clone(), keys);
-        assert_eq!(theme, flick_shell_gpui::ThemeMode::Light);
-        assert!(!legacy.exists(), "旧文件应被重命名");
-        assert!(dirs.config_root().join("shell-gpui.toml.migrated").exists());
+        let service = Arc::new(SettingsService::new(Arc::new(
+            StorageManager::open(dirs.clone(), keys).unwrap(),
+        )));
+        let version = env!("CARGO_PKG_VERSION");
+        service
+            .register_schema(core_schema(), version, version)
+            .unwrap();
+
+        let (tx, mut rx) = mpsc::unbounded_channel::<HostToUi>();
+        let cancel = CancellationToken::new();
+        let worker = spawn_settings_forwarder(Arc::clone(&service), tx, cancel.clone());
+
+        // 主题变化 → 只收到 ThemeChanged。
+        let theme_key = flick_domain::SettingKey::new(
+            flick_domain::SettingNamespace::Core,
+            "theme.mode",
+        );
+        service
+            .set(&theme_key, flick_domain::settings::SettingValue::Enum("light".into()))
+            .unwrap();
+        match rx.recv().await {
+            Some(HostToUi::ThemeChanged { mode }) => {
+                assert_eq!(mode, flick_domain::ThemeMode::Light)
+            }
+            other => panic!("期望 ThemeChanged，实际 {other:?}"),
+        }
+
+        // 上限变化 → 只收到 ResultLimitChanged。
+        let limit_key = flick_domain::SettingKey::new(
+            flick_domain::SettingNamespace::Core,
+            "search.result_limit",
+        );
+        service
+            .set(&limit_key, flick_domain::settings::SettingValue::Integer(5))
+            .unwrap();
+        match rx.recv().await {
+            Some(HostToUi::ResultLimitChanged { limit }) => assert_eq!(limit, 5),
+            other => panic!("期望 ResultLimitChanged，实际 {other:?}"),
+        }
+
+        cancel.cancel();
+        let _ = worker.await;
     }
 
     /// 设置值应进入外壳配置：主题 + 结果条数上限。

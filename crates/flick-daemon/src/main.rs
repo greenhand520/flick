@@ -153,14 +153,42 @@ fn run_graphical(socket_path: PathBuf) -> Result<(), String> {
                 }) as Arc<dyn RuntimePort>;
                 let coordinator = Arc::new(ApplicationCoordinator::new(runtime_port, event_sink));
 
+                // 设置系统先于 UI 工作线程初始化：UI 线程要处理 `SetTheme`，
+                // 还要把设置变更热转发给 shell（主题、结果条数上限）。
+                let settings = bootstrap::init_settings(&runtime).await;
+                if let Some(service) = &settings {
+                    bootstrap::spawn_retention_worker(Arc::clone(service), lifecycle.token());
+                    bootstrap::spawn_settings_forwarder(
+                        Arc::clone(service),
+                        host_event_tx.clone(),
+                        lifecycle.token(),
+                    );
+                }
+
                 let ui_worker_lifecycle = lifecycle.clone();
                 let ui_coordinator = coordinator.clone();
+                let ui_settings = settings.clone();
                 let ui_worker = tokio::spawn(async move {
                     let mut rx = ui_cmd_rx;
                     loop {
                         tokio::select! {
                             _ = ui_worker_lifecycle.cancelled() => break,
                             command = rx.recv() => match command {
+                                // 主题切换需要落库：写设置系统后由变更转发广播给所有窗口。
+                                Some(UiToHost::SetTheme { mode }) => {
+                                    if let Some(service) = &ui_settings {
+                                        let key = flick_domain::SettingKey::new(
+                                            flick_domain::SettingNamespace::Core,
+                                            "theme.mode",
+                                        );
+                                        let value = flick_domain::settings::SettingValue::Enum(
+                                            mode.as_str().to_string(),
+                                        );
+                                        if let Err(error) = service.set(&key, value) {
+                                            tracing::warn!(%error, "持久化主题设置失败");
+                                        }
+                                    }
+                                }
                                 Some(command) => ui_coordinator.handle_ui(command).await,
                                 None => break,
                             }
@@ -238,10 +266,6 @@ fn run_graphical(socket_path: PathBuf) -> Result<(), String> {
                     }
                 });
 
-                let settings = bootstrap::init_settings(&runtime).await;
-                if let Some(service) = &settings {
-                    bootstrap::spawn_retention_worker(Arc::clone(service), lifecycle.token());
-                }
                 let dispatcher = bootstrap::create_ipc_dispatcher(
                     runtime,
                     settings,
