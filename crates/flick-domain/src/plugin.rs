@@ -94,24 +94,9 @@ pub struct DependencyStatus {
     pub available: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub enum SettingKind {
-    Bool,
-    Integer { min: i64, max: i64 },
-    String,
-    Enum { variants: Vec<String> },
-    Path,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct SettingDecl {
-    pub key: String,
-    pub label: String,
-    pub description: String,
-    pub kind: SettingKind,
-    pub default: Option<serde_json::Value>,
-    pub secret: bool,
-}
+// 设置相关的声明类型已在 `crate::settings` 定义；此处重新导出以保持
+// `flick_domain::plugin::SettingDecl` 等旧路径可用（见设计文档 C2）。
+pub use crate::settings::{SettingDecl, SettingKind};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SurfaceKind {

@@ -25,10 +25,11 @@ fn plugin_manifest_roundtrips_via_json() {
         }],
         settings: vec![SettingDecl {
             key: "max_items".into(),
+            renamed_from: None,
             label: "Max items".into(),
             description: "上限".into(),
             kind: SettingKind::Integer { min: 1, max: 100 },
-            default: Some(serde_json::json!(20)),
+            default: Some(SettingValue::Integer(20)),
             secret: false,
         }],
         surfaces: vec![UiSurfaceDecl {

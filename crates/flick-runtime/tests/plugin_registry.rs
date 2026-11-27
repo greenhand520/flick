@@ -175,6 +175,7 @@ fn register_plugin_rejects_duplicate_setting_key() {
     m.settings = vec![
         SettingDecl {
             key: "k".into(),
+            renamed_from: None,
             label: "".into(),
             description: "".into(),
             kind: SettingKind::Bool,
@@ -183,6 +184,7 @@ fn register_plugin_rejects_duplicate_setting_key() {
         },
         SettingDecl {
             key: "k".into(),
+            renamed_from: None,
             label: "".into(),
             description: "".into(),
             kind: SettingKind::Bool,
