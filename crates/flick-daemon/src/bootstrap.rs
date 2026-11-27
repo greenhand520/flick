@@ -189,12 +189,23 @@ impl flick_ipc::server::IpcDispatcher for DaemonIpcDispatcher {
                     }),
                     None => serde_json::json!({ "available": false, "namespaces": [] }),
                 };
+                let data = match &self.settings {
+                    Some(service) => {
+                        let dirs = service.storage().directories();
+                        serde_json::json!({
+                            "root": dirs.data_root().display().to_string(),
+                            "size_bytes": dir_size(dirs.data_root()),
+                        })
+                    }
+                    None => serde_json::json!({ "root": "", "size_bytes": 0 }),
+                };
                 IpcResult::Ok(serde_json::json!({
                     "session": probe_session(),
                     "portal": portal,
                     "ipc": { "socket": self.socket_path.display().to_string() },
                     "plugins": plugins,
                     "settings": settings,
+                    "data": data,
                 }))
             }
             IpcCommand::ShortcutsConfigure { preferred_trigger } => {
@@ -366,6 +377,62 @@ impl DaemonIpcDispatcher {
         }
         report
     }
+}
+
+/// 每日清理一次过期卸载数据的后台任务。
+///
+/// 返回的句柄在 `cancel` 触发后结束；每次清理放到 blocking 线程池，
+/// 避免 SQLite 读写阻塞异步执行器。
+pub fn spawn_retention_worker(
+    service: Arc<SettingsService>,
+    cancel: CancellationToken,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut ticker = tokio::time::interval(std::time::Duration::from_secs(24 * 60 * 60));
+        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        // 首轮立即执行一次：进程可能长期不重启。
+        loop {
+            tokio::select! {
+                _ = cancel.cancelled() => break,
+                _ = ticker.tick() => {
+                    let service = Arc::clone(&service);
+                    let result = tokio::task::spawn_blocking(move || {
+                        service
+                            .storage()
+                            .purge_uninstalled_older_than(UNINSTALLED_RETENTION_DAYS)
+                    })
+                    .await;
+                    match result {
+                        Ok(Ok(purged)) if !purged.is_empty() => {
+                            tracing::info!(count = purged.len(), ?purged, "已清理过期卸载数据");
+                        }
+                        Ok(Ok(_)) => {}
+                        Ok(Err(error)) => tracing::warn!(%error, "清理过期卸载数据失败"),
+                        Err(error) => tracing::warn!(%error, "清理任务 join 失败"),
+                    }
+                }
+            }
+        }
+    })
+}
+
+/// 目录总大小（字节）；读取失败的文件按 0 计。
+pub fn dir_size(path: &std::path::Path) -> u64 {
+    let mut total = 0u64;
+    let Ok(entries) = std::fs::read_dir(path) else {
+        return 0;
+    };
+    for entry in entries.flatten() {
+        let Ok(metadata) = entry.metadata() else {
+            continue;
+        };
+        if metadata.is_dir() {
+            total = total.saturating_add(dir_size(&entry.path()));
+        } else {
+            total = total.saturating_add(metadata.len());
+        }
+    }
+    total
 }
 
 /// 设置系统不可用时的统一错误。
@@ -580,6 +647,9 @@ pub async fn run_headless(socket_path: std::path::PathBuf) -> Result<(), String>
     });
 
     let settings = init_settings(&runtime).await;
+    if let Some(service) = &settings {
+        spawn_retention_worker(Arc::clone(service), lifecycle.token());
+    }
     let dispatcher = create_ipc_dispatcher(
         runtime,
         settings,
@@ -850,6 +920,17 @@ mod init_settings_tests {
         assert_eq!(theme, flick_shell_gpui::ThemeMode::Light);
         assert!(!legacy.exists(), "旧文件应被重命名");
         assert!(dirs.config_root().join("shell-gpui.toml.migrated").exists());
+    }
+
+    #[test]
+    fn dir_size_accumulates_nested_files() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        std::fs::write(root.join("a.bin"), vec![0u8; 10]).unwrap();
+        std::fs::create_dir_all(root.join("nested")).unwrap();
+        std::fs::write(root.join("nested").join("b.bin"), vec![0u8; 32]).unwrap();
+        assert_eq!(dir_size(root), 42);
+        assert_eq!(dir_size(&root.join("missing")), 0);
     }
 
     #[tokio::test]

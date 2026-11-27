@@ -447,6 +447,9 @@ async fn doctor_merges_session_portal_and_ipc_facts() {
             assert!(value.get("session").is_some());
             assert_eq!(value["portal"]["state"], "unconfigured");
             assert!(value["ipc"]["socket"].is_string());
+            // 设置系统摘要：本测试的 dispatcher 未注入设置服务。
+            assert_eq!(value["settings"]["available"], false);
+            assert!(value["data"]["size_bytes"].is_u64());
         }
         other => panic!("expected merged doctor result, got {other:?}"),
     }

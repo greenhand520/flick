@@ -239,6 +239,9 @@ fn run_graphical(socket_path: PathBuf) -> Result<(), String> {
                 });
 
                 let settings = bootstrap::init_settings(&runtime).await;
+                if let Some(service) = &settings {
+                    bootstrap::spawn_retention_worker(Arc::clone(service), lifecycle.token());
+                }
                 let dispatcher = bootstrap::create_ipc_dispatcher(
                     runtime,
                     settings,
