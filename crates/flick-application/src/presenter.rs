@@ -11,6 +11,8 @@
 use flick_domain::*;
 use std::time::{Duration, Instant};
 
+use crate::accumulate::SearchSession;
+
 /// 隐藏的面板在此持续时间内保留其逻辑会话。
 pub const PANEL_RESUME_WINDOW: Duration = Duration::from_secs(10);
 
@@ -124,6 +126,8 @@ pub struct PanelState {
     debounce_revision: u64,
     flushed_debounce_revision: Option<u64>,
     hidden_at: Option<Instant>,
+    /// 本次面板会话的结果累积状态。
+    session: SearchSession,
 }
 
 impl PanelState {
@@ -147,6 +151,7 @@ impl PanelState {
             debounce_revision: 0,
             flushed_debounce_revision: None,
             hidden_at: None,
+            session: SearchSession::new(),
         }
     }
 
@@ -177,9 +182,8 @@ impl PanelState {
     pub fn update_at(&mut self, event: PanelEvent, now: Instant) -> Vec<PanelAction> {
         match event {
             PanelEvent::Show { activation_token } => self.on_show(activation_token, now),
-            PanelEvent::Hide | PanelEvent::WindowClosed | PanelEvent::EscapePressed => {
-                self.on_hide(now)
-            }
+            PanelEvent::Hide | PanelEvent::WindowClosed => self.on_hide(now),
+            PanelEvent::EscapePressed => self.on_escape(now),
             PanelEvent::InputChanged(text) => self.on_input_changed(text),
             PanelEvent::InputCaptured(snapshot) => self.on_input_captured(snapshot),
             PanelEvent::DebounceFlush { revision } => self.on_debounce_flush(revision),
@@ -216,6 +220,9 @@ impl PanelState {
         self.created = true;
         self.visible = true;
         self.hidden_at = None;
+        // 面板显示即开启一次新会话；隐藏期间的旧累积不会带进来。
+        self.session
+            .begin(self.input.kind, self.input.source == InputSource::Manual);
         self.activation_token = activation_token;
         self.activation_token_applied = false;
         vec![]
@@ -229,6 +236,7 @@ impl PanelState {
         }
 
         self.visible = false;
+        self.session.end();
         self.hidden_at = Some(now);
         // 尚未完成的 UI 防抖任务无法取消。使它们的 revision
         // 失效可让任何迟到的完成操作变得无害。
@@ -244,6 +252,23 @@ impl PanelState {
             }));
         }
         actions
+    }
+
+    /// Esc：清空查询、附件与累积，然后按隐藏处理。
+    ///
+    /// 与 `Hide` 的区别在于 Esc 是「用户主动放弃本次搜索」，
+    /// 因此设计文档 §6.1 重置条件 4 要求同时清空输入与累积。
+    fn on_escape(&mut self, now: Instant) -> Vec<PanelAction> {
+        if !self.visible {
+            return vec![];
+        }
+        self.query.clear();
+        self.input = SearchInputSnapshot::text(String::new(), InputSource::Manual);
+        self.pending_query.clear();
+        self.session.end();
+        self.routes.clear();
+        self.selection.set_total(0);
+        self.on_hide(now)
     }
 
     fn on_input_changed(&mut self, text: String) -> Vec<PanelAction> {
@@ -266,11 +291,22 @@ impl PanelState {
             }];
         }
 
+        // 手动键入始终是手动模式；附件若存在则在此之前已被清空。
+        self.session.note_kind(self.input.kind, true);
+        // 输入被清空即重置累积（§6.1 重置条件 1），但会话仍有效。
+        if self.query.is_empty() {
+            self.session.clear();
+        }
+
         // QueryGeneration 用于防范异步的运行时结果；上方的本地 revision
         // 则独立地防范 UI 防抖任务。
         self.generation = self.generation.next();
-        self.routes.clear();
-        self.selection.set_total(0);
+        // 手动累积模式下保留已有结果行，等新批次到达后合并；
+        // 非手动输入仍然立刻清空，避免旧附件结果残留。
+        if !self.session.is_manual() {
+            self.routes.clear();
+            self.selection.set_total(0);
+        }
         self.last_outcome = None;
         self.active_invocation = None;
 
@@ -293,9 +329,14 @@ impl PanelState {
             }];
         }
 
+        self.session
+            .note_kind(self.input.kind, self.input.source == InputSource::Manual);
+
         self.generation = self.generation.next();
-        self.routes.clear();
-        self.selection.set_total(0);
+        if !self.session.is_manual() {
+            self.routes.clear();
+            self.selection.set_total(0);
+        }
         self.last_outcome = None;
         self.active_invocation = None;
 
@@ -398,10 +439,13 @@ impl PanelState {
         generation: QueryGeneration,
         items: Vec<RouteItem>,
     ) -> Vec<PanelAction> {
-        if generation == self.generation {
-            self.routes = items;
-            self.selection.set_total(self.routes.len());
+        // 迟到/未来代次一律丢弃：`Routes` 不带查询文本，无法做
+        // 「文本仍在链中」的判定，安全侧选择直接丢弃。
+        if generation != self.generation {
+            return vec![];
         }
+        self.routes = self.session.merge(items);
+        self.selection.set_total(self.routes.len());
         vec![]
     }
 
@@ -459,6 +503,7 @@ impl PanelState {
         self.generation = self.generation.next();
         self.debounce_revision = self.debounce_revision.wrapping_add(1);
         self.flushed_debounce_revision = None;
+        self.session.end();
         self.routes.clear();
         self.selection.set_total(0);
         self.active_invocation = None;
@@ -730,5 +775,200 @@ mod tests {
         assert_eq!(state.input.source, InputSource::Manual);
         assert!(state.input.files.is_empty());
         assert!(state.input.image.is_none());
+    }
+
+    /// 构造一个普通 Action 候选。
+    fn action_route(id: &'static str, title: &str, score: f64) -> RouteItem {
+        RouteItem::action(ActionId::from_static(id), title, score)
+    }
+
+    /// 让面板进入可见的手动输入状态。
+    fn visible_manual_panel() -> PanelState {
+        let mut st = PanelState::new();
+        st.update_at(
+            PanelEvent::Show {
+                activation_token: None,
+            },
+            Instant::now(),
+        );
+        st
+    }
+
+    /// 输入 `ho` 得到 A，再输入 `st` 得到 B，结果区应是 A+B（旧 → 新）。
+    #[test]
+    fn manual_queries_accumulate_previous_results() {
+        let mut st = visible_manual_panel();
+
+        st.update_at(PanelEvent::InputChanged("ho".into()), Instant::now());
+        st.update_at(
+            PanelEvent::Routes {
+                generation: st.generation,
+                items: vec![action_route("a.v1.host", "Host", 1.0)],
+            },
+            Instant::now(),
+        );
+        assert_eq!(st.routes.len(), 1);
+
+        st.update_at(PanelEvent::InputChanged("host".into()), Instant::now());
+        // 手动模式下输入变化不清空已有结果行。
+        assert_eq!(st.routes.len(), 1, "manual typing must keep previous rows");
+
+        st.update_at(
+            PanelEvent::Routes {
+                generation: st.generation,
+                items: vec![action_route("a.v1.hosts", "Hosts", 2.0)],
+            },
+            Instant::now(),
+        );
+        let titles: Vec<&str> = st.routes.iter().map(|i| i.title.as_str()).collect();
+        assert_eq!(titles, vec!["Host", "Hosts"]);
+        assert_eq!(st.selection.total, 2);
+    }
+
+    /// 同一 Action 在连续两批中出现时只保留一条。
+    #[test]
+    fn repeated_action_across_batches_keeps_single_row() {
+        let mut st = visible_manual_panel();
+
+        st.update_at(PanelEvent::InputChanged("ho".into()), Instant::now());
+        st.update_at(
+            PanelEvent::Routes {
+                generation: st.generation,
+                items: vec![action_route("a.v1.host", "Host", 1.0)],
+            },
+            Instant::now(),
+        );
+
+        st.update_at(PanelEvent::InputChanged("host".into()), Instant::now());
+        st.update_at(
+            PanelEvent::Routes {
+                generation: st.generation,
+                items: vec![action_route("a.v1.host", "Host", 2.0)],
+            },
+            Instant::now(),
+        );
+
+        assert_eq!(st.routes.len(), 1);
+        assert_eq!(st.routes[0].score, 2.0);
+    }
+
+    /// Esc 清空查询与累积，然后仍然隐藏面板（照常发 SearchPanelClosed）。
+    #[test]
+    fn escape_clears_query_and_accumulated_results() {
+        let mut st = visible_manual_panel();
+
+        st.update_at(PanelEvent::InputChanged("ho".into()), Instant::now());
+        st.update_at(
+            PanelEvent::Routes {
+                generation: st.generation,
+                items: vec![action_route("a.v1.host", "Host", 1.0)],
+            },
+            Instant::now(),
+        );
+
+        let actions = st.update_at(PanelEvent::EscapePressed, Instant::now());
+        assert!(st.query.is_empty());
+        assert!(st.routes.is_empty());
+        assert_eq!(st.selection.total, 0);
+        assert!(!st.visible);
+        assert!(
+            actions.contains(&PanelAction::SendToHost(UiToHost::SearchPanelClosed)),
+            "Esc must still report panel closed, got {actions:?}"
+        );
+    }
+
+    /// 隐藏面板结束会话：重新显示后第一批结果不再与旧累积合并。
+    #[test]
+    fn hide_ends_session_and_clears_accumulation() {
+        let mut st = visible_manual_panel();
+
+        st.update_at(PanelEvent::InputChanged("ho".into()), Instant::now());
+        st.update_at(
+            PanelEvent::Routes {
+                generation: st.generation,
+                items: vec![action_route("a.v1.host", "Host", 1.0)],
+            },
+            Instant::now(),
+        );
+
+        st.update_at(PanelEvent::Hide, Instant::now());
+        st.update_at(
+            PanelEvent::Show {
+                activation_token: None,
+            },
+            Instant::now(),
+        );
+        st.update_at(PanelEvent::InputChanged("host".into()), Instant::now());
+        st.update_at(
+            PanelEvent::Routes {
+                generation: st.generation,
+                items: vec![action_route("a.v1.hosts", "Hosts", 2.0)],
+            },
+            Instant::now(),
+        );
+
+        let titles: Vec<&str> = st.routes.iter().map(|i| i.title.as_str()).collect();
+        assert_eq!(titles, vec!["Hosts"], "hidden panel must drop old accumulation");
+    }
+
+    /// 附件输入（非手动）只替换，不累积。
+    #[test]
+    fn attachment_input_replaces_instead_of_accumulating() {
+        let mut st = visible_manual_panel();
+
+        st.update_at(PanelEvent::InputChanged("ho".into()), Instant::now());
+        st.update_at(
+            PanelEvent::Routes {
+                generation: st.generation,
+                items: vec![action_route("a.v1.host", "Host", 1.0)],
+            },
+            Instant::now(),
+        );
+
+        let file = flick_domain::FileInput {
+            uri: "file:///tmp/a.txt".into(),
+            display_name: "a.txt".into(),
+            extension: Some("txt".into()),
+            is_dir: false,
+            mime: Some("text/plain".into()),
+        };
+        st.update_at(
+            PanelEvent::InputCaptured(SearchInputSnapshot::files(
+                vec![file],
+                InputSource::DragDrop,
+            )),
+            Instant::now(),
+        );
+        // 非手动输入必须立刻清掉旧结果。
+        assert!(st.routes.is_empty());
+
+        st.update_at(
+            PanelEvent::Routes {
+                generation: st.generation,
+                items: vec![action_route("a.v1.file", "File Action", 1.0)],
+            },
+            Instant::now(),
+        );
+        let titles: Vec<&str> = st.routes.iter().map(|i| i.title.as_str()).collect();
+        assert_eq!(titles, vec!["File Action"]);
+    }
+
+    /// 旧代次的迟到批次必须被丢弃。
+    #[test]
+    fn late_old_generation_batch_is_dropped() {
+        let mut st = visible_manual_panel();
+
+        st.update_at(PanelEvent::InputChanged("ho".into()), Instant::now());
+        let old_generation = st.generation;
+        st.update_at(PanelEvent::InputChanged("host".into()), Instant::now());
+
+        st.update_at(
+            PanelEvent::Routes {
+                generation: old_generation,
+                items: vec![action_route("a.v1.stale", "Stale", 9.0)],
+            },
+            Instant::now(),
+        );
+        assert!(st.routes.is_empty());
     }
 }
