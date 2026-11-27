@@ -16,6 +16,8 @@ pub const TRAY_ID: &str = "flick";
 pub const TRAY_TITLE: &str = "Flick";
 /// 托盘图标边长（像素）。
 pub const ICON_SIZE: u32 = 32;
+/// 应用版本号（取自 Cargo 包版本，用于「关于」菜单项展示）。
+pub const TRAY_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// 托盘图标触发的用户意图。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -37,8 +39,8 @@ pub enum TrayEvent {
 pub struct MenuItemSpec {
     /// 菜单项 id；`None` 表示分隔线。
     pub id: Option<&'static str>,
-    /// 菜单项文本。
-    pub label: &'static str,
+    /// 菜单项文本（部分项含动态内容，例如带版本号的「关于」）。
+    pub label: String,
 }
 
 /// 返回托盘菜单结构（与设计文档一致）。
@@ -46,26 +48,32 @@ pub fn menu_spec() -> Vec<MenuItemSpec> {
     vec![
         // 有些桌面（如部分 GNOME 配置）不响应 SNI 左键点击，提供一个显式入口。
         MenuItemSpec {
-            id: Some("search"),
-            label: "显示搜索",
+            id: Some("show"),
+            label: "显示".to_string(),
         },
-        MenuItemSpec { id: None, label: "" },
+        MenuItemSpec {
+            id: None,
+            label: String::new(),
+        },
         MenuItemSpec {
             id: Some("home"),
-            label: "主页",
+            label: "主页".to_string(),
         },
         MenuItemSpec {
             id: Some("settings"),
-            label: "设置",
+            label: "设置".to_string(),
         },
         MenuItemSpec {
             id: Some("about"),
-            label: "关于",
+            label: format!("关于（v{TRAY_VERSION}）"),
         },
-        MenuItemSpec { id: None, label: "" },
+        MenuItemSpec {
+            id: None,
+            label: String::new(),
+        },
         MenuItemSpec {
             id: Some("quit"),
-            label: "退出",
+            label: "退出".to_string(),
         },
     ]
 }
@@ -73,7 +81,7 @@ pub fn menu_spec() -> Vec<MenuItemSpec> {
 /// 把菜单 id 映射成托盘事件；未知 id（含分隔线）返回 `None`。
 pub fn map_menu_click(id: &str) -> Option<TrayEvent> {
     match id {
-        "search" => Some(TrayEvent::Activate),
+        "show" => Some(TrayEvent::Activate),
         "home" => Some(TrayEvent::Home),
         "settings" => Some(TrayEvent::Settings),
         "about" => Some(TrayEvent::About),
@@ -199,7 +207,7 @@ impl Tray for FlickTray {
                 None => MenuItem::Separator,
                 Some(id) => {
                     let event = map_menu_click(id);
-                    let label = spec.label.to_string();
+                    let label = spec.label;
                     MenuItem::from(StandardItem {
                         label,
                         enabled: true,
@@ -310,7 +318,7 @@ mod tests {
         assert_eq!(
             ids,
             vec![
-                Some("search"),
+                Some("show"),
                 None,
                 Some("home"),
                 Some("settings"),
@@ -319,13 +327,13 @@ mod tests {
                 Some("quit")
             ]
         );
-        assert_eq!(spec[1].id, None, "「显示搜索」下方必须是分隔线");
+        assert_eq!(spec[1].id, None, "「显示」下方必须是分隔线");
         assert_eq!(spec[5].id, None, "「退出」上方必须是分隔线");
     }
 
     #[test]
     fn map_menu_click_maps_known_ids() {
-        assert_eq!(map_menu_click("search"), Some(TrayEvent::Activate));
+        assert_eq!(map_menu_click("show"), Some(TrayEvent::Activate));
         assert_eq!(map_menu_click("home"), Some(TrayEvent::Home));
         assert_eq!(map_menu_click("settings"), Some(TrayEvent::Settings));
         assert_eq!(map_menu_click("about"), Some(TrayEvent::About));
@@ -407,5 +415,15 @@ mod tests {
                 TrayEvent::Quit
             ]
         );
+    }
+
+    #[test]
+    fn about_label_carries_version() {
+        let about = menu_spec()
+            .into_iter()
+            .find(|spec| spec.id == Some("about"))
+            .expect("「关于」项必须存在");
+        assert_eq!(about.label, format!("关于（v{TRAY_VERSION}）"));
+        assert!(about.label.contains(env!("CARGO_PKG_VERSION")));
     }
 }
