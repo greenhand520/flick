@@ -67,7 +67,7 @@ impl Plugin for ManyActionsPlugin {
 
 #[tokio::test]
 async fn search_input_truncates_action_candidates() {
-    let runtime = ActionRuntime::new();
+    let runtime = ActionRuntime::default();
     runtime
         .register_plugin(&ManyActionsPlugin { count: 150 })
         .await

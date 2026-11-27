@@ -5,7 +5,7 @@ use flick_runtime::ActionRuntime;
 
 #[tokio::test]
 async fn register_builtin_registers_apps_plugin() {
-    let runtime = ActionRuntime::new();
+    let runtime = ActionRuntime::default();
     register_builtin(&runtime).await.unwrap();
     let route = runtime
         .route("app", flick_domain::InputType::PlainText)
@@ -32,7 +32,7 @@ async fn apps_execution_item_activates_through_runtime() {
     )
     .unwrap();
 
-    let runtime = ActionRuntime::new();
+    let runtime = ActionRuntime::default();
     let plugin = AppsPlugin::with_dirs(vec![apps_dir]);
     runtime.register_plugin(&plugin).await.unwrap();
     runtime.activate_all_plugins().await;

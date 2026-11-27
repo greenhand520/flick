@@ -4,6 +4,7 @@ use flick_domain::{
     SettingDecl, SettingKey, SettingKind, SettingNamespace, SettingSchema, SettingValue,
     SettingValueError,
 };
+use std::sync::Arc;
 
 #[test]
 fn validate_covers_every_kind() {
@@ -53,7 +54,10 @@ fn validate_covers_every_kind() {
 
 #[test]
 fn fallback_values_follow_design_table() {
-    assert_eq!(SettingKind::Bool.fallback_value(), SettingValue::Bool(false));
+    assert_eq!(
+        SettingKind::Bool.fallback_value(),
+        SettingValue::Bool(false)
+    );
     assert_eq!(
         SettingKind::Integer { min: 3, max: 9 }.fallback_value(),
         SettingValue::Integer(3)
@@ -199,7 +203,9 @@ fn empty_enum_and_bad_range_are_rejected() {
 
 #[test]
 fn plugin_id_rules_block_path_escapes() {
-    assert!(flick_domain::settings::is_valid_plugin_id("flick.builtin.apps"));
+    assert!(flick_domain::settings::is_valid_plugin_id(
+        "flick.builtin.apps"
+    ));
     for bad in ["", ".", "..", "core", "/abs", "a/b", "-lead", "a b"] {
         assert!(!flick_domain::settings::is_valid_plugin_id(bad), "{bad}");
     }
@@ -207,7 +213,7 @@ fn plugin_id_rules_block_path_escapes() {
 
 // ─── S1-A：ConfigSnapshot 与 PluginContext ────────────────────────────────
 
-use flick_domain::{ConfigSnapshot, PluginContext};
+use flick_domain::{ConfigSnapshot, HostInfo, NoopPaths, PluginContext};
 use tokio_util::sync::CancellationToken;
 
 fn snapshot() -> ConfigSnapshot {
@@ -215,7 +221,10 @@ fn snapshot() -> ConfigSnapshot {
     values.insert("enabled".to_string(), SettingValue::Bool(true));
     values.insert("limit".to_string(), SettingValue::Integer(7));
     values.insert("mode".to_string(), SettingValue::Enum("light".to_string()));
-    values.insert("name".to_string(), SettingValue::String("flick".to_string()));
+    values.insert(
+        "name".to_string(),
+        SettingValue::String("flick".to_string()),
+    );
     ConfigSnapshot {
         namespace: "flick.demo".to_string(),
         revision: 5,
@@ -248,10 +257,14 @@ fn empty_snapshot_is_degraded_default() {
 
 #[test]
 fn plugin_context_has_no_secret_reader_by_default() {
-    let ctx = PluginContext::new(CancellationToken::new())
-        .with_settings(snapshot())
-        .with_plugin_id(Some("flick.demo".to_string()));
-    assert_eq!(ctx.plugin_id(), Some("flick.demo"));
+    let ctx = PluginContext::new(
+        CancellationToken::new(),
+        Arc::new(HostInfo::default()),
+        snapshot(),
+        "flick.demo",
+        Arc::new(NoopPaths),
+    );
+    assert_eq!(ctx.plugin_id(), "flick.demo");
     assert_eq!(ctx.settings().revision(), 5);
     // 没有 secret 读取器时安全返回 None。
     assert_eq!(ctx.secret("api_token"), None);

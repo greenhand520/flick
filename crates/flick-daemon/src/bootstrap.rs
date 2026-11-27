@@ -9,12 +9,12 @@ use flick_adapters_linux::session::ShortcutError;
 use flick_adapters_linux::shortcut_state::{PortalSnapshot, ShortcutState};
 use flick_application::coordinator::ApplicationCoordinator;
 use flick_application::ports::{HostEventSink, RuntimePort};
+use flick_data::StorageManager;
 use flick_domain::*;
 use flick_ipc::message::*;
 use flick_ipc::server::IpcServer;
 use flick_ipc::unix::{TransportError, UnixSocketServer};
 use flick_runtime::ActionRuntime;
-use flick_data::StorageManager;
 use flick_settings::{SettingsService, core_schema};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -332,9 +332,9 @@ impl flick_ipc::server::IpcDispatcher for DaemonIpcDispatcher {
                             }
                         };
                         match settings.reset_key(&parsed) {
-                            Ok(revision) => {
-                                IpcResult::Ok(serde_json::json!({ "key": key, "revision": revision }))
-                            }
+                            Ok(revision) => IpcResult::Ok(
+                                serde_json::json!({ "key": key, "revision": revision }),
+                            ),
                             Err(error) => settings_error(error),
                         }
                     }
@@ -779,7 +779,7 @@ pub async fn run_headless(socket_path: std::path::PathBuf) -> Result<(), String>
         }
     });
 
-    let settings = init_settings(&runtime).await;
+    let settings = init_settings(&runtime, headless.dirs).await;
     if let Some(service) = &settings {
         spawn_retention_worker(Arc::clone(service), lifecycle.token());
     }
@@ -850,13 +850,13 @@ pub const UNINSTALLED_RETENTION_DAYS: u64 = 30;
 ///
 /// 返回 `None` 表示设置系统不可用（例如主进程无法打开设置存储）；
 /// 调用方应继续启动，相关 IPC 命令返回不可用即可。
-pub async fn init_settings(runtime: &ActionRuntime) -> Option<Arc<SettingsService>> {
-    let dirs = match flick_data::DataDirectories::discover() {
-        Ok(dirs) => dirs,
-        Err(error) => {
-            tracing::warn!(%error, "设置系统不可用：无法解析数据目录");
-            return None;
-        }
+pub async fn init_settings(
+    runtime: &ActionRuntime,
+    dirs: Option<flick_data::DataDirectories>,
+) -> Option<Arc<SettingsService>> {
+    let Some(dirs) = dirs else {
+        tracing::warn!("设置系统不可用：无法解析数据目录");
+        return None;
     };
     let keys: flick_data::SharedKeySource = if std::env::var_os("FLICK_MASTER_KEY").is_some() {
         Arc::new(flick_data::EnvMasterKeySource)
@@ -873,9 +873,6 @@ pub async fn init_settings_at(
     dirs: flick_data::DataDirectories,
     keys: flick_data::SharedKeySource,
 ) -> Option<Arc<SettingsService>> {
-    // 路径能力与设置存储解耦：即使 core.sqlite3 打开失败，插件仍可拿到自己的目录。
-    runtime.set_plugin_paths(Arc::new(dirs.clone()) as Arc<dyn PluginPaths>);
-
     let storage = match StorageManager::open(dirs, keys) {
         Ok(storage) => Arc::new(storage),
         Err(error) => {
@@ -897,17 +894,16 @@ pub async fn init_settings_at(
             declarations: manifest.settings.clone(),
             schema_version: 1,
         };
-        if let Err(error) =
-            service.register_schema(schema, &manifest.version, &manifest.version)
-        {
+        if let Err(error) = service.register_schema(schema, &manifest.version, &manifest.version) {
             tracing::warn!(plugin = %manifest.id, %error, "插件设置 schema 注册失败");
         }
     }
 
     let adapter = Arc::new(SettingsAdapter::new(Arc::clone(&service)));
     runtime.set_settings_provider(Arc::clone(&adapter) as Arc<dyn flick_plugin::SettingsProvider>);
-    runtime
-        .set_settings_secrets(Arc::clone(&adapter) as Arc<dyn flick_domain::settings::SettingSecretReader>);
+    runtime.set_settings_secrets(
+        Arc::clone(&adapter) as Arc<dyn flick_domain::settings::SettingSecretReader>
+    );
 
     match service
         .storage()
@@ -933,7 +929,7 @@ pub fn load_shell_config() -> flick_shell_gpui::ShellConfig {
             return flick_shell_gpui::ShellConfig {
                 theme: flick_shell_gpui::detect_initial_theme(),
                 ..flick_shell_gpui::ShellConfig::default()
-            }
+            };
         }
     };
     let keys: flick_data::SharedKeySource = if std::env::var_os("FLICK_MASTER_KEY").is_some() {
@@ -996,13 +992,12 @@ pub fn theme_mode(service: &SettingsService) -> Option<flick_shell_gpui::ThemeMo
     }
 }
 
-
 #[cfg(test)]
 mod init_settings_tests {
     use super::*;
 
     async fn runtime_with_builtins() -> Arc<ActionRuntime> {
-        let runtime = Arc::new(ActionRuntime::new());
+        let runtime = Arc::new(ActionRuntime::default());
         flick_builtins::register_builtin(&runtime)
             .await
             .expect("register builtin plugins");
@@ -1021,12 +1016,11 @@ mod init_settings_tests {
             root.join("cache"),
             root.join("runtime"),
         );
-        let keys: flick_data::SharedKeySource = Arc::new(flick_data::FixedMasterKeySource(
-            flick_data::MasterKey {
+        let keys: flick_data::SharedKeySource =
+            Arc::new(flick_data::FixedMasterKeySource(flick_data::MasterKey {
                 key_id: "test".into(),
                 bytes: [9u8; 32],
-            },
-        ));
+            }));
         let service = Arc::new(SettingsService::new(Arc::new(
             StorageManager::open(dirs.clone(), keys).unwrap(),
         )));
@@ -1040,12 +1034,13 @@ mod init_settings_tests {
         let worker = spawn_settings_forwarder(Arc::clone(&service), tx, cancel.clone());
 
         // 主题变化 → 只收到 ThemeChanged。
-        let theme_key = flick_domain::SettingKey::new(
-            flick_domain::SettingNamespace::Core,
-            "theme.mode",
-        );
+        let theme_key =
+            flick_domain::SettingKey::new(flick_domain::SettingNamespace::Core, "theme.mode");
         service
-            .set(&theme_key, flick_domain::settings::SettingValue::Enum("light".into()))
+            .set(
+                &theme_key,
+                flick_domain::settings::SettingValue::Enum("light".into()),
+            )
             .unwrap();
         match rx.recv().await {
             Some(HostToUi::ThemeChanged { mode }) => {
@@ -1082,17 +1077,18 @@ mod init_settings_tests {
             root.join("cache"),
             root.join("runtime"),
         );
-        let keys: flick_data::SharedKeySource = Arc::new(flick_data::FixedMasterKeySource(
-            flick_data::MasterKey {
+        let keys: flick_data::SharedKeySource =
+            Arc::new(flick_data::FixedMasterKeySource(flick_data::MasterKey {
                 key_id: "test".into(),
                 bytes: [7u8; 32],
-            },
-        ));
+            }));
         {
             let storage = Arc::new(StorageManager::open(dirs.clone(), keys.clone()).unwrap());
             let service = SettingsService::new(storage);
             let version = env!("CARGO_PKG_VERSION");
-            service.register_schema(core_schema(), version, version).unwrap();
+            service
+                .register_schema(core_schema(), version, version)
+                .unwrap();
             let key = flick_domain::SettingKey::new(
                 flick_domain::SettingNamespace::Core,
                 "search.result_limit",
@@ -1124,12 +1120,11 @@ mod init_settings_tests {
             root.join("cache"),
             root.join("runtime"),
         );
-        let keys: flick_data::SharedKeySource = Arc::new(flick_data::FixedMasterKeySource(
-            flick_data::MasterKey {
+        let keys: flick_data::SharedKeySource =
+            Arc::new(flick_data::FixedMasterKeySource(flick_data::MasterKey {
                 key_id: "test".into(),
                 bytes: [7u8; 32],
-            },
-        ));
+            }));
         Arc::new(SettingsService::new(Arc::new(
             StorageManager::open(dirs, keys).unwrap(),
         )))
@@ -1177,9 +1172,14 @@ mod init_settings_tests {
 
         // 写入 secret 后可通过 reader 实时取到，但快照仍然没有。
         let key = SettingKey::new(SettingNamespace::Plugin("flick.demo".into()), "api_token");
-        service.set(&key, SettingValue::String("tok".into())).unwrap();
+        service
+            .set(&key, SettingValue::String("tok".into()))
+            .unwrap();
         use flick_domain::settings::SettingSecretReader;
-        assert_eq!(adapter.secret("flick.demo", "api_token"), Some("tok".into()));
+        assert_eq!(
+            adapter.secret("flick.demo", "api_token"),
+            Some("tok".into())
+        );
         assert_eq!(adapter.snapshot("flick.demo").value("api_token"), None);
     }
 
@@ -1205,18 +1205,22 @@ mod init_settings_tests {
             root.join("cache"),
             root.join("runtime"),
         );
-        let keys: flick_data::SharedKeySource = Arc::new(flick_data::FixedMasterKeySource(
-            flick_data::MasterKey {
+        let keys: flick_data::SharedKeySource =
+            Arc::new(flick_data::FixedMasterKeySource(flick_data::MasterKey {
                 key_id: "test".into(),
                 bytes: [3u8; 32],
-            },
-        ));
+            }));
         let runtime = runtime_with_builtins().await;
 
         let service = init_settings_at(&runtime, dirs, keys)
             .await
             .expect("设置服务应可用");
-        assert!(service.registered_namespaces().iter().any(|ns| ns == "core"));
+        assert!(
+            service
+                .registered_namespaces()
+                .iter()
+                .any(|ns| ns == "core")
+        );
 
         let mode =
             flick_domain::SettingKey::new(flick_domain::SettingNamespace::Core, "theme.mode");

@@ -159,14 +159,19 @@ fn run_graphical(socket_path: PathBuf) -> Result<(), String> {
             let rt = tokio::runtime::Runtime::new().expect("failed to create bg runtime");
             rt.block_on(async move {
                 let lifecycle = background_lifecycle;
-                let runtime = Arc::new(ActionRuntime::new());
+                let dirs = flick_data::DataDirectories::discover().ok();
+                let paths: std::sync::Arc<dyn flick_domain::PluginPaths> = match &dirs {
+                    Some(dirs) => std::sync::Arc::new(dirs.clone()),
+                    None => std::sync::Arc::new(flick_domain::NoopPaths),
+                };
+                let runtime = Arc::new(ActionRuntime::new(
+                    std::sync::Arc::new(flick_adapters_linux::host_info::collect_host_info()),
+                    paths,
+                ));
                 flick_builtins::register_builtin(&runtime)
                     .await
                     .expect("register builtin plugins");
                 runtime.activate_all_plugins().await;
-                runtime.set_host_info(std::sync::Arc::new(
-                    flick_adapters_linux::host_info::collect_host_info(),
-                ));
 
                 let event_sink = Arc::new(bootstrap::ChannelEventSink {
                     tx: host_event_tx.clone(),
@@ -178,7 +183,7 @@ fn run_graphical(socket_path: PathBuf) -> Result<(), String> {
 
                 // 设置系统先于 UI 工作线程初始化：UI 线程要处理 `SetTheme`，
                 // 还要把设置变更热转发给 shell（主题、结果条数上限）。
-                let settings = bootstrap::init_settings(&runtime).await;
+                let settings = bootstrap::init_settings(&runtime, dirs).await;
                 if let Some(service) = &settings {
                     bootstrap::spawn_retention_worker(Arc::clone(service), lifecycle.token());
                     bootstrap::spawn_settings_forwarder(
@@ -439,11 +444,17 @@ mod tray_tests {
 
     #[test]
     fn placeholders_are_logged_only() {
-        assert_eq!(tray_action(TrayEvent::Home), TrayAction::Placeholder("主页"));
+        assert_eq!(
+            tray_action(TrayEvent::Home),
+            TrayAction::Placeholder("主页")
+        );
         assert_eq!(
             tray_action(TrayEvent::Settings),
             TrayAction::Placeholder("设置")
         );
-        assert_eq!(tray_action(TrayEvent::About), TrayAction::Placeholder("关于"));
+        assert_eq!(
+            tray_action(TrayEvent::About),
+            TrayAction::Placeholder("关于")
+        );
     }
 }

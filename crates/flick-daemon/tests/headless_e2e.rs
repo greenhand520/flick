@@ -174,7 +174,7 @@ async fn spawn_headless_daemon(tmpdir: &TempDir) -> (std::path::PathBuf, Arc<Tes
     let socket_path = tmpdir.path().join("flick.sock");
 
     // 创建运行时 + 内置动作
-    let runtime = Arc::new(flick_runtime::ActionRuntime::new());
+    let runtime = Arc::new(flick_runtime::ActionRuntime::default());
     flick_builtins::register_builtin(&runtime)
         .await
         .expect("register builtin plugins");

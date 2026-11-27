@@ -618,53 +618,55 @@ impl Render for AppView {
         // 搜索行：占满条高、垂直居中，大号字号（参考 gpui-shell/awari 的 query row）。
         if !hide_search {
             panel = panel.child(
-            div()
-                .h(px(self.metrics.input_height))
-                .w_full()
-                .flex()
-                .items_center()
-                .child(
-                    div()
-                        .w_full()
-                        // 让输入区吞掉鼠标按下，避免点击输入框时触发窗口拖动。
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(|_, _, _, cx| cx.stop_propagation()),
-                        )
-                        .child(
-                            Input::new(&self.input)
-                                .appearance(false)
-                                .cleanable(true)
-                                .with_size(gpui_kit::component::Size::Large)
-                                .w_full()
-                                // 覆盖 gpui Input Large 默认的 12px 左右内边距，
-                                // 保留字号，只把图标/文字拉近卡片边缘。
-                                .px(px(self.metrics.input_padding_h))
-                                .prefix(Icon::new(IconName::Search))
-                                .on_paste({
-                                    let weak = self.weak_self.clone();
-                                    let pending = Rc::clone(&self.paste_text_pending);
-                                    move |item: &ClipboardItem, window, cx| {
-                                        let Some(snapshot) =
-                                            crate::input_capture::snapshot_from_clipboard_item(
-                                                item,
-                                                InputSource::Paste,
-                                            )
-                                        else {
-                                            return false;
-                                        };
-                                        if snapshot.kind == UiInputKind::Text {
-                                            pending.set(true);
-                                            return false;
+                div()
+                    .h(px(self.metrics.input_height))
+                    .w_full()
+                    .flex()
+                    .items_center()
+                    .child(
+                        div()
+                            .w_full()
+                            // 让输入区吞掉鼠标按下，避免点击输入框时触发窗口拖动。
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|_, _, _, cx| cx.stop_propagation()),
+                            )
+                            .child(
+                                Input::new(&self.input)
+                                    .appearance(false)
+                                    .cleanable(true)
+                                    .with_size(gpui_kit::component::Size::Large)
+                                    .w_full()
+                                    // 覆盖 gpui Input Large 默认的 12px 左右内边距，
+                                    // 保留字号，只把图标/文字拉近卡片边缘。
+                                    .px(px(self.metrics.input_padding_h))
+                                    .prefix(Icon::new(IconName::Search))
+                                    .on_paste({
+                                        let weak = self.weak_self.clone();
+                                        let pending = Rc::clone(&self.paste_text_pending);
+                                        move |item: &ClipboardItem, window, cx| {
+                                            let Some(snapshot) =
+                                                crate::input_capture::snapshot_from_clipboard_item(
+                                                    item,
+                                                    InputSource::Paste,
+                                                )
+                                            else {
+                                                return false;
+                                            };
+                                            if snapshot.kind == UiInputKind::Text {
+                                                pending.set(true);
+                                                return false;
+                                            }
+                                            let _ = weak.update(cx, |view, view_cx| {
+                                                view.apply_captured_input(
+                                                    snapshot, window, view_cx,
+                                                );
+                                            });
+                                            true
                                         }
-                                        let _ = weak.update(cx, |view, view_cx| {
-                                            view.apply_captured_input(snapshot, window, view_cx);
-                                        });
-                                        true
-                                    }
-                                }),
-                        ),
-                ),
+                                    }),
+                            ),
+                    ),
             );
         }
 
@@ -773,10 +775,8 @@ impl Render for AppView {
                         // 鼠标移动即「hover 选中」：把选中行切到指针所在行（设计文档 §8.2 / 决策 16）。
                         .on_mouse_move(cx.listener(move |this, _, _, cx| {
                             if this.state.panel.selection.index != index {
-                                this.state.panel.selection.index = index.clamp(
-                                    0,
-                                    this.state.panel.selection.total.saturating_sub(1),
-                                );
+                                this.state.panel.selection.index = index
+                                    .clamp(0, this.state.panel.selection.total.saturating_sub(1));
                                 cx.notify();
                             }
                         }))

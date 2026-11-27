@@ -87,15 +87,7 @@ impl ActionHandler for HostHandler {
                 message: "host 不需要任何输入".into(),
             });
         }
-        let host = match ctx.host_info {
-            Some(host) => host,
-            None => {
-                return Err(ActionError::Unavailable {
-                    reason: "host info 未在启动时注入".into(),
-                });
-            }
-        };
-        let info = (*host).clone();
+        let info = (*ctx.host_info).clone();
         let extras = collect_extras();
         let content = build_surface(&info, &extras);
         Ok(ActionOutcome::open_surface("info", content))

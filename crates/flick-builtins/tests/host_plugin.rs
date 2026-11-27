@@ -5,11 +5,6 @@ use flick_runtime::{ActionRuntime, Plugin};
 
 #[tokio::test]
 async fn phase0_builtins_register_and_route_host() {
-    let rt = ActionRuntime::default();
-    flick_builtins::register_builtin(&rt)
-        .await
-        .expect("register builtin plugins");
-    rt.activate_all_plugins().await;
     let info = flick_domain::HostInfo {
         os: flick_domain::OperatingSystem::Linux,
         arch: flick_domain::Architecture::X86_64,
@@ -19,7 +14,14 @@ async fn phase0_builtins_register_and_route_host() {
         window_manager: Some("Mutter".into()),
         lan_ip: None,
     };
-    rt.set_host_info(std::sync::Arc::new(info));
+    let rt = ActionRuntime::new(
+        std::sync::Arc::new(info),
+        std::sync::Arc::new(flick_domain::NoopPaths),
+    );
+    flick_builtins::register_builtin(&rt)
+        .await
+        .expect("register builtin plugins");
+    rt.activate_all_plugins().await;
 
     let items = rt.route("host", InputType::PlainText).await;
     assert!(
@@ -53,10 +55,6 @@ fn host_manifest_is_valid() {
 
 #[tokio::test]
 async fn host_action_returns_open_surface() {
-    let rt = ActionRuntime::default();
-    rt.register_plugin(&flick_builtins::host::HostPlugin)
-        .await
-        .unwrap();
     let info = flick_domain::HostInfo {
         os: flick_domain::OperatingSystem::Linux,
         arch: flick_domain::Architecture::X86_64,
@@ -66,7 +64,13 @@ async fn host_action_returns_open_surface() {
         window_manager: Some("Mutter".into()),
         lan_ip: None,
     };
-    rt.set_host_info(std::sync::Arc::new(info));
+    let rt = ActionRuntime::new(
+        std::sync::Arc::new(info),
+        std::sync::Arc::new(flick_domain::NoopPaths),
+    );
+    rt.register_plugin(&flick_builtins::host::HostPlugin)
+        .await
+        .unwrap();
     let req = ActionRequest {
         invocation_id: InvocationId::new(),
         action_id: ActionId::from_static(flick_builtins::host::HOST_ACTION_ID),

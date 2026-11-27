@@ -14,7 +14,7 @@ use std::sync::{Arc, Mutex};
 #[derive(Debug, Clone, PartialEq)]
 struct Seen {
     revision: u64,
-    plugin_id: Option<String>,
+    plugin_id: String,
     enabled: Option<bool>,
     secret: Option<String>,
 }
@@ -37,7 +37,7 @@ impl Recorder {
     fn push(&self, ctx: &PluginContext) {
         self.seen.lock().unwrap().push(Seen {
             revision: ctx.settings().revision(),
-            plugin_id: ctx.plugin_id().map(str::to_string),
+            plugin_id: ctx.plugin_id().to_string(),
             enabled: ctx.settings().bool("enabled"),
             secret: ctx.secret("api_token"),
         });
@@ -81,7 +81,7 @@ impl SurfaceHandler for DemoSurface {
     ) -> Result<SurfaceContent, SurfaceError> {
         self.seen.lock().unwrap().push(Seen {
             revision: c.settings().revision(),
-            plugin_id: c.plugin_id().map(str::to_string),
+            plugin_id: c.plugin_id().to_string(),
             enabled: c.settings().bool("enabled"),
             secret: c.secret("api_token"),
         });
@@ -102,7 +102,7 @@ impl PluginLifecycle for DemoLifecycle {
     async fn activate(&self, c: PluginContext) -> Result<(), PluginRuntimeError> {
         self.seen.lock().unwrap().push(Seen {
             revision: c.settings().revision(),
-            plugin_id: c.plugin_id().map(str::to_string),
+            plugin_id: c.plugin_id().to_string(),
             enabled: c.settings().bool("enabled"),
             secret: c.secret("api_token"),
         });
@@ -127,7 +127,7 @@ impl ActionHandler for OpenSurfaceHandler {
     ) -> Result<ActionOutcome, ActionError> {
         self.seen.lock().unwrap().push(Seen {
             revision: c.settings().revision(),
-            plugin_id: c.plugin_id().map(str::to_string),
+            plugin_id: c.plugin_id().to_string(),
             enabled: c.settings().bool("enabled"),
             secret: c.secret("api_token"),
         });
@@ -258,7 +258,7 @@ fn request(action: &'static str) -> ActionRequest {
 }
 
 async fn setup(seen: Arc<Mutex<Vec<Seen>>>) -> ActionRuntime {
-    let rt = ActionRuntime::new();
+    let rt = ActionRuntime::default();
     rt.register_plugin(&DemoPlugin { seen }).await.unwrap();
     rt
 }
@@ -277,7 +277,7 @@ async fn invoke_sees_fixed_snapshot_plugin_id_and_secret() {
         seen[0],
         Seen {
             revision: 9,
-            plugin_id: Some("demo.settings".into()),
+            plugin_id: "demo.settings".into(),
             enabled: Some(true),
             secret: Some("s3cr3t".into()),
         }
@@ -292,7 +292,7 @@ async fn invoke_without_provider_gets_empty_snapshot() {
     rt.invoke(request("demo.settings.act")).await;
     let seen = seen.lock().unwrap();
     assert_eq!(seen[0].revision, 0);
-    assert_eq!(seen[0].plugin_id.as_deref(), Some("demo.settings"));
+    assert_eq!(seen[0].plugin_id.as_str(), "demo.settings");
     assert_eq!(seen[0].enabled, None);
     assert_eq!(seen[0].secret, None);
 }
@@ -322,7 +322,7 @@ async fn lifecycle_activate_and_surface_event_see_snapshot() {
     let seen = seen.lock().unwrap();
     let last = seen.last().unwrap();
     assert_eq!(last.revision, 9);
-    assert_eq!(last.plugin_id.as_deref(), Some("demo.settings"));
+    assert_eq!(last.plugin_id.as_str(), "demo.settings");
 }
 
 #[tokio::test]

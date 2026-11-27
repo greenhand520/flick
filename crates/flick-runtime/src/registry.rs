@@ -3,7 +3,7 @@
 use crate::search::score_action;
 use flick_domain::{
     ActionDescriptor, ActionId, ActionVisibility, DependencyStatus, InputContext, InputType,
-    PluginManifest, RouteItem,
+    PluginKind, PluginManifest, PluginProfile, RouteItem,
 };
 use flick_plugin::{
     ActionHandler, Plugin, PluginLifecycle, PluginRegistrationError, SurfaceHandler,
@@ -15,11 +15,12 @@ use std::sync::Arc;
 /// 单次搜索最多返回多少条 action candidates（设计文档 §9 约束 8）。
 pub const MAX_ACTION_RESULTS: usize = 100;
 
-/// 注册表中的一个条目：描述符 + 处理器 + 所属插件 id（裸注册时为 None）。
+/// 注册表中的一个条目：描述符 + 处理器 + 所属插件 id。
 struct Entry {
     descriptor: ActionDescriptor,
     handler: Arc<dyn ActionHandler>,
-    plugin_id: Option<String>,
+    /// 所有动作都必须归属某个插件。
+    plugin_id: String,
 }
 
 /// 搜索阶段的内部候选，保存排序所需的辅助字段。
@@ -71,18 +72,26 @@ impl ActionRegistry {
         self.usage = Some(store);
     }
 
-    /// 注册一个新动作（裸注册，无插件归属）。
+    /// 将一个动作挂到指定插件下（测试与嵌入场景用）。
     ///
-    /// 如果已存在具有相同 [`ActionId`] 的动作，则将其
-    /// 替换。
-    pub fn register(&mut self, descriptor: ActionDescriptor, handler: Arc<dyn ActionHandler>) {
+    /// 若该插件尚未通过 [`Self::register_plugin`] 注册，会创建一个最小的
+    /// manifest，保证动作始终有插件归属。已存在相同 [`ActionId`] 时替换。
+    pub fn register_action(
+        &mut self,
+        plugin_id: String,
+        descriptor: ActionDescriptor,
+        handler: Arc<dyn ActionHandler>,
+    ) {
+        self.manifests
+            .entry(plugin_id.clone())
+            .or_insert_with(|| minimal_manifest(&plugin_id));
         let id = descriptor.id.clone();
         self.entries.insert(
             id,
             Entry {
                 descriptor,
                 handler,
-                plugin_id: None,
+                plugin_id,
             },
         );
     }
@@ -115,7 +124,7 @@ impl ActionRegistry {
                 Entry {
                     descriptor: spec.descriptor,
                     handler: spec.handler,
-                    plugin_id: Some(manifest.id.clone()),
+                    plugin_id: manifest.id.clone(),
                 },
             );
         }
@@ -140,7 +149,7 @@ impl ActionRegistry {
         let resolution = flick_plugin::resolve_dependencies(&self.manifests);
         for plugin_id in &resolution.unavailable {
             self.entries
-                .retain(|_, entry| entry.plugin_id.as_deref() != Some(plugin_id.as_str()));
+                .retain(|_, entry| entry.plugin_id != *plugin_id);
             self.surface_handlers.remove(plugin_id);
             self.lifecycles.remove(plugin_id);
         }
@@ -185,10 +194,14 @@ impl ActionRegistry {
         self.manifests.values().cloned().collect()
     }
 
-    /// 返回持有给定动作的插件 manifest（裸注册动作返回 None）。
+    /// 返回给定动作所属插件的 id；所有动作都有归属。
+    pub fn plugin_id_for_action(&self, id: &ActionId) -> Option<&str> {
+        self.entries.get(id).map(|entry| entry.plugin_id.as_str())
+    }
+
+    /// 返回持有给定动作的插件 manifest。
     pub fn plugin_for_action(&self, id: &ActionId) -> Option<&PluginManifest> {
-        let plugin_id = self.entries.get(id)?.plugin_id.as_ref()?;
-        self.manifests.get(plugin_id)
+        self.manifests.get(self.plugin_id_for_action(id)?)
     }
 
     /// 返回插件的 Surface 交互处理器（若有注册）。
@@ -277,9 +290,7 @@ impl ActionRegistry {
         let mut entries: Vec<(&ActionId, &Entry)> = self.entries.iter().collect();
         entries.sort_by(|(left_id, left), (right_id, right)| {
             left.plugin_id
-                .as_deref()
-                .unwrap_or("")
-                .cmp(right.plugin_id.as_deref().unwrap_or(""))
+                .cmp(&right.plugin_id)
                 .then_with(|| left_id.as_str().cmp(right_id.as_str()))
         });
 
@@ -288,10 +299,7 @@ impl ActionRegistry {
             if entry.descriptor.visibility != ActionVisibility::Public {
                 continue;
             }
-            let plugin = entry
-                .plugin_id
-                .as_ref()
-                .and_then(|plugin_id| self.manifests.get(plugin_id));
+            let plugin = self.manifests.get(&entry.plugin_id);
             let Some(action_match) = score_action(&entry.descriptor, plugin, context) else {
                 continue;
             };
@@ -344,6 +352,27 @@ impl ActionRegistry {
 impl Default for ActionRegistry {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// `register_action` 用的最小 manifest：只保证动作有插件归属。
+fn minimal_manifest(plugin_id: &str) -> PluginManifest {
+    PluginManifest {
+        id: plugin_id.to_string(),
+        name: plugin_id.to_string(),
+        author: "Flick".into(),
+        version: "0.0.0".into(),
+        kind: PluginKind::BuiltInRust,
+        keywords: Vec::new(),
+        icon: None,
+        profile: PluginProfile::default(),
+        permissions: Vec::new(),
+        plugin_dependencies: Vec::new(),
+        settings: Vec::new(),
+        surfaces: Vec::new(),
+        supported_os: Vec::new(),
+        supported_architectures: Vec::new(),
+        needs_search: false,
     }
 }
 
@@ -410,7 +439,8 @@ mod tests {
     fn frecency_boost_affects_ordering() {
         let mut reg = ActionRegistry::new();
         // 两个标题长度不同（短标题原本排前面），用加成把长标题顶上去。
-        reg.register(
+        reg.register_action(
+            "flick.test".into(),
             ActionDescriptor::new(
                 ActionId::from_static("demo.short"),
                 "Demo A",
@@ -419,7 +449,8 @@ mod tests {
             ),
             Arc::new(NoopHandler),
         );
-        reg.register(
+        reg.register_action(
+            "flick.test".into(),
             ActionDescriptor::new(
                 ActionId::from_static("demo.long"),
                 "Demo B",
@@ -430,7 +461,11 @@ mod tests {
         );
 
         let plain = reg.search_input(&text_context("demo"));
-        assert_eq!(plain[0].action_id.as_str(), "demo.long", "同分时按候选顺序先排");
+        assert_eq!(
+            plain[0].action_id.as_str(),
+            "demo.long",
+            "同分时按候选顺序先排"
+        );
 
         reg.set_usage_store(Arc::new(FixedUsage {
             boost: 120.0,
@@ -450,7 +485,7 @@ mod tests {
         let mut reg = ActionRegistry::new();
         let desc = echo_descriptor();
         let id = desc.id.clone();
-        reg.register(desc, Arc::new(NoopHandler));
+        reg.register_action("flick.test".into(), desc, Arc::new(NoopHandler));
         assert!(reg.find_by_id(&id).is_some());
     }
 
@@ -463,7 +498,11 @@ mod tests {
     #[test]
     fn keyword_matches_query_tokens() {
         let mut reg = ActionRegistry::new();
-        reg.register(echo_descriptor(), Arc::new(NoopHandler));
+        reg.register_action(
+            "flick.test".into(),
+            echo_descriptor(),
+            Arc::new(NoopHandler),
+        );
 
         // "echo hello" 应当匹配
         let results = reg.search("echo hello", InputType::PlainText);
@@ -484,7 +523,11 @@ mod tests {
     #[test]
     fn keyword_match_works() {
         let mut reg = ActionRegistry::new();
-        reg.register(notes_descriptor(), Arc::new(NoopHandler));
+        reg.register_action(
+            "flick.test".into(),
+            notes_descriptor(),
+            Arc::new(NoopHandler),
+        );
 
         let results = reg.search("notes", InputType::PlainText);
         assert_eq!(results.len(), 1);
@@ -493,7 +536,11 @@ mod tests {
     #[test]
     fn empty_query_returns_empty() {
         let mut reg = ActionRegistry::new();
-        reg.register(echo_descriptor(), Arc::new(NoopHandler));
+        reg.register_action(
+            "flick.test".into(),
+            echo_descriptor(),
+            Arc::new(NoopHandler),
+        );
         assert!(reg.search("", InputType::PlainText).is_empty());
         assert!(reg.search("   ", InputType::PlainText).is_empty());
     }
@@ -508,7 +555,11 @@ mod tests {
     #[test]
     fn search_input_uses_title_match_and_reports_field() {
         let mut reg = ActionRegistry::new();
-        reg.register(echo_descriptor(), Arc::new(NoopHandler));
+        reg.register_action(
+            "flick.test".into(),
+            echo_descriptor(),
+            Arc::new(NoopHandler),
+        );
 
         let results = reg.search_input(&text_context("echo"));
         assert_eq!(results.len(), 1);
@@ -529,8 +580,8 @@ mod tests {
         url_only.supported_inputs = vec![InputType::Url];
 
         let mut reg = ActionRegistry::new();
-        reg.register(internal, Arc::new(NoopHandler));
-        reg.register(url_only, Arc::new(NoopHandler));
+        reg.register_action("flick.test".into(), internal, Arc::new(NoopHandler));
+        reg.register_action("flick.test".into(), url_only, Arc::new(NoopHandler));
 
         assert!(reg.search_input(&text_context("echo")).is_empty());
         assert!(reg.search_input(&text_context("notes")).is_empty());
@@ -557,7 +608,7 @@ mod tests {
             mime: Some("text/plain".into()),
         };
         let mut reg = ActionRegistry::new();
-        reg.register(descriptor, Arc::new(NoopHandler));
+        reg.register_action("flick.test".into(), descriptor, Arc::new(NoopHandler));
         let context = flick_domain::InputContext::from_snapshot(
             flick_domain::QueryGeneration::INITIAL,
             &flick_domain::SearchInputSnapshot {
@@ -602,7 +653,7 @@ mod tests {
             Entry {
                 descriptor,
                 handler: Arc::new(NoopHandler),
-                plugin_id: Some("demo.plugin".into()),
+                plugin_id: "demo.plugin".into(),
             },
         );
         let mut manifests = BTreeMap::new();
@@ -683,7 +734,7 @@ mod tests {
                 vec!["same".into()],
                 ConcurrencyPolicy::Parallel,
             );
-            reg.register(descriptor, Arc::new(NoopHandler));
+            reg.register_action("flick.test".into(), descriptor, Arc::new(NoopHandler));
         }
         let results = reg.search_input(&text_context("same"));
         assert_eq!(results.len(), 2);

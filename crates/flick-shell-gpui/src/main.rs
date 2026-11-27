@@ -236,15 +236,15 @@ async fn fake_host(
     mut ui_rx: mpsc::UnboundedReceiver<UiToHost>,
 ) {
     // 使用与 daemon 相同的运行时与内置插件，让 demo 的路由/调用行为贴近真实。
-    let runtime = Arc::new(ActionRuntime::default());
+    let runtime = Arc::new(ActionRuntime::new(
+        Arc::new(flick_adapters_linux::host_info::collect_host_info()),
+        Arc::new(flick_domain::NoopPaths),
+    ));
     flick_builtins::register_builtin(&runtime)
         .await
         .expect("register builtin plugins");
     let _ = runtime.register_plugin(&DemoClipboardPlugin::new()).await;
     runtime.activate_all_plugins().await;
-    runtime.set_host_info(Arc::new(
-        flick_adapters_linux::host_info::collect_host_info(),
-    ));
 
     // 模拟一次全局快捷键唤出面板。
     let _ = host_tx.send(HostToUi::ShowSearchPanel {

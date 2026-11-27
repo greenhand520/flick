@@ -348,6 +348,17 @@ impl ActionHandler for AppsSearchHandler {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
+
+    fn test_ctx() -> PluginContext {
+        PluginContext::new(
+            tokio_util::sync::CancellationToken::new(),
+            Arc::new(HostInfo::default()),
+            ConfigSnapshot::empty(),
+            "flick.builtin.apps",
+            Arc::new(NoopPaths),
+        )
+    }
 
     fn write_desktop(dir: &std::path::Path, file: &str, body: &str) {
         std::fs::create_dir_all(dir).unwrap();
@@ -437,11 +448,7 @@ mod tests {
             "[Desktop Entry]\nType=Application\nName=火狐浏览器\nExec=firefox\n",
         );
         let plugin = AppsPlugin::with_dirs(vec![apps_dir]);
-        plugin
-            .lifecycle
-            .activate(PluginContext::new(tokio_util::sync::CancellationToken::new()))
-            .await
-            .unwrap();
+        plugin.lifecycle.activate(test_ctx()).await.unwrap();
         let handler = AppsSearchHandler::from_state(plugin.state.clone());
         let request = ActionRequest {
             invocation_id: InvocationId::new(),
@@ -451,13 +458,7 @@ mod tests {
             source: ActionSource::SearchRoute,
             deadline: Deadline::from_secs(1),
         };
-        let outcome = handler
-            .invoke(
-                request,
-                PluginContext::new(tokio_util::sync::CancellationToken::new()),
-            )
-            .await
-            .unwrap();
+        let outcome = handler.invoke(request, test_ctx()).await.unwrap();
         let ActionOutcome::Data(value) = outcome else {
             panic!("expected Data")
         };
@@ -477,13 +478,7 @@ mod tests {
             source: ActionSource::SearchRoute,
             deadline: Deadline::from_secs(1),
         };
-        let outcome = handler
-            .invoke(
-                request,
-                PluginContext::new(tokio_util::sync::CancellationToken::new()),
-            )
-            .await
-            .unwrap();
+        let outcome = handler.invoke(request, test_ctx()).await.unwrap();
         let ActionOutcome::Data(value) = outcome else {
             panic!("expected Data")
         };

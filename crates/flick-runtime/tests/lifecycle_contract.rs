@@ -81,7 +81,7 @@ impl ActionHandler for NoopHandler {
 #[tokio::test]
 async fn activate_all_plugins_runs_registered_lifecycles() {
     let counter = Arc::new(AtomicUsize::new(0));
-    let runtime = ActionRuntime::new();
+    let runtime = ActionRuntime::default();
     runtime
         .register_plugin(&CountingPlugin {
             lifecycle: Arc::new(CountingLifecycle(counter.clone())),

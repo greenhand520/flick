@@ -3,8 +3,8 @@
 //! 每个 `#[test]` 对应一个具名的契约场景。
 
 use flick_domain::{
-    PluginContext, ActionDescriptor, ActionError, ActionId, ActionOutcome, ActionRequest, Caller,
-    ConcurrencyPolicy, Deadline, InputType,
+    ActionDescriptor, ActionError, ActionId, ActionOutcome, ActionRequest, Caller,
+    ConcurrencyPolicy, Deadline, InputType, PluginContext,
 };
 use flick_runtime::{ActionHandler, ActionRuntime};
 use std::sync::Arc;
@@ -75,8 +75,9 @@ fn echo_request(text: &str, caller: Caller) -> ActionRequest {
 
 /// 构建一个预注册了 echo 动作的运行时。
 async fn runtime_with_echo() -> ActionRuntime {
-    let rt = ActionRuntime::new();
-    rt.register(echo_descriptor(), Arc::new(EchoHandler)).await;
+    let rt = ActionRuntime::default();
+    rt.register_action("flick.test.echo", echo_descriptor(), Arc::new(EchoHandler))
+        .await;
     rt
 }
 
@@ -158,11 +159,12 @@ async fn echo_keyword_routes_and_action_receives_full_query() {
 /// 结果（或者处理器提前停止）。
 #[tokio::test]
 async fn cancelling_an_invocation_returns_cancelled_outcome_or_stops_work() {
-    let rt = ActionRuntime::new();
+    let rt = ActionRuntime::default();
 
     // 注册一个耗时 10 秒但会检查取消的慢速处理器。
     let slow_id = ActionId::from_static("flick.builtin.slow.v1.run");
-    rt.register(
+    rt.register_action(
+        "flick.test.slow",
         ActionDescriptor::new(
             slow_id.clone(),
             "Slow",
@@ -209,7 +211,7 @@ async fn cancelling_an_invocation_returns_cancelled_outcome_or_stops_work() {
 /// `UnknownAction` 错误 — 而不会发生 panic。
 #[tokio::test]
 async fn unknown_action_is_structured_not_a_panic() {
-    let rt = ActionRuntime::new();
+    let rt = ActionRuntime::default();
 
     let req = ActionRequest {
         invocation_id: flick_domain::InvocationId::new(),

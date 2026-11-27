@@ -15,9 +15,9 @@ pub mod input;
 pub mod paths;
 pub mod plugin;
 pub mod route;
+pub mod settings;
 pub mod surface;
 pub mod ui;
-pub mod settings;
 pub mod usage;
 
 /// 应用在桌面环境中的反向 DNS 标识；同时用作 portal app id、`.desktop`
@@ -25,6 +25,7 @@ pub mod usage;
 pub const APP_ID: &str = "io.github.greenhand520.Flick";
 
 // 为方便使用，在 crate 根目录重新导出关键类型。
+pub use action::PluginContext;
 pub use action::{
     ActionDescriptor, ActionInput, ActionOutcome, ActionRequest, ActionVisibility,
     ConcurrencyPolicy, Deadline, FileInput, FileRef, ImageData, InputType, InvocationPolicy,
@@ -39,14 +40,13 @@ pub use input::{
     InputContext, InputFacet, InputFacetKind, InputSource, PathLikeKind, SearchInputSnapshot,
     SearchQuery, UiInputKind,
 };
-pub use paths::PluginPaths;
+pub use paths::{NoopPaths, PluginPaths};
 pub use plugin::*;
 pub use route::{MatchField, RouteItem, RouteItemKey, RouteItemKind};
 pub use settings::{
-    ConfigSnapshot, SettingChange, SettingDecl, SettingKey, SettingKind, SettingNamespace, SettingSchema,
-    SettingSnapshot, SettingSecretReader, SettingValue, SettingValueError,
+    ConfigSnapshot, SettingChange, SettingDecl, SettingKey, SettingKind, SettingNamespace,
+    SettingSchema, SettingSecretReader, SettingSnapshot, SettingValue, SettingValueError,
 };
-pub use action::PluginContext;
 pub use surface::{
     BadgeTone, ButtonTone, ListItem, SURFACE_SCHEMA_VERSION, SpacerSize, SurfaceContent,
     SurfaceEventKind, SurfaceNode,

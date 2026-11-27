@@ -209,7 +209,7 @@ async fn build_test_stack() -> (
     Arc<ActionRuntime>,
     mpsc::UnboundedReceiver<HostToUi>,
 ) {
-    let runtime = Arc::new(ActionRuntime::new());
+    let runtime = Arc::new(ActionRuntime::default());
     flick_builtins::register_builtin(&runtime)
         .await
         .expect("register builtin plugins");

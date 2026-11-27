@@ -122,9 +122,7 @@ impl SettingKind {
                 if variants.iter().any(|item| item == v) {
                     Ok(())
                 } else {
-                    Err(SettingValueError::UnknownVariant {
-                        variant: v.clone(),
-                    })
+                    Err(SettingValueError::UnknownVariant { variant: v.clone() })
                 }
             }
             (Self::Path, SettingValue::Path(_)) => Ok(()),
@@ -521,7 +519,10 @@ impl SettingKey {
                     reason: "短 key 为空或包含 '.'".to_string(),
                 });
             }
-            return Ok(Self::new(SettingNamespace::Plugin(plugin_id.to_string()), key));
+            return Ok(Self::new(
+                SettingNamespace::Plugin(plugin_id.to_string()),
+                key,
+            ));
         }
         Err(SettingValueError::InvalidKey {
             key: input.to_string(),

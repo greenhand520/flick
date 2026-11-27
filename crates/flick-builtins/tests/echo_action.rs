@@ -1,16 +1,28 @@
 //! Echo 内置动作的测试。
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use flick_builtins::echo::{ECHO_ACTION_ID, EchoHandler};
 use flick_domain::{
-    ActionOutcome, ActionRequest, Caller, ConfigSnapshot, PluginContext, SettingValue,
+    ActionOutcome, ActionRequest, Caller, ConfigSnapshot, HostInfo, NoopPaths, PluginContext,
+    SettingValue,
 };
 use flick_runtime::ActionHandler;
 use tokio_util::sync::CancellationToken;
 
+fn ctx_with_settings(settings: ConfigSnapshot) -> PluginContext {
+    PluginContext::new(
+        CancellationToken::new(),
+        Arc::new(HostInfo::default()),
+        settings,
+        "flick.builtin.echo",
+        Arc::new(NoopPaths),
+    )
+}
+
 fn test_ctx() -> PluginContext {
-    PluginContext::new(CancellationToken::new())
+    ctx_with_settings(ConfigSnapshot::empty())
 }
 
 #[test]
@@ -92,7 +104,7 @@ async fn echo_registered_in_runtime_is_findable() {
     use flick_builtins::register_builtin;
     use flick_domain::ActionId;
 
-    let runtime = flick_runtime::ActionRuntime::new();
+    let runtime = flick_runtime::ActionRuntime::default();
     register_builtin(&runtime)
         .await
         .expect("register builtin plugins");
@@ -108,7 +120,7 @@ async fn echo_registered_in_runtime_is_findable() {
 
 #[tokio::test]
 async fn register_builtin_resolves_dependencies_without_disabling_builtins() {
-    let runtime = flick_runtime::ActionRuntime::new();
+    let runtime = flick_runtime::ActionRuntime::default();
     flick_builtins::register_builtin(&runtime)
         .await
         .expect("builtin registration succeeds");
@@ -149,7 +161,7 @@ async fn echo_applies_prefix_from_plugin_settings() {
             SettingValue::String("[flick] ".into()),
         )]),
     };
-    let ctx = PluginContext::new(CancellationToken::new()).with_settings(snapshot);
+    let ctx = ctx_with_settings(snapshot);
     let handler = EchoHandler;
     let request = ActionRequest::new_echo("hello", Caller::ui("panel"));
     match handler.invoke(request, ctx).await.expect("invoke ok") {
@@ -161,7 +173,7 @@ async fn echo_applies_prefix_from_plugin_settings() {
 /// 空快照（设置不可用）时按空前缀降级，不报错。
 #[tokio::test]
 async fn echo_falls_back_to_empty_prefix_without_settings() {
-    let ctx = PluginContext::new(CancellationToken::new()).with_settings(ConfigSnapshot::empty());
+    let ctx = test_ctx();
     let handler = EchoHandler;
     let request = ActionRequest::new_echo("hello", Caller::ui("panel"));
     match handler.invoke(request, ctx).await.expect("invoke ok") {

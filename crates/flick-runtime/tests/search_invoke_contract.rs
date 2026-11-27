@@ -59,7 +59,7 @@ impl Plugin for AppSearchPlugin {
 
 #[tokio::test]
 async fn search_invoke_expands_data_to_execution_route_items() {
-    let runtime = ActionRuntime::new();
+    let runtime = ActionRuntime::default();
     runtime.register_plugin(&AppSearchPlugin).await.unwrap();
     let items = runtime
         .search_invoke(QueryGeneration::INITIAL, ActionInput::plain_text("fire"))
@@ -79,7 +79,7 @@ async fn search_invoke_expands_data_to_execution_route_items() {
 
 #[tokio::test]
 async fn non_search_invocable_actions_are_not_executed() {
-    let runtime = ActionRuntime::new();
+    let runtime = ActionRuntime::default();
     let mut d = ActionDescriptor::new(
         ActionId::from_static("test.plain.noop"),
         "Noop",
@@ -87,7 +87,9 @@ async fn non_search_invocable_actions_are_not_executed() {
         ConcurrencyPolicy::Parallel,
     );
     d.search_invocable = false;
-    runtime.register(d, Arc::new(AppSearchHandler)).await;
+    runtime
+        .register_action("flick.test.search", d, Arc::new(AppSearchHandler))
+        .await;
     assert!(
         runtime
             .search_invoke(QueryGeneration::INITIAL, ActionInput::plain_text("fire"))
@@ -196,7 +198,7 @@ impl Plugin for SurfacePlugin {
 #[tokio::test]
 async fn search_route_open_surface_has_no_side_effects() {
     let opened = Arc::new(AtomicUsize::new(0));
-    let runtime = ActionRuntime::new();
+    let runtime = ActionRuntime::default();
     runtime
         .register_plugin(&SurfacePlugin {
             opened: opened.clone(),
@@ -223,8 +225,8 @@ async fn search_route_open_surface_has_no_side_effects() {
 // 复用文件中部已有的 `use std::sync::atomic::{AtomicUsize, Ordering};`
 // （为 `CountingSurfaceHandler` 服务的那一行），此处只补下面这些 import，
 // 否则会触发 E0252 重复导入。
-use std::sync::atomic::AtomicBool;
 use std::sync::Mutex;
+use std::sync::atomic::AtomicBool;
 use std::time::{Duration, Instant};
 
 /// 记录收到的输入，并在固定延迟后返回一条执行项。
@@ -374,15 +376,12 @@ async fn search_invoke_runs_actions_in_parallel() {
             ),
         ],
     };
-    let runtime = ActionRuntime::new();
+    let runtime = ActionRuntime::default();
     runtime.register_plugin(&plugin).await.unwrap();
 
     let started = Instant::now();
     let items = runtime
-        .search_invoke(
-            QueryGeneration::INITIAL,
-            ActionInput::plain_text("slow"),
-        )
+        .search_invoke(QueryGeneration::INITIAL, ActionInput::plain_text("slow"))
         .await;
     let elapsed = started.elapsed();
 
@@ -404,14 +403,11 @@ async fn search_invoke_truncates_to_twenty_items_per_action() {
             vec![InputType::PlainText],
         )],
     };
-    let runtime = ActionRuntime::new();
+    let runtime = ActionRuntime::default();
     runtime.register_plugin(&plugin).await.unwrap();
 
     let items = runtime
-        .search_invoke(
-            QueryGeneration::INITIAL,
-            ActionInput::plain_text("bulk"),
-        )
+        .search_invoke(QueryGeneration::INITIAL, ActionInput::plain_text("bulk"))
         .await;
 
     assert_eq!(items.len(), MAX_EXECUTION_ITEMS_PER_ACTION);
@@ -434,7 +430,7 @@ async fn search_invoke_passes_files_and_image_to_handler() {
             vec![InputType::Files],
         )],
     };
-    let runtime = ActionRuntime::new();
+    let runtime = ActionRuntime::default();
     runtime.register_plugin(&plugin).await.unwrap();
 
     let mut input = ActionInput::plain_text("a.txt b.txt");
@@ -447,9 +443,7 @@ async fn search_invoke_passes_files_and_image_to_handler() {
         mime: None,
     }];
 
-    let items = runtime
-        .search_invoke(QueryGeneration::INITIAL, input)
-        .await;
+    let items = runtime.search_invoke(QueryGeneration::INITIAL, input).await;
 
     assert_eq!(items.len(), 1);
     let seen = seen.lock().unwrap();
@@ -474,7 +468,7 @@ async fn new_generation_cancels_previous_search() {
             vec![InputType::PlainText],
         )],
     };
-    let runtime = Arc::new(ActionRuntime::new());
+    let runtime = Arc::new(ActionRuntime::default());
     runtime.register_plugin(&plugin).await.unwrap();
 
     let gen1 = QueryGeneration::INITIAL;
@@ -494,7 +488,10 @@ async fn new_generation_cancels_previous_search() {
     // 新代次用图片输入：该 Action 只支持 PlainText，因此不会被再次调用，
     // 但 `search_invoke` 仍会先取消旧代次的令牌（级联到在途的子令牌）。
     let second = runtime
-        .search_invoke(gen2, ActionInput::clipboard_image("image/png", vec![1, 2, 3]))
+        .search_invoke(
+            gen2,
+            ActionInput::clipboard_image("image/png", vec![1, 2, 3]),
+        )
         .await;
     assert!(second.is_empty());
 
@@ -536,14 +533,11 @@ async fn execution_item_carries_real_invocation_id() {
             vec![InputType::PlainText],
         )],
     };
-    let runtime = ActionRuntime::new();
+    let runtime = ActionRuntime::default();
     runtime.register_plugin(&plugin).await.unwrap();
 
     let items = runtime
-        .search_invoke(
-            QueryGeneration::INITIAL,
-            ActionInput::plain_text("ids"),
-        )
+        .search_invoke(QueryGeneration::INITIAL, ActionInput::plain_text("ids"))
         .await;
 
     assert_eq!(items.len(), 1);

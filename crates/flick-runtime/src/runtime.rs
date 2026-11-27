@@ -138,7 +138,7 @@ pub struct ActionRuntime {
     registry: Arc<RwLock<ActionRegistry>>,
     active: Arc<tokio::sync::Mutex<HashMap<InvocationId, ActiveEntry>>>,
     /// 宿主信息；用 `Arc` 包裹以便随 [`InvocationCore`] 克隆进并行任务。
-    host_info: Arc<std::sync::RwLock<Option<Arc<flick_domain::HostInfo>>>>,
+    host_info: Arc<flick_domain::HostInfo>,
     /// 活动 Surface 会话映射（会话 id → 状态）。
     surface_sessions: Arc<RwLock<HashMap<SurfaceSessionId, SurfaceSessionState>>>,
     /// 搜索代次取消槽：记录当前搜索代次与其取消令牌。
@@ -147,8 +147,8 @@ pub struct ActionRuntime {
     settings: Arc<std::sync::RwLock<Option<Arc<dyn SettingsProvider>>>>,
     /// secret 读取器；`None` 时 `ctx.secret()` 恒为 `None`。
     secrets: Arc<std::sync::RwLock<Option<Arc<dyn SettingSecretReader>>>>,
-    /// 插件目录提供者；`None` 时 `ctx.data_dir()` 等恒为 `None`。
-    paths: Arc<std::sync::RwLock<Option<Arc<dyn PluginPaths>>>>,
+    /// 插件目录提供者；构造时注入，插件动作始终可用。
+    paths: Arc<dyn PluginPaths>,
 }
 
 /// 一次动作调用所需的最小运行时上下文。
@@ -162,7 +162,7 @@ struct InvocationCore {
     /// 活动调用表（用于外部取消）。
     active: Arc<tokio::sync::Mutex<HashMap<InvocationId, ActiveEntry>>>,
     /// 宿主信息。
-    host_info: Arc<std::sync::RwLock<Option<Arc<flick_domain::HostInfo>>>>,
+    host_info: Arc<flick_domain::HostInfo>,
     /// 活动 Surface 会话表（`OpenSurface` 回填需要）。
     surface_sessions: Arc<RwLock<HashMap<SurfaceSessionId, SurfaceSessionState>>>,
     /// 设置快照提供者（与运行时共享）。
@@ -170,21 +170,23 @@ struct InvocationCore {
     /// secret 读取器（与运行时共享）。
     secrets: Arc<std::sync::RwLock<Option<Arc<dyn SettingSecretReader>>>>,
     /// 插件目录提供者（与运行时共享）。
-    paths: Arc<std::sync::RwLock<Option<Arc<dyn PluginPaths>>>>,
+    paths: Arc<dyn PluginPaths>,
 }
 
 impl ActionRuntime {
     /// 创建一个具有空注册表的新运行时。
-    pub fn new() -> Self {
+    ///
+    /// `host_info` 与 `paths` 是插件动作必需的能力，必须在构造时注入。
+    pub fn new(host_info: Arc<flick_domain::HostInfo>, paths: Arc<dyn PluginPaths>) -> Self {
         Self {
             registry: Arc::new(RwLock::new(ActionRegistry::new())),
             active: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
-            host_info: Arc::new(std::sync::RwLock::new(None)),
+            host_info,
             surface_sessions: Arc::new(RwLock::new(HashMap::new())),
             search_cancel: std::sync::Mutex::new(None),
             settings: Arc::new(std::sync::RwLock::new(None)),
             secrets: Arc::new(std::sync::RwLock::new(None)),
-            paths: Arc::new(std::sync::RwLock::new(None)),
+            paths,
         }
     }
 
@@ -222,16 +224,8 @@ impl ActionRuntime {
         *self.secrets.write().unwrap() = Some(reader);
     }
 
-    /// 注入插件目录提供者（由 `flick-data` 的 `DataDirectories` 实现）。
-    pub fn set_plugin_paths(&self, provider: Arc<dyn PluginPaths>) {
-        *self.paths.write().unwrap() = Some(provider);
-    }
-
-    /// 解析某插件当前的设置快照；无 provider 或无插件 id 时返回空快照。
-    fn snapshot_for(&self, plugin_id: Option<&str>) -> ConfigSnapshot {
-        let Some(plugin_id) = plugin_id else {
-            return ConfigSnapshot::empty();
-        };
+    /// 解析某插件当前的设置快照；无 provider 时返回空快照。
+    fn snapshot_for(&self, plugin_id: &str) -> ConfigSnapshot {
         match self.settings.read().unwrap().as_ref() {
             Some(provider) => provider.snapshot(plugin_id),
             None => ConfigSnapshot::empty(),
@@ -239,18 +233,16 @@ impl ActionRuntime {
     }
 
     /// 构造一个带设置快照的插件上下文。
-    fn context_with(
-        &self,
-        cancellation: CancellationToken,
-        plugin_id: Option<&str>,
-    ) -> PluginContext {
+    fn context_with(&self, cancellation: CancellationToken, plugin_id: &str) -> PluginContext {
         let settings = self.snapshot_for(plugin_id);
-        PluginContext::new(cancellation)
-            .with_host_info(self.host_info.read().unwrap().clone())
-            .with_settings(settings)
-            .with_plugin_id(plugin_id.map(str::to_string))
-            .with_secrets(self.secrets.read().unwrap().clone())
-            .with_paths(self.paths.read().unwrap().clone())
+        PluginContext::new(
+            cancellation,
+            Arc::clone(&self.host_info),
+            settings,
+            plugin_id,
+            Arc::clone(&self.paths),
+        )
+        .with_secrets(self.secrets.read().unwrap().clone())
     }
 
     /// 订阅某插件的设置变更。
@@ -258,7 +250,7 @@ impl ActionRuntime {
     /// 首次 `borrow()` 即当前快照；之后每次该命名空间 revision 变化推送新快照。
     /// 未注入 provider 时返回一个只含空快照、不再更新的接收端。
     pub fn watch_settings(&self, plugin_id: &str) -> tokio::sync::watch::Receiver<ConfigSnapshot> {
-        let (tx, rx) = tokio::sync::watch::channel(self.snapshot_for(Some(plugin_id)));
+        let (tx, rx) = tokio::sync::watch::channel(self.snapshot_for(plugin_id));
         if let Some(provider) = self.settings.read().unwrap().clone() {
             let sender = Arc::new(tx);
             provider.subscribe(
@@ -272,18 +264,18 @@ impl ActionRuntime {
         rx
     }
 
-    /// 注入启动时采集的宿主信息。
-    pub fn set_host_info(&self, info: Arc<flick_domain::HostInfo>) {
-        *self.host_info.write().unwrap() = Some(info);
-    }
-
-    /// 注册一个新动作（委托给内部注册表）。
+    /// 将一个动作挂到指定插件下（测试与嵌入场景用）。
     ///
-    /// 获取注册表上的写锁，但**不会**在
-    /// 任何 `.await` 期间持有它。
-    pub async fn register(&self, descriptor: ActionDescriptor, handler: Arc<dyn ActionHandler>) {
+    /// 所有动作都必须归属插件；若该插件尚未注册，会创建一个最小的
+    /// manifest。生产代码应优先使用 [`Self::register_plugin`]。
+    pub async fn register_action(
+        &self,
+        plugin_id: impl Into<String>,
+        descriptor: ActionDescriptor,
+        handler: Arc<dyn ActionHandler>,
+    ) {
         let mut reg = self.registry.write().await;
-        reg.register(descriptor, handler);
+        reg.register_action(plugin_id.into(), descriptor, handler);
     }
 
     /// 异步注册一个插件（委托给内部注册表）。
@@ -305,7 +297,7 @@ impl ActionRuntime {
             reg.plugin_lifecycles()
         };
         for (plugin_id, lifecycle) in lifecycles {
-            let ctx = self.context_with(CancellationToken::new(), Some(&plugin_id));
+            let ctx = self.context_with(CancellationToken::new(), &plugin_id);
             if let Err(error) = lifecycle.activate(ctx).await {
                 tracing::warn!(%plugin_id, ?error, "plugin activate failed");
             }
@@ -451,15 +443,13 @@ impl ActionRuntime {
     ) -> Option<ActionOutcome> {
         let (handler, plugin_id) = {
             let reg = self.registry.read().await;
-            let plugin_id = reg
-                .plugin_for_action(&parent_action_id)
-                .map(|manifest| manifest.id.clone());
+            let plugin_id = reg.plugin_id_for_action(&parent_action_id)?.to_string();
             let handler = reg
                 .find_by_id(&parent_action_id)
                 .map(|(_, h)| Arc::clone(h))?;
             (handler, plugin_id)
         };
-        let ctx = self.context_with(CancellationToken::new(), plugin_id.as_deref());
+        let ctx = self.context_with(CancellationToken::new(), &plugin_id);
         match tokio::time::timeout(
             std::time::Duration::from_secs(30),
             handler.execution_event(&parent_action_id, item_id, event, ctx),
@@ -507,7 +497,7 @@ impl ActionRuntime {
         .ok_or(SurfaceError {
             message: "surface handler not found".into(),
         })?;
-        let ctx = self.context_with(CancellationToken::new(), Some(&session.plugin_id));
+        let ctx = self.context_with(CancellationToken::new(), &session.plugin_id);
         handler.on_event(&session, event, ctx).await
     }
 
@@ -569,7 +559,7 @@ impl InvocationCore {
         }
 
         // ── 1. 查找处理器（仅短暂持有读锁） ────────
-        let (handler, accepts_no_input, plugin_id): (Arc<dyn ActionHandler>, bool, Option<String>) = {
+        let (handler, accepts_no_input, plugin_id): (Arc<dyn ActionHandler>, bool, String) = {
             let reg = self.registry.read().await;
             match reg.find_by_id(&request.action_id) {
                 Some((desc, h)) => {
@@ -580,10 +570,12 @@ impl InvocationCore {
                             .supported_inputs
                             .iter()
                             .all(|kind| *kind == InputType::None);
-                    let plugin_id = reg
-                        .plugin_for_action(&request.action_id)
-                        .map(|manifest| manifest.id.clone());
-                    (Arc::clone(h), no_input, plugin_id)
+                    let Some(plugin_id) = reg.plugin_id_for_action(&request.action_id) else {
+                        return ActionOutcome::Error(ActionError::UnknownAction {
+                            action_id: request.action_id.to_string(),
+                        });
+                    };
+                    (Arc::clone(h), no_input, plugin_id.to_string())
                 }
                 None => {
                     return ActionOutcome::Error(ActionError::UnknownAction {
@@ -603,19 +595,18 @@ impl InvocationCore {
             Some(parent) => parent.child_token(),
             None => CancellationToken::new(),
         };
-        let settings = match plugin_id.as_deref() {
-            Some(id) => match self.settings.read().unwrap().as_ref() {
-                Some(provider) => provider.snapshot(id),
-                None => ConfigSnapshot::empty(),
-            },
+        let settings = match self.settings.read().unwrap().as_ref() {
+            Some(provider) => provider.snapshot(&plugin_id),
             None => ConfigSnapshot::empty(),
         };
-        let ctx = PluginContext::new(token.clone())
-            .with_host_info(self.host_info.read().unwrap().clone())
-            .with_settings(settings)
-            .with_plugin_id(plugin_id)
-            .with_secrets(self.secrets.read().unwrap().clone())
-            .with_paths(self.paths.read().unwrap().clone());
+        let ctx = PluginContext::new(
+            token.clone(),
+            Arc::clone(&self.host_info),
+            settings,
+            &plugin_id,
+            Arc::clone(&self.paths),
+        )
+        .with_secrets(self.secrets.read().unwrap().clone());
 
         // 存入活动映射，以便 `cancel()` 能找到它。
         // 用守卫托管清理：即使本 future 中途被丢弃，也会移除条目。
@@ -696,9 +687,14 @@ impl InvocationCore {
         let session_id = SurfaceSessionId::new();
         let (needs_search, plugin_id, handler) = {
             let reg = self.registry.read().await;
-            let manifest = reg.plugin_for_action(&request.action_id);
-            let needs_search = manifest.map(|m| m.needs_search).unwrap_or(false);
-            let plugin_id = manifest.map(|m| m.id.clone()).unwrap_or_default();
+            let needs_search = reg
+                .plugin_for_action(&request.action_id)
+                .map(|m| m.needs_search)
+                .unwrap_or(false);
+            let plugin_id = reg
+                .plugin_id_for_action(&request.action_id)
+                .map(str::to_string)
+                .unwrap_or_default();
             let handler = reg.surface_handler_for(&plugin_id);
             (needs_search, plugin_id, handler)
         };
@@ -724,8 +720,12 @@ impl InvocationCore {
 }
 
 impl Default for ActionRuntime {
+    /// 单测与 demo 用的便捷构造：注入中性的 Fake 能力。
     fn default() -> Self {
-        Self::new()
+        Self::new(
+            Arc::new(flick_domain::HostInfo::default()),
+            Arc::new(flick_domain::NoopPaths),
+        )
     }
 }
 
@@ -877,7 +877,7 @@ mod active_guard_tests {
     /// future 被丢弃时，`active` 表中的条目必须被移除（不泄漏取消令牌）。
     #[tokio::test]
     async fn dropped_invoke_removes_active_entry() {
-        let runtime = ActionRuntime::new();
+        let runtime = ActionRuntime::default();
         runtime.register_plugin(&HangingPlugin).await.unwrap();
 
         let request = ActionRequest {
@@ -891,7 +891,10 @@ mod active_guard_tests {
 
         // 50ms 后放弃等待：模拟上层 select!/JoinSet abort 丢弃 future。
         let result = tokio::time::timeout(Duration::from_millis(50), runtime.invoke(request)).await;
-        assert!(result.is_err(), "invoke should still be running when dropped");
+        assert!(
+            result.is_err(),
+            "invoke should still be running when dropped"
+        );
 
         assert!(
             runtime.active.lock().await.is_empty(),
@@ -961,11 +964,8 @@ mod path_input_tests {
                 vec![],
                 ConcurrencyPolicy::Parallel,
             );
-            descriptor.supported_inputs = vec![
-                InputType::PathCandidate,
-                InputType::File,
-                InputType::Files,
-            ];
+            descriptor.supported_inputs =
+                vec![InputType::PathCandidate, InputType::File, InputType::Files];
             vec![ActionSpec {
                 descriptor,
                 handler: Arc::new(CapturingHandler {
@@ -1018,7 +1018,7 @@ mod path_input_tests {
     #[tokio::test]
     async fn existing_path_is_upgraded_to_file() {
         let seen = Seen::default();
-        let runtime = ActionRuntime::new();
+        let runtime = ActionRuntime::default();
         runtime
             .register_plugin(&CapturePlugin { seen: seen.clone() })
             .await
@@ -1045,7 +1045,7 @@ mod path_input_tests {
     #[tokio::test]
     async fn missing_path_stays_path_candidate() {
         let seen = Seen::default();
-        let runtime = ActionRuntime::new();
+        let runtime = ActionRuntime::default();
         runtime
             .register_plugin(&CapturePlugin { seen: seen.clone() })
             .await

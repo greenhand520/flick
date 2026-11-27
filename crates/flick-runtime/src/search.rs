@@ -485,8 +485,9 @@ fn pinyin_data() -> &'static ib_pinyin::pinyin::PinyinData {
 
 /// 文本 → 拼音查询串的缓存：`(全拼, 首字母)`。
 fn cached_pinyin(text: &str) -> (String, String) {
-    static CACHE: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, (String, String)>>> =
-        std::sync::OnceLock::new();
+    static CACHE: std::sync::OnceLock<
+        std::sync::Mutex<std::collections::HashMap<String, (String, String)>>,
+    > = std::sync::OnceLock::new();
     let cache = CACHE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()));
     if let Ok(map) = cache.lock() {
         if let Some(found) = map.get(text) {
@@ -773,10 +774,19 @@ mod tests {
     fn pinyin_full_prefix_and_acronym_match_chinese_text() {
         // 火狐浏览器 -> 全拼 huohuliulanqi，首字母 hhllq
         let text = "火狐浏览器";
-        assert_eq!(compute_pinyin(text), ("huohuliulanqi".to_string(), "hhllq".to_string()));
-        assert_eq!(match_pinyin(text, "huohuliulanqi"), Some(MatchTier::ExactPinyin));
+        assert_eq!(
+            compute_pinyin(text),
+            ("huohuliulanqi".to_string(), "hhllq".to_string())
+        );
+        assert_eq!(
+            match_pinyin(text, "huohuliulanqi"),
+            Some(MatchTier::ExactPinyin)
+        );
         assert_eq!(match_pinyin(text, "huohu"), Some(MatchTier::PrefixPinyin));
-        assert_eq!(match_pinyin(text, "hhllq"), Some(MatchTier::ShortAcronymExact));
+        assert_eq!(
+            match_pinyin(text, "hhllq"),
+            Some(MatchTier::ShortAcronymExact)
+        );
         assert_eq!(match_pinyin(text, "zzz"), None);
         // 纯 ASCII 文本走原文匹配，不做拼音。
         assert_eq!(match_pinyin("Firefox", "fire"), None);
@@ -890,7 +900,10 @@ mod tests {
 
         let mut only_file = descriptor("Open", &["open"]);
         only_file.supported_inputs = vec![InputType::File];
-        assert!(select_input(&only_file, &one).is_some(), "单文件应匹配 File");
+        assert!(
+            select_input(&only_file, &one).is_some(),
+            "单文件应匹配 File"
+        );
         assert!(
             select_input(&only_file, &many).is_none(),
             "只声明 File 的动作不接受多文件"

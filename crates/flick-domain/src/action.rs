@@ -256,41 +256,45 @@ impl Deadline {
 ///
 /// 携带取消令牌、宿主信息、**调用入口固定的设置快照**，以及可选的 secret
 /// 读取器（实时解密，不放进快照，避免 `Debug` 泄露明文）和插件目录提供者。
-#[derive(Default)]
+///
+/// 插件动作一定拥有 `plugin_id`、`host_info` 与 `paths`：所有非 Option 成员
+/// 都必须由 [`Self::new`] 显式传入，单测也需注入 `NoopPaths` / `HostInfo::default()`
+/// 等 Fake；只有 `secrets` 保持可选，通过 [`Self::with_secrets`] 补充。
 pub struct PluginContext {
     /// 协作式取消令牌。
     pub cancellation: tokio_util::sync::CancellationToken,
     /// 启动时注入的宿主信息（由适配器采集）。
-    pub host_info: Option<std::sync::Arc<crate::host::HostInfo>>,
+    pub host_info: Arc<crate::host::HostInfo>,
     /// 本次调用固定的设置快照（只含非 secret 值，已合并声明默认值）。
     pub settings: crate::settings::ConfigSnapshot,
-    /// 当前动作所属插件 id；`None` 表示非插件注册的动作。
-    pub plugin_id: Option<String>,
+    /// 当前动作所属插件 id；所有动作都必须归属某个插件。
+    pub plugin_id: String,
     /// secret 值读取器；宿主未提供服务时为 `None`。
     pub secrets: Option<std::sync::Arc<dyn crate::settings::SettingSecretReader>>,
     /// 插件数据目录提供者；由 `flick-data` 实现、宿主注入。
-    pub paths: Option<Arc<dyn PluginPaths>>,
+    pub paths: Arc<dyn PluginPaths>,
 }
 
 impl PluginContext {
-    /// 用取消令牌构造一个其余字段全空的上下文。
-    pub fn new(cancellation: tokio_util::sync::CancellationToken) -> Self {
+    /// 构造上下文；所有非 Option 成员都必须显式传入。
+    ///
+    /// 单测可传 `Arc::new(HostInfo::default())`、`ConfigSnapshot::empty()`、
+    /// `Arc::new(NoopPaths)` 等 Fake；`secrets` 用 [`Self::with_secrets`] 补充。
+    pub fn new(
+        cancellation: tokio_util::sync::CancellationToken,
+        host_info: Arc<crate::host::HostInfo>,
+        settings: crate::settings::ConfigSnapshot,
+        plugin_id: impl Into<String>,
+        paths: Arc<dyn PluginPaths>,
+    ) -> Self {
         Self {
             cancellation,
-            ..Self::default()
+            host_info,
+            settings,
+            plugin_id: plugin_id.into(),
+            secrets: None,
+            paths,
         }
-    }
-
-    /// 设置快照（链式）。
-    pub fn with_settings(mut self, settings: crate::settings::ConfigSnapshot) -> Self {
-        self.settings = settings;
-        self
-    }
-
-    /// 设置插件 id（链式）。
-    pub fn with_plugin_id(mut self, plugin_id: Option<String>) -> Self {
-        self.plugin_id = plugin_id;
-        self
     }
 
     /// 设置 secret 读取器（链式）。
@@ -302,53 +306,34 @@ impl PluginContext {
         self
     }
 
-    /// 设置插件目录提供者（链式）。
-    pub fn with_paths(mut self, paths: Option<Arc<dyn PluginPaths>>) -> Self {
-        self.paths = paths;
-        self
-    }
-
-    /// 设置宿主信息（链式）。
-    pub fn with_host_info(
-        mut self,
-        host_info: Option<std::sync::Arc<crate::host::HostInfo>>,
-    ) -> Self {
-        self.host_info = host_info;
-        self
-    }
-
     /// 本次调用的设置快照。
     pub fn settings(&self) -> &crate::settings::ConfigSnapshot {
         &self.settings
     }
 
     /// 当前动作所属插件 id。
-    pub fn plugin_id(&self) -> Option<&str> {
-        self.plugin_id.as_deref()
+    pub fn plugin_id(&self) -> &str {
+        &self.plugin_id
     }
 
     /// 读取一个 secret 值；无读取器或不存在时返回 `None`。
     pub fn secret(&self, key: &str) -> Option<String> {
-        let plugin_id = self.plugin_id.as_deref()?;
-        self.secrets.as_ref()?.secret(plugin_id, key)
+        self.secrets.as_ref()?.secret(&self.plugin_id, key)
     }
 
-    /// 当前插件的持久数据目录；非插件动作或宿主未提供时返回 `None`。
+    /// 当前插件的持久数据目录；目录创建失败或 id 非法时返回 `None`。
     pub fn data_dir(&self) -> Option<PathBuf> {
-        let plugin_id = self.plugin_id.as_deref()?;
-        self.paths.as_ref()?.data_dir(plugin_id)
+        self.paths.data_dir(&self.plugin_id)
     }
 
-    /// 当前插件的缓存目录；非插件动作或宿主未提供时返回 `None`。
+    /// 当前插件的缓存目录；目录创建失败或 id 非法时返回 `None`。
     pub fn cache_dir(&self) -> Option<PathBuf> {
-        let plugin_id = self.plugin_id.as_deref()?;
-        self.paths.as_ref()?.cache_dir(plugin_id)
+        self.paths.cache_dir(&self.plugin_id)
     }
 
-    /// 当前插件的临时目录；非插件动作或宿主未提供时返回 `None`。
+    /// 当前插件的临时目录；目录创建失败或 id 非法时返回 `None`。
     pub fn tmp_dir(&self) -> Option<PathBuf> {
-        let plugin_id = self.plugin_id.as_deref()?;
-        self.paths.as_ref()?.tmp_dir(plugin_id)
+        self.paths.tmp_dir(&self.plugin_id)
     }
 }
 
