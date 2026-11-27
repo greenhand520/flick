@@ -116,6 +116,7 @@ impl AppView {
         theme_tx: mpsc::UnboundedSender<ThemeMode>,
         clipboard_watch: ClipboardWatch,
         initial: ThemeMode,
+        result_limit: usize,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -155,8 +156,11 @@ impl AppView {
             },
         );
 
+        let mut app_state = AppState::new(initial);
+        // 结果条数上限来自设置系统，启动时由守护进程注入。
+        app_state.panel.set_result_limit(result_limit);
         let mut view = Self {
-            state: AppState::new(initial),
+            state: app_state,
             metrics: Metrics::default(),
             input,
             focus,

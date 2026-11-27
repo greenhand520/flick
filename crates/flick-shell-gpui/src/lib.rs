@@ -190,6 +190,7 @@ fn open_panel_window(
     theme_tx: mpsc::UnboundedSender<ThemeMode>,
     clipboard_watch: crate::clipboard_watch::ClipboardWatch,
     initial: ThemeMode,
+    result_limit: usize,
 ) -> Result<AnyWindowHandle, String> {
     // GNOME/Wayland 下 `primary_display()` 在窗口创建前可能返回 None；此时退回
     // `displays()` 的第一块显示器，否则窗口会退化成 1280×800，四周露出一大片
@@ -239,6 +240,7 @@ fn open_panel_window(
                 theme_tx1,
                 clipboard_watch1,
                 initial,
+                result_limit,
                 window,
                 cx,
             )
@@ -270,6 +272,7 @@ fn open_panel_window(
                         theme_tx,
                         clipboard_watch,
                         initial,
+                        result_limit,
                         window,
                         cx,
                     )
@@ -366,6 +369,42 @@ pub fn run_with_theme(
     host_rx: mpsc::UnboundedReceiver<HostToUi>,
     initial: ThemeMode,
 ) {
+    run_with_config(
+        host_tx,
+        host_rx,
+        ShellConfig {
+            theme: initial,
+            ..ShellConfig::default()
+        },
+    );
+}
+
+/// 外壳启动配置（由守护进程从设置系统读出后传入）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ShellConfig {
+    /// 初始主题模式。
+    pub theme: ThemeMode,
+    /// 结果区一次展示的最大条数（`core.search.result_limit`）。
+    pub result_limit: usize,
+}
+
+impl Default for ShellConfig {
+    fn default() -> Self {
+        Self {
+            theme: ThemeMode::Dark,
+            result_limit: flick_application::presenter::DEFAULT_RESULT_LIMIT,
+        }
+    }
+}
+
+/// 用完整配置运行 GPUI 面板（阻塞直到应用退出）。
+pub fn run_with_config(
+    host_tx: mpsc::UnboundedSender<UiToHost>,
+    host_rx: mpsc::UnboundedReceiver<HostToUi>,
+    config: ShellConfig,
+) {
+    let initial = config.theme;
+    let result_limit = config.result_limit;
     application()
         .with_assets(gpui_kit::assets::Assets)
         // 隐藏时会销毁唯一的窗口；用 Explicit 防止「最后一个窗口关闭 -> 进程退出」。
@@ -456,6 +495,7 @@ pub fn run_with_theme(
                                                 theme_tx_open.clone(),
                                                 clipboard_watch.clone(),
                                                 current_theme,
+                                                result_limit,
                                             )
                                         }) {
                                             Ok(h) => handle = Some(h),

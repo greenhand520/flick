@@ -16,6 +16,11 @@ use crate::accumulate::SearchSession;
 /// 隐藏的面板在此持续时间内保留其逻辑会话。
 pub const PANEL_RESUME_WINDOW: Duration = Duration::from_secs(10);
 
+/// 结果区默认展示条数上限（与核心设置 `search.result_limit` 的声明默认值一致）。
+///
+/// 外壳启动时会用 [`PanelState::set_result_limit`] 覆盖为设置系统中的实际值。
+pub const DEFAULT_RESULT_LIMIT: usize = 20;
+
 /// [`PanelState`] 接受的事件。
 #[derive(Debug, Clone)]
 pub enum PanelEvent {
@@ -135,6 +140,8 @@ pub struct PanelState {
     hidden_at: Option<Instant>,
     /// 本次面板会话的结果累积状态。
     session: SearchSession,
+    /// 结果区一次展示的最大条数（来自核心设置 `search.result_limit`）。
+    result_limit: usize,
 }
 
 impl PanelState {
@@ -159,7 +166,18 @@ impl PanelState {
             flushed_debounce_revision: None,
             hidden_at: None,
             session: SearchSession::new(),
+            result_limit: DEFAULT_RESULT_LIMIT,
         }
+    }
+
+    /// 设置结果区一次展示的最大条数（0 视为 1，避免清空结果区后无法恢复）。
+    pub fn set_result_limit(&mut self, limit: usize) {
+        self.result_limit = limit.max(1);
+    }
+
+    /// 当前生效的结果条数上限。
+    pub fn result_limit(&self) -> usize {
+        self.result_limit
     }
 
     /// 当前的输入防抖 revision，供 UI 任务接线和测试使用。
@@ -499,8 +517,16 @@ impl PanelState {
             return vec![];
         }
         self.routes = self.session.merge(items);
+        self.apply_display_limit();
         self.selection.set_total(self.routes.len());
         vec![]
+    }
+
+    /// 按当前结果上限截断展示列表（累积会话本身仍保留全量候选）。
+    fn apply_display_limit(&mut self) {
+        if self.routes.len() > self.result_limit {
+            self.routes.truncate(self.result_limit);
+        }
     }
 
     /// 把搜索阶段执行项并入当前结果。
@@ -521,6 +547,7 @@ impl PanelState {
             return vec![];
         }
         self.routes = self.session.merge_execution(items);
+        self.apply_display_limit();
         self.selection.set_total(self.routes.len());
         vec![]
     }
@@ -925,6 +952,71 @@ mod tests {
             Instant::now(),
         );
         st
+    }
+
+    /// 展示列表应被 `search.result_limit` 截断，而累积会话仍保留全量。
+    #[test]
+    fn routes_are_truncated_to_result_limit() {
+        let mut st = visible_manual_panel();
+        st.set_result_limit(2);
+        st.update_at(PanelEvent::InputChanged("ab".into()), Instant::now());
+        st.update_at(
+            PanelEvent::Routes {
+                generation: st.generation,
+                items: [
+                    "a.v1.i0", "a.v1.i1", "a.v1.i2", "a.v1.i3", "a.v1.i4",
+                ]
+                .into_iter()
+                .enumerate()
+                .map(|(i, id)| action_route(id, &format!("Item{i}"), 5.0 - i as f64))
+                .collect(),
+            },
+            Instant::now(),
+        );
+        assert_eq!(st.routes.len(), 2, "展示列表必须截断到上限");
+        assert_eq!(st.selection.total, 2, "选中范围必须与展示列表一致");
+        assert!(st.selection.selected(&st.routes).is_some());
+    }
+
+    /// 执行项并入后同样受上限约束，且不会留下孤儿子项。
+    #[test]
+    fn execution_results_respect_result_limit() {
+        let mut st = visible_manual_panel();
+        st.set_result_limit(2);
+        st.update_at(PanelEvent::InputChanged("ap".into()), Instant::now());
+        st.update_at(
+            PanelEvent::Routes {
+                generation: st.generation,
+                items: vec![action_route("a.v1.apps", "Apps", 9.0)],
+            },
+            Instant::now(),
+        );
+        st.update_at(
+            PanelEvent::ExecutionResults {
+                generation: st.generation,
+                items: vec![
+                    execution_route("a.v1.apps", "Firefox", 0.0),
+                    execution_route("a.v1.apps", "Files", 0.0),
+                ],
+            },
+            Instant::now(),
+        );
+        assert_eq!(st.routes.len(), 2);
+        assert_eq!(
+            st.routes[0].action_id,
+            ActionId::from_static("a.v1.apps"),
+            "父项必须保留"
+        );
+    }
+
+    /// `0` 视为 `1`，避免把结果区永久清空。
+    #[test]
+    fn zero_result_limit_is_clamped_to_one() {
+        let mut st = PanelState::new();
+        st.set_result_limit(0);
+        assert_eq!(st.result_limit(), 1);
+        st.set_result_limit(50);
+        assert_eq!(st.result_limit(), 50);
     }
 
     /// 输入 `ho` 得到 A，再输入 `st` 得到 B，结果区应是 A+B（旧 → 新）。

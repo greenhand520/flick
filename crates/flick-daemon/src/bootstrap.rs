@@ -873,39 +873,73 @@ pub async fn init_settings_at(
 /// 读取初始主题。
 ///
 /// 顺序：设置系统 `core.theme.mode` > 旧 `shell-gpui.toml` 迁移 > shell 自带探测。
-pub fn load_initial_theme() -> flick_shell_gpui::ThemeMode {
+#[cfg(test)]
+pub fn initial_theme_at(
+    dirs: flick_data::DataDirectories,
+    keys: flick_data::SharedKeySource,
+) -> flick_shell_gpui::ThemeMode {
+    shell_config_at(dirs, keys).theme
+}
+
+/// 读取外壳启动配置：主题模式 + 结果条数上限。
+///
+/// 设置系统不可用时整体回退：主题走自动探测，条数上限用声明默认值，
+/// 保证外壳仍能启动。
+pub fn load_shell_config() -> flick_shell_gpui::ShellConfig {
     let dirs = match flick_data::DataDirectories::discover() {
         Ok(dirs) => dirs,
-        Err(_) => return flick_shell_gpui::detect_initial_theme(),
+        Err(_) => {
+            return flick_shell_gpui::ShellConfig {
+                theme: flick_shell_gpui::detect_initial_theme(),
+                ..flick_shell_gpui::ShellConfig::default()
+            }
+        }
     };
     let keys: flick_data::SharedKeySource = if std::env::var_os("FLICK_MASTER_KEY").is_some() {
         Arc::new(flick_data::EnvMasterKeySource)
     } else {
         Arc::new(flick_data::UnavailableMasterKeySource)
     };
-    initial_theme_at(dirs, keys)
+    shell_config_at(dirs, keys)
 }
 
-/// 在指定目录上读取初始主题（便于测试注入）。
-pub fn initial_theme_at(
+/// 在指定目录上读取外壳启动配置（便于测试注入）。
+pub fn shell_config_at(
     dirs: flick_data::DataDirectories,
     keys: flick_data::SharedKeySource,
-) -> flick_shell_gpui::ThemeMode {
+) -> flick_shell_gpui::ShellConfig {
+    let fallback = flick_shell_gpui::ShellConfig {
+        theme: flick_shell_gpui::detect_initial_theme(),
+        ..flick_shell_gpui::ShellConfig::default()
+    };
     let storage = match StorageManager::open(dirs.clone(), keys) {
         Ok(storage) => Arc::new(storage),
         Err(error) => {
-            tracing::warn!(%error, "读取主题失败：设置存储不可用，回退自动探测");
-            return flick_shell_gpui::detect_initial_theme();
+            tracing::warn!(%error, "读取外壳配置失败：设置存储不可用，回退默认值");
+            return fallback;
         }
     };
     let service = SettingsService::new(storage);
     let version = env!("CARGO_PKG_VERSION");
     if let Err(error) = service.register_schema(core_schema(), version, version) {
-        tracing::warn!(%error, "读取主题失败：core schema 注册失败");
-        return flick_shell_gpui::detect_initial_theme();
+        tracing::warn!(%error, "读取外壳配置失败：core schema 注册失败");
+        return fallback;
     }
     migrate_legacy_theme(&service, &dirs);
-    theme_mode(&service).unwrap_or_else(flick_shell_gpui::detect_initial_theme)
+    flick_shell_gpui::ShellConfig {
+        theme: theme_mode(&service).unwrap_or_else(flick_shell_gpui::detect_initial_theme),
+        result_limit: result_limit(&service),
+    }
+}
+
+/// 从设置系统读取结果条数上限；未设置或取值非法时返回声明默认值。
+pub fn result_limit(service: &SettingsService) -> usize {
+    let key =
+        flick_domain::SettingKey::new(flick_domain::SettingNamespace::Core, "search.result_limit");
+    match service.resolved(&key) {
+        Ok(flick_domain::settings::SettingValue::Integer(value)) if value >= 1 => value as usize,
+        _ => flick_application::presenter::DEFAULT_RESULT_LIMIT,
+    }
 }
 
 /// 从设置系统读取主题模式；未设置或取值非法时返回 `None`。
@@ -1008,6 +1042,40 @@ mod init_settings_tests {
         assert_eq!(theme, flick_shell_gpui::ThemeMode::Light);
         assert!(!legacy.exists(), "旧文件应被重命名");
         assert!(dirs.config_root().join("shell-gpui.toml.migrated").exists());
+    }
+
+    /// 设置值应进入外壳配置：主题 + 结果条数上限。
+    #[test]
+    fn shell_config_reads_result_limit_from_settings() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        let dirs = flick_data::DataDirectories::with_roots(
+            root.join("config"),
+            root.join("data"),
+            root.join("cache"),
+            root.join("runtime"),
+        );
+        let keys: flick_data::SharedKeySource = Arc::new(flick_data::FixedMasterKeySource(
+            flick_data::MasterKey {
+                key_id: "test".into(),
+                bytes: [7u8; 32],
+            },
+        ));
+        {
+            let storage = Arc::new(StorageManager::open(dirs.clone(), keys.clone()).unwrap());
+            let service = SettingsService::new(storage);
+            let version = env!("CARGO_PKG_VERSION");
+            service.register_schema(core_schema(), version, version).unwrap();
+            let key = flick_domain::SettingKey::new(
+                flick_domain::SettingNamespace::Core,
+                "search.result_limit",
+            );
+            service
+                .set(&key, flick_domain::settings::SettingValue::Integer(7))
+                .unwrap();
+        }
+        let config = shell_config_at(dirs, keys);
+        assert_eq!(config.result_limit, 7);
     }
 
     #[test]
