@@ -80,6 +80,20 @@ pub struct PluginDependency {
     pub requirement: DependencyRequirement,
 }
 
+/// 单个插件依赖的解析结果。
+///
+/// 只供宿主与诊断命令（`flick doctor`）使用；按 C3 约束，
+/// 插件自身无法获取这份信息。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DependencyStatus {
+    /// 被依赖的插件 id。
+    pub plugin_id: String,
+    /// 声明时的必需/可选。
+    pub requirement: DependencyRequirement,
+    /// 该依赖当前是否可用（已注册，且它自己的必需依赖也满足）。
+    pub available: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SettingKind {
     Bool,

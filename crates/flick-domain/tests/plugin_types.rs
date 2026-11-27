@@ -160,3 +160,16 @@ fn operating_system_and_architecture_serde_names() {
         "\"aarch64\""
     );
 }
+
+#[test]
+fn dependency_status_serializes_with_requirement_and_availability() {
+    let status = DependencyStatus {
+        plugin_id: "flick.builtin.apps".into(),
+        requirement: DependencyRequirement::Required,
+        available: false,
+    };
+    let json = serde_json::to_value(&status).unwrap();
+    assert_eq!(json["plugin_id"], "flick.builtin.apps");
+    assert_eq!(json["requirement"], "Required");
+    assert_eq!(json["available"], false);
+}
