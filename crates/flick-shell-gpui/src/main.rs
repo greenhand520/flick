@@ -230,32 +230,6 @@ impl SurfaceHandler for DemoClipboardPlugin {
     }
 }
 
-/// demo 用的合并逻辑：Execution 项紧跟其父 Action；父 Action 未命中时追加末尾。
-fn merge_demo_results(
-    action_items: Vec<RouteItem>,
-    execution_items: Vec<RouteItem>,
-) -> Vec<RouteItem> {
-    let mut remaining: Vec<Option<RouteItem>> = execution_items.into_iter().map(Some).collect();
-    let mut merged = Vec::with_capacity(action_items.len() + remaining.len());
-    for action in action_items {
-        let parent_id = action.action_id.clone();
-        merged.push(action);
-        for slot in &mut remaining {
-            let is_child = slot.as_ref().is_some_and(|item| {
-                item.kind == RouteItemKind::Execution
-                    && item.parent_action_id.as_ref() == Some(&parent_id)
-            });
-            if is_child {
-                if let Some(item) = slot.take() {
-                    merged.push(item);
-                }
-            }
-        }
-    }
-    merged.extend(remaining.into_iter().flatten());
-    merged
-}
-
 async fn fake_host(
     host_tx: mpsc::UnboundedSender<HostToUi>,
     mut ui_rx: mpsc::UnboundedReceiver<UiToHost>,
@@ -281,11 +255,6 @@ async fn fake_host(
             UiToHost::QueryChanged { generation, input } => {
                 let action_input = input.to_action_input();
                 let context = InputContext::from_snapshot(generation, &input);
-                let (action_items, execution_items) = tokio::join!(
-                    runtime.route_input(&context),
-                    runtime.search_invoke(&action_input.text, action_input.kind),
-                );
-                let items = merge_demo_results(action_items, execution_items);
                 if !input.files.is_empty() || input.image.is_some() {
                     eprintln!(
                         "[demo] input kind={:?} source={:?} files={} image={}",
@@ -295,7 +264,16 @@ async fn fake_host(
                         input.image.is_some()
                     );
                 }
+                // 与协调器同构的两阶段：先出候选，再补执行项。
+                let items = runtime.route_input(&context).await;
                 let _ = host_tx.send(HostToUi::Routes { generation, items });
+                let execution_items = runtime.search_invoke(generation, action_input).await;
+                if !execution_items.is_empty() {
+                    let _ = host_tx.send(HostToUi::ExecutionResults {
+                        generation,
+                        items: execution_items,
+                    });
+                }
             }
             UiToHost::Invoke {
                 invocation_id,

@@ -451,6 +451,10 @@ impl PanelState {
         generation: QueryGeneration,
         items: Vec<RouteItem>,
     ) -> Vec<PanelAction> {
+        // 会话已结束（面板隐藏 / Escape）时丢弃迟到批次，避免写回孤儿候选。
+        if !self.session.is_active() {
+            return vec![];
+        }
         // 迟到/未来代次一律丢弃：`Routes` 不带查询文本，无法做
         // 「文本仍在链中」的判定，安全侧选择直接丢弃。
         if generation != self.generation {
@@ -470,6 +474,11 @@ impl PanelState {
         generation: QueryGeneration,
         items: Vec<RouteItem>,
     ) -> Vec<PanelAction> {
+        // 会话已结束（面板隐藏 / Escape）时丢弃同代次执行项，避免把孤儿
+        // 子项写回 `self.routes` 并重新点亮结果区。
+        if !self.session.is_active() {
+            return vec![];
+        }
         if generation != self.generation {
             return vec![];
         }
@@ -953,6 +962,57 @@ mod tests {
 
         let titles: Vec<&str> = st.routes.iter().map(|i| i.title.as_str()).collect();
         assert_eq!(titles, vec!["Hosts"], "hidden panel must drop old accumulation");
+    }
+
+    /// 面板隐藏后（会话已结束、代次未推进），同代次的迟到 `Routes` 批次必须被丢弃。
+    #[test]
+    fn routes_after_hide_are_dropped() {
+        let mut st = visible_manual_panel();
+        let generation = st.generation;
+
+        st.update_at(PanelEvent::Hide, Instant::now());
+        // 隐藏不推进代次，模拟两阶段下 `Routes` 与隐藏交错到达。
+        st.update_at(
+            PanelEvent::Routes {
+                generation,
+                items: vec![action_route("a.v1.late", "Late", 1.0)],
+            },
+            Instant::now(),
+        );
+
+        assert!(st.routes.is_empty(), "routes after hide must be dropped");
+        assert_eq!(st.selection.total, 0);
+    }
+
+    /// 面板隐藏后（会话已结束、代次未推进），同代次的迟到 `ExecutionResults`
+    /// 必须被丢弃，不得把孤儿子项写回 `self.routes` 重新点亮结果区。
+    #[test]
+    fn execution_results_after_hide_are_dropped() {
+        let mut st = visible_manual_panel();
+        let generation = st.generation;
+        st.update_at(
+            PanelEvent::Routes {
+                generation,
+                items: vec![action_route("a.v1.one", "A", 1.0)],
+            },
+            Instant::now(),
+        );
+
+        st.update_at(PanelEvent::Hide, Instant::now());
+        // 同代次执行项在隐藏后到达：应被丢弃而非写回。
+        st.update_at(
+            PanelEvent::ExecutionResults {
+                generation,
+                items: vec![execution_route("a.v1.one", "Orphan", 0.0)],
+            },
+            Instant::now(),
+        );
+
+        let titles: Vec<&str> = st.routes.iter().map(|i| i.title.as_str()).collect();
+        assert!(
+            !titles.contains(&"Orphan"),
+            "execution results after hide must be dropped, got {titles:?}"
+        );
     }
 
     /// 附件输入（非手动）只替换，不累积。

@@ -184,8 +184,14 @@ async fn newer_query_generation_wins_when_results_complete_out_of_order() {
     let _ = tokio::join!(h1, h2);
 
     let emitted = events.lock().unwrap();
-    assert_eq!(emitted.len(), 1, "only the newer generation should emit");
-    match &emitted[0] {
+    // 两阶段后 `Routes` 仍然在 `route_input` 返回时立刻发出，因此
+    // gen1 的慢路由不会产出任何事件，只有 gen2 的 `Routes` 会出现。
+    let routes: Vec<&HostToUi> = emitted
+        .iter()
+        .filter(|event| matches!(event, HostToUi::Routes { .. }))
+        .collect();
+    assert_eq!(routes.len(), 1, "only the newer generation should emit routes");
+    match routes[0] {
         HostToUi::Routes { generation, items } => {
             assert_eq!(*generation, gen2);
             assert_eq!(items.len(), 1);
@@ -193,6 +199,14 @@ async fn newer_query_generation_wins_when_results_complete_out_of_order() {
         }
         other => panic!("expected Routes, got {other:?}"),
     }
+    // gen1 不得留下任何执行结果。
+    assert!(
+        !emitted.iter().any(|event| matches!(
+            event,
+            HostToUi::ExecutionResults { generation, .. } if *generation == gen1
+        )),
+        "stale generation must not emit ExecutionResults"
+    );
 }
 
 /// 来自 UI 的 `Invoke` 必须使用 `Caller::ui("search-panel")`，并且
@@ -579,7 +593,11 @@ impl RuntimePort for ExecutionRuntime {
         vec![RouteItem::action(self.parent.clone(), "应用搜索", 1.0)]
     }
 
-    async fn search_invoke(&self, _query: &str, _input_kind: InputType) -> Vec<RouteItem> {
+    async fn search_invoke(
+        &self,
+        _generation: QueryGeneration,
+        _input: ActionInput,
+    ) -> Vec<RouteItem> {
         vec![self.execution.clone()]
     }
 
@@ -619,8 +637,10 @@ impl RuntimePort for ExecutionRuntime {
     async fn surface_closed(&self, _session: SurfaceSessionId) {}
 }
 
+/// 同一代次内必须先发 `Routes`（只含 action candidates），再补发
+/// `ExecutionResults`（执行项），两者代次相同。
 #[tokio::test]
-async fn query_merges_execution_items_after_their_parent_action() {
+async fn coordinator_emits_routes_then_execution_results() {
     let runtime = Arc::new(ExecutionRuntime::new());
     let (sink, events) = FakeSink::new();
     let coord = ApplicationCoordinator::new(runtime, Arc::new(sink));
@@ -630,14 +650,23 @@ async fn query_merges_execution_items_after_their_parent_action() {
         .await;
 
     let emitted = events.lock().unwrap();
+    assert_eq!(emitted.len(), 2, "Routes then ExecutionResults");
     match &emitted[0] {
-        HostToUi::Routes { items, .. } => {
-            assert_eq!(items.len(), 2);
+        HostToUi::Routes { generation, items } => {
+            assert_eq!(*generation, QueryGeneration::INITIAL);
+            assert_eq!(items.len(), 1, "Routes must only carry action candidates");
             assert_eq!(items[0].kind, RouteItemKind::Action);
-            assert_eq!(items[1].kind, RouteItemKind::Execution);
-            assert_eq!(items[1].title, "Firefox");
         }
         other => panic!("expected Routes, got {other:?}"),
+    }
+    match &emitted[1] {
+        HostToUi::ExecutionResults { generation, items } => {
+            assert_eq!(*generation, QueryGeneration::INITIAL);
+            assert_eq!(items.len(), 1);
+            assert_eq!(items[0].title, "Firefox");
+            assert_eq!(items[0].kind, RouteItemKind::Execution);
+        }
+        other => panic!("expected ExecutionResults, got {other:?}"),
     }
 }
 

@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use flick_domain::{
     ActionError, ActionId, ActionOutcome, ActionRequest, Caller, Deadline, HostToUi, InputContext,
-    QueryGeneration, RouteItem, RouteItemKind, UiIntent, UiToHost,
+    QueryGeneration, RouteItem, UiIntent, UiToHost,
 };
 
 use crate::ports::{HostEventSink, RuntimePort};
@@ -28,38 +28,6 @@ pub struct ApplicationCoordinator {
     /// 最近一次发出的路由快照（同步锁，临界区内不做 `.await`）。
     routes: Mutex<RouteSnapshot>,
     panel_visible: AtomicBool,
-}
-
-/// 合并普通 Action 候选与搜索阶段 Execution 项。
-///
-/// 同一父 Action 的 Execution 项紧跟在该 Action 之后；若父 Action 本身
-/// 没有命中关键词（例如只靠 `search_invocable` 产出的结果），则追加在末尾。
-/// todo: 这个合并逻辑是否可以放到runtime？另外这2种结果真的会重复吗？
-fn merge_search_results(
-    action_items: Vec<RouteItem>,
-    execution_items: Vec<RouteItem>,
-) -> Vec<RouteItem> {
-    let mut remaining: Vec<Option<RouteItem>> = execution_items.into_iter().map(Some).collect();
-    let mut merged = Vec::with_capacity(action_items.len() + remaining.len());
-
-    for action in action_items {
-        let parent_id = action.action_id.clone();
-        merged.push(action);
-        for slot in &mut remaining {
-            let is_child = slot.as_ref().is_some_and(|item| {
-                item.kind == RouteItemKind::Execution
-                    && item.parent_action_id.as_ref() == Some(&parent_id)
-            });
-            if is_child {
-                if let Some(item) = slot.take() {
-                    merged.push(item);
-                }
-            }
-        }
-    }
-
-    merged.extend(remaining.into_iter().flatten());
-    merged
 }
 
 /// 最近一次发给 UI 的路由快照，用于校验 UI 回传的候选身份。
@@ -117,24 +85,32 @@ impl ApplicationCoordinator {
 
                 let action_input = input.to_action_input();
                 let context = InputContext::from_snapshot(generation, &input);
-                // 首屏路由（纯内存）与搜索阶段执行（最多 150ms）并行进行；
-                // 后者的结果作为 Execution 项排在各自父 Action 之后。
-                let (action_items, execution_items) = tokio::join!(
-                    self.runtime.route_input(&context),
-                    self.runtime
-                        .search_invoke(&action_input.text, action_input.kind),
-                );
-                let items = merge_search_results(action_items, execution_items);
 
-                // 仅当此代次仍为最新时才发出结果，并留下快照供
-                // 后续 `Invoke` 做候选身份校验。
-                if self.query_tracker.is_current(generation) {
-                    if let Ok(mut snapshot) = self.routes.lock() {
-                        snapshot.record(generation, &items);
-                    }
-                    self.sink.send(HostToUi::Routes { generation, items });
+                // 阶段一：纯内存路由，立刻出首屏。
+                let action_items = self.runtime.route_input(&context).await;
+                if !self.query_tracker.is_current(generation) {
+                    // 有更新的查询取代了此查询 —— 静默丢弃。
+                    return;
                 }
-                // 否则：有更新的查询取代了此查询 —— 静默丢弃。
+                // 留下快照供后续 `Invoke` 做候选身份校验（§12.2-3）。
+                // 快照只记录 action candidates：执行项走 `ExecutionActivated` 分支。
+                if let Ok(mut snapshot) = self.routes.lock() {
+                    snapshot.record(generation, &action_items);
+                }
+                self.sink.send(HostToUi::Routes {
+                    generation,
+                    items: action_items,
+                });
+
+                // 阶段二：搜索阶段执行（跨插件，最慢 150ms），完成后补发。
+                let execution_items = self.runtime.search_invoke(generation, action_input).await;
+                if execution_items.is_empty() || !self.query_tracker.is_current(generation) {
+                    return;
+                }
+                self.sink.send(HostToUi::ExecutionResults {
+                    generation,
+                    items: execution_items,
+                });
             }
 
             UiToHost::ExecutionActivated {

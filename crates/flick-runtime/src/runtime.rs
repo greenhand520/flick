@@ -3,8 +3,8 @@
 use crate::registry::ActionRegistry;
 use flick_domain::{
     ActionContext, ActionDescriptor, ActionError, ActionId, ActionInput, ActionOutcome,
-    ActionRequest, DependencyStatus, InputContext, InputType, InvocationId, RouteItem,
-    SurfaceContent, SurfaceEventKind, SurfaceSessionId,
+    ActionRequest, DependencyStatus, InputContext, InputType, InvocationId, QueryGeneration,
+    RouteItem, SurfaceContent, SurfaceEventKind, SurfaceSessionId,
 };
 use flick_plugin::{
     ActionHandler, Plugin, PluginRegistrationError, SurfaceError, SurfaceSession,
@@ -136,20 +136,27 @@ impl ActionRuntime {
     /// 这些 Action 必须只读、无副作用；每个 Action 的结果经
     /// [`execution_route_items`] 归一化为 [`RouteItem`] 执行项。
     /// 错误与超时只记录日志并丢弃，不影响其它 Action。
-    pub async fn search_invoke(&self, query: &str, input_kind: InputType) -> Vec<RouteItem> {
-        if query.trim().is_empty() {
+    ///
+    /// `input` 是完整输入（含 `files` / `image`）；`generation` 目前未使用，
+    /// 由 Task 4 接入代次取消。
+    pub async fn search_invoke(
+        &self,
+        _generation: QueryGeneration,
+        input: ActionInput,
+    ) -> Vec<RouteItem> {
+        if input.text.trim().is_empty() && input.files.is_empty() && input.image.is_none() {
             return Vec::new();
         }
         let action_ids = {
             let reg = self.registry.read().await;
-            reg.search_invocable_actions(input_kind)
+            reg.search_invocable_actions(input.kind)
         };
         let mut out = Vec::new();
         for action_id in action_ids {
             let request = ActionRequest {
                 invocation_id: InvocationId::new(),
                 action_id: action_id.clone(),
-                input: ActionInput::plain_text(query),
+                input: input.clone(),
                 caller: flick_domain::Caller::ui("search-route"),
                 source: flick_domain::ActionSource::SearchRoute,
                 deadline: flick_domain::Deadline {

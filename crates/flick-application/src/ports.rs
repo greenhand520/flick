@@ -6,9 +6,9 @@
 
 use async_trait::async_trait;
 use flick_domain::{
-    ActionId, ActionOutcome, ActionRequest, DependencyStatus, ExecutionEventKind, HostToUi,
-    InputContext, InputFacet, InputType, InvocationId, RouteItem, SurfaceContent, SurfaceEventKind,
-    SurfaceSessionId,
+    ActionId, ActionInput, ActionOutcome, ActionRequest, DependencyStatus, ExecutionEventKind,
+    HostToUi, InputContext, InputFacet, InputType, InvocationId, QueryGeneration, RouteItem,
+    SurfaceContent, SurfaceEventKind, SurfaceSessionId,
 };
 
 /// 对 Flick Runtime 的路由与调用能力的抽象。
@@ -39,12 +39,18 @@ pub trait RuntimePort: Send + Sync {
         self.route(&context.raw_text, input_kind).await
     }
 
-    /// 搜索阶段执行：调用所有 `search_invocable` Action 并把结果归一化为
-    /// `RouteItemKind::Execution` 候选。
+    /// 搜索阶段执行：对当前代次的所有 `search_invocable` Action 并行调用，
+    /// 并把结果归一化为 `RouteItemKind::Execution` 候选。
     ///
+    /// `generation` 用于取消：新代次进来时 Runtime 会取消旧代次的在途调用。
+    /// `input` 是完整输入（含 `files` / `image`），不再只传文本。
     /// 默认实现返回空列表，便于只实现路由能力的测试替身；生产适配器应转发
     /// Runtime 的 `search_invoke`。
-    async fn search_invoke(&self, _query: &str, _input_kind: InputType) -> Vec<RouteItem> {
+    async fn search_invoke(
+        &self,
+        _generation: QueryGeneration,
+        _input: ActionInput,
+    ) -> Vec<RouteItem> {
         Vec::new()
     }
 

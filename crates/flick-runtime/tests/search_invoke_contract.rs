@@ -61,7 +61,9 @@ impl Plugin for AppSearchPlugin {
 async fn search_invoke_expands_data_to_execution_route_items() {
     let runtime = ActionRuntime::new();
     runtime.register_plugin(&AppSearchPlugin).await.unwrap();
-    let items = runtime.search_invoke("fire", InputType::PlainText).await;
+    let items = runtime
+        .search_invoke(QueryGeneration::INITIAL, ActionInput::plain_text("fire"))
+        .await;
     assert_eq!(items.len(), 1);
     assert_eq!(items[0].kind, RouteItemKind::Execution);
     assert_eq!(items[0].item_id, "app:firefox");
@@ -88,7 +90,7 @@ async fn non_search_invocable_actions_are_not_executed() {
     runtime.register(d, Arc::new(AppSearchHandler)).await;
     assert!(
         runtime
-            .search_invoke("fire", InputType::PlainText)
+            .search_invoke(QueryGeneration::INITIAL, ActionInput::plain_text("fire"))
             .await
             .is_empty()
     );
@@ -201,7 +203,9 @@ async fn search_route_open_surface_has_no_side_effects() {
         .await
         .unwrap();
 
-    let items = runtime.search_invoke("open", InputType::PlainText).await;
+    let items = runtime
+        .search_invoke(QueryGeneration::INITIAL, ActionInput::plain_text("open"))
+        .await;
 
     // OpenSurface 在搜索阶段被丢弃，不产生执行项。
     assert!(items.is_empty(), "search-stage OpenSurface must be dropped");

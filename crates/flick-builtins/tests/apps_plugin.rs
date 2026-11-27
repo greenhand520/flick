@@ -21,7 +21,7 @@ async fn register_builtin_registers_apps_plugin() {
 #[tokio::test]
 async fn apps_execution_item_activates_through_runtime() {
     use flick_builtins::apps::AppsPlugin;
-    use flick_domain::{ActionId, ExecutionEventKind, InputType};
+    use flick_domain::{ActionId, ExecutionEventKind};
 
     let dir = tempfile::tempdir().unwrap();
     let apps_dir = dir.path().join("applications");
@@ -37,7 +37,12 @@ async fn apps_execution_item_activates_through_runtime() {
     runtime.register_plugin(&plugin).await.unwrap();
     runtime.activate_all_plugins().await;
 
-    let items = runtime.search_invoke("true", InputType::PlainText).await;
+    let items = runtime
+        .search_invoke(
+            flick_domain::QueryGeneration::INITIAL,
+            flick_domain::ActionInput::plain_text("true"),
+        )
+        .await;
     assert_eq!(items.len(), 1);
     assert_eq!(items[0].title, "TrueApp");
     assert_eq!(items[0].item_id, "app:true");
