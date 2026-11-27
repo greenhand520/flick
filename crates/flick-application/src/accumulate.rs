@@ -53,16 +53,21 @@ fn truncate_by_score(items: &mut Vec<RouteItem>) {
 ///
 /// 与 [`merge_batch`] 的区别：
 /// 1. 新项**插到父 Action 之后**，而不是追加末尾 —— 执行项必须紧跟父项；
-/// 2. 新项**继承父项分数**，保证父项与子项在按分数重排时不会分离；
-/// 3. 找不到父项时追加末尾（父 Action 未命中关键词，只靠 `search_invocable` 产出）。
+/// 2. 同父的多个执行项**保持批次内的原始顺序**（设计文档 §7.3：按 Runtime 返回顺序排列）；
+/// 3. 新项**继承父项分数**，保证父项与子项在按分数重排时不会分离；
+/// 4. 找不到父项时追加末尾（父 Action 未命中关键词，只靠 `search_invocable` 产出）。
 pub fn merge_execution_batch(accumulated: &mut Vec<RouteItem>, batch: Vec<RouteItem>) {
     for item in batch {
         let key = item.key();
         match accumulated.iter().position(|slot| slot.key() == key) {
             Some(index) => {
-                // 同 key：只有更高分才替换内容，位置保持不变。
+                // 同 key：只有更高分才替换内容，位置与「已继承的父分」都保持不变。
+                // 分数不能跟着批次走，否则可能高于父项而被 `truncate_by_score` 单独保留。
                 if item.score > accumulated[index].score {
-                    accumulated[index] = item;
+                    let inherited = accumulated[index].score;
+                    let mut updated = item;
+                    updated.score = inherited;
+                    accumulated[index] = updated;
                 }
             }
             None => {
@@ -79,7 +84,16 @@ pub fn merge_execution_batch(accumulated: &mut Vec<RouteItem>, batch: Vec<RouteI
                 if let Some(index) = parent_index {
                     item.score = accumulated[index].score;
                 }
-                let insert_at = parent_index.map(|index| index + 1).unwrap_or(accumulated.len());
+                // 插到「父项及其已有的同父子项」之后，避免多个子项互相挤到对方前面。
+                let mut insert_at = parent_index
+                    .map(|index| index + 1)
+                    .unwrap_or(accumulated.len());
+                while insert_at < accumulated.len()
+                    && accumulated[insert_at].kind == RouteItemKind::Execution
+                    && accumulated[insert_at].parent_action_id.as_ref() == Some(&parent)
+                {
+                    insert_at += 1;
+                }
                 accumulated.insert(insert_at, item);
             }
         }
@@ -406,9 +420,26 @@ mod tests {
         assert_eq!(accumulated.len(), 2);
         assert_eq!(accumulated[1].score, 0.8, "child must inherit parent score");
 
-        // 同一子项再到达一次（更高分）：原位替换，不新增行。
+        // 同一子项再到达一次（批次自带更高分）：原位替换内容，但分数仍跟随父项，
+        // 否则 `truncate_by_score` 可能保留子项却砍掉父项，产生孤儿执行项。
         merge_execution_batch(&mut accumulated, vec![execution("a.v1.one", "child", 0.9)]);
         assert_eq!(accumulated.len(), 2);
-        assert_eq!(accumulated[1].score, 0.9);
+        assert_eq!(accumulated[1].score, 0.8, "child score stays pinned to parent");
+    }
+
+    /// 同一父 Action 下的多个执行项保持批次内的原始顺序（设计文档 §7.3）。
+    #[test]
+    fn merge_execution_batch_keeps_sibling_order() {
+        let mut accumulated = vec![action("a.v1.one", "A", 1.0), action("b.v1.two", "B", 0.9)];
+        merge_execution_batch(
+            &mut accumulated,
+            vec![
+                execution("a.v1.one", "c1", 0.0),
+                execution("a.v1.one", "c2", 0.0),
+                execution("a.v1.one", "c3", 0.0),
+            ],
+        );
+        let titles: Vec<&str> = accumulated.iter().map(|i| i.title.as_str()).collect();
+        assert_eq!(titles, vec!["A", "c1", "c2", "c3", "B"]);
     }
 }
