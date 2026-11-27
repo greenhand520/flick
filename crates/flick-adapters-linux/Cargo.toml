@@ -18,3 +18,5 @@ tracing = { workspace = true }
 serde = { version = "1.0.229", features = ["derive"] }
 resvg = { version = "0.46", default-features = false }
 ksni = { version = "0.3.8", default-features = false, features = ["tokio"] }
+# 进程内查询 XWayland 的指针位置与显示器列表（免 fork 外部命令）。
+x11rb = { version = "0.13", features = ["randr"] }

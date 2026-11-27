@@ -1815,6 +1815,7 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tracing",
+ "x11rb",
  "zbus 5.19.0",
 ]
 

@@ -65,78 +65,54 @@ fn pick_monitor(monitors: &[MonitorRect], x: f64, y: f64) -> Option<&MonitorRect
     monitors.iter().find(|m| contains(m, x, y))
 }
 
-/// 读取 X 指针位置（XWayland 坐标系）。
+/// 读取 X 指针位置（XWayland 根窗口坐标）。
+///
+/// 直接用 `x11rb` 在进程内查询，不再 fork `xdotool`：Wayland 协议本身不提供
+/// 全局指针查询，只能借 XWayland（GNOME 为 X11 应用起的兼容 X server）拿坐标。
 fn pointer_position() -> Option<(f64, f64)> {
-    let output = Command::new("xdotool")
-        .args(["getmouselocation", "--shell"])
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let text = String::from_utf8_lossy(&output.stdout);
-    let mut x = None;
-    let mut y = None;
-    for line in text.lines() {
-        if let Some(value) = line.strip_prefix("X=") {
-            x = value.trim().parse().ok();
-        } else if let Some(value) = line.strip_prefix("Y=") {
-            y = value.trim().parse().ok();
-        }
-    }
-    Some((x?, y?))
+    use x11rb::connection::Connection as _;
+    use x11rb::protocol::xproto::ConnectionExt as _;
+
+    let (connection, screen_num) = x11rb::connect(None).ok()?;
+    let root = connection.setup().roots.get(screen_num)?.root;
+    let pointer = connection.query_pointer(root).ok()?.reply().ok()?;
+    Some((f64::from(pointer.root_x), f64::from(pointer.root_y)))
 }
 
 /// 读取 XRandR 的显示器列表（XWayland 坐标系，仅用于把指针映射到连接器名）。
 fn x11_monitors() -> Vec<MonitorRect> {
-    let output = match Command::new("xrandr")
-        .args(["--listmonitors"])
-        .output()
-    {
-        Ok(output) => output,
-        Err(_) => return Vec::new(),
-    };
-    if !output.status.success() {
-        return Vec::new();
-    }
-    parse_xrandr(&String::from_utf8_lossy(&output.stdout))
-}
+    use x11rb::connection::Connection as _;
+    use x11rb::protocol::randr::ConnectionExt as _;
+    use x11rb::protocol::xproto::ConnectionExt as _;
 
-/// 解析 `xrandr --listmonitors` 的输出。
-///
-/// 每行形如：` 0: +*eDP-2 3456/310x2160/200+0+0  eDP-2`，其中几何段是
-/// `宽/毫米宽 x 高/毫米高 + X + Y`。
-fn parse_xrandr(text: &str) -> Vec<MonitorRect> {
-    let mut monitors = Vec::new();
-    for line in text.lines() {
-        let tokens: Vec<&str> = line.split_whitespace().collect();
-        if tokens.len() < 3 || !tokens[0].ends_with(':') {
-            continue;
-        }
-        let name = tokens[1].trim_start_matches(['+', '*']).to_string();
-        let Some((width_part, rest)) = tokens[2].split_once('x') else {
-            continue;
-        };
-        let Some((height_part, position_part)) = rest.split_once('/') else {
-            continue;
-        };
-        let width = width_part.split('/').next().and_then(|v| v.parse().ok());
-        let height = height_part.parse().ok();
-        let mut positions = position_part.split('+');
-        let _millimeters = positions.next();
-        let x = positions.next().and_then(|v| v.parse().ok());
-        let y = positions.next().and_then(|v| v.parse().ok());
-        if let (Some(width), Some(height), Some(x), Some(y)) = (width, height, x, y) {
-            monitors.push(MonitorRect {
-                name,
-                x,
-                y,
-                width,
-                height,
-            });
-        }
-    }
-    monitors
+    let Ok((connection, screen_num)) = x11rb::connect(None) else {
+        return Vec::new();
+    };
+    let Some(root) = connection.setup().roots.get(screen_num).map(|s| s.root) else {
+        return Vec::new();
+    };
+    let Ok(cookie) = connection.randr_get_monitors(root, true) else {
+        return Vec::new();
+    };
+    let Ok(reply) = cookie.reply() else {
+        return Vec::new();
+    };
+    reply
+        .monitors
+        .iter()
+        .map(|monitor| MonitorRect {
+            name: connection
+                .get_atom_name(monitor.name)
+                .ok()
+                .and_then(|cookie| cookie.reply().ok())
+                .map(|reply| String::from_utf8_lossy(&reply.name).into_owned())
+                .unwrap_or_default(),
+            x: f64::from(monitor.x),
+            y: f64::from(monitor.y),
+            width: f64::from(monitor.width),
+            height: f64::from(monitor.height),
+        })
+        .collect()
 }
 
 /// 查询 Mutter 的逻辑显示器列表（逻辑像素）；不可用时返回空列表。
@@ -299,25 +275,6 @@ fn logical_size(width: f64, height: f64, scale: f64, transform: u32) -> (f64, f6
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn parses_xrandr_monitors() {
-        let text = "Monitors: 2\n 0: +*eDP-2 3456/310x2160/200+0+0  eDP-2\n 1: +HDMI-1 3840/600x2160/330+3456+0  HDMI-1\n";
-        let monitors = parse_xrandr(text);
-        assert_eq!(monitors.len(), 2);
-        assert_eq!(
-            monitors[0],
-            MonitorRect {
-                name: "eDP-2".into(),
-                x: 0.0,
-                y: 0.0,
-                width: 3456.0,
-                height: 2160.0,
-            }
-        );
-        assert_eq!(monitors[1].name, "HDMI-1");
-        assert_eq!(monitors[1].x, 3456.0);
-    }
 
     #[test]
     fn picks_monitor_containing_pointer_with_negative_origin() {
