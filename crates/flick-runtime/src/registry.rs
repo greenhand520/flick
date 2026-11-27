@@ -48,6 +48,8 @@ pub struct ActionRegistry {
     dependency_status: HashMap<String, Vec<DependencyStatus>>,
     /// 因必需依赖缺失而被判定不可用的插件 id。
     unavailable: HashSet<String>,
+    /// 使用频率存储；未注入时所有动作 frecency 加成为 0。
+    usage: Option<Arc<dyn flick_domain::UsageStore>>,
 }
 
 impl ActionRegistry {
@@ -60,7 +62,13 @@ impl ActionRegistry {
             lifecycles: HashMap::new(),
             dependency_status: HashMap::new(),
             unavailable: HashSet::new(),
+            usage: None,
         }
+    }
+
+    /// 注入使用频率存储（由 Application 层提供）。
+    pub fn set_usage_store(&mut self, store: Arc<dyn flick_domain::UsageStore>) {
+        self.usage = Some(store);
     }
 
     /// 注册一个新动作（裸注册，无插件归属）。
@@ -277,11 +285,17 @@ impl ActionRegistry {
             let Some(action_match) = score_action(&entry.descriptor, plugin, context) else {
                 continue;
             };
+            // frecency 加成（未注入存储时为 0），封顶 180（设计文档 §4.6）。
+            let frecency = self
+                .usage
+                .as_ref()
+                .map(|store| store.frecency_boost(&entry.descriptor.id))
+                .unwrap_or(0.0);
 
             let mut item = RouteItem::action(
                 entry.descriptor.id.clone(),
                 entry.descriptor.title.clone(),
-                action_match.score,
+                action_match.score + frecency,
             );
             item.facet = action_match.facet;
             item.matched_field = Some(action_match.matched_field);
@@ -361,6 +375,64 @@ mod tests {
             vec!["note".into(), "notes".into(), "search".into()],
             ConcurrencyPolicy::Parallel,
         )
+    }
+
+    /// 固定返回值的 frecency 存储，用于验证加成参与排序。
+    struct FixedUsage {
+        boost: f64,
+        target: &'static str,
+    }
+
+    impl flick_domain::UsageStore for FixedUsage {
+        fn frecency_boost(&self, action_id: &ActionId) -> f64 {
+            if action_id.as_str() == self.target {
+                self.boost
+            } else {
+                0.0
+            }
+        }
+
+        fn record_use(&self, _action_id: &ActionId) {}
+    }
+
+    /// frecency 加成应被计入总分并影响排序。
+    #[test]
+    fn frecency_boost_affects_ordering() {
+        let mut reg = ActionRegistry::new();
+        // 两个标题长度不同（短标题原本排前面），用加成把长标题顶上去。
+        reg.register(
+            ActionDescriptor::new(
+                ActionId::from_static("demo.short"),
+                "Demo A",
+                vec![],
+                ConcurrencyPolicy::Parallel,
+            ),
+            Arc::new(NoopHandler),
+        );
+        reg.register(
+            ActionDescriptor::new(
+                ActionId::from_static("demo.long"),
+                "Demo B",
+                vec![],
+                ConcurrencyPolicy::Parallel,
+            ),
+            Arc::new(NoopHandler),
+        );
+
+        let plain = reg.search_input(&text_context("demo"));
+        assert_eq!(plain[0].action_id.as_str(), "demo.long", "同分时按候选顺序先排");
+
+        reg.set_usage_store(Arc::new(FixedUsage {
+            boost: 120.0,
+            target: "demo.short",
+        }));
+        let boosted = reg.search_input(&text_context("demo"));
+        assert_eq!(
+            boosted[0].action_id.as_str(),
+            "demo.short",
+            "frecency 加成应把常用动作顶到前面"
+        );
+        assert!(boosted[0].score > plain[0].score);
     }
 
     #[test]
@@ -532,6 +604,7 @@ mod tests {
             lifecycles: HashMap::new(),
             dependency_status: HashMap::new(),
             unavailable: HashSet::new(),
+            usage: None,
         };
 
         let results = reg.search_input(&text_context("demo"));

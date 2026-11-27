@@ -182,6 +182,17 @@ impl ActionRuntime {
         }
     }
 
+    /// 注入使用频率存储（由 Application 层提供）；用于搜索结果里的 frecency 加成。
+    /// 使用 `try_write` 而非 `write().await`：该方法保持同步即可在协调器构造时调用，
+    /// 且启动阶段注册表不会处于竞争写状态。
+    pub fn set_usage_store(&self, store: Arc<dyn flick_domain::UsageStore>) {
+        if let Ok(mut registry) = self.registry.try_write() {
+            registry.set_usage_store(store);
+        } else {
+            tracing::warn!("设置使用频率存储失败：注册表正被写入");
+        }
+    }
+
     /// 注入启动时采集的宿主信息。
     pub fn set_host_info(&self, info: Arc<flick_domain::HostInfo>) {
         *self.host_info.write().unwrap() = Some(info);

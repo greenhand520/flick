@@ -15,8 +15,14 @@ pub(crate) enum MatchTier {
     Description,
     /// 非词首的子串命中。
     Inner,
+    /// 拼音前缀命中（阶段 2）。
+    PrefixPinyin,
+    /// 两字及以上的纯首字母缩写完全命中（阶段 2）。
+    ShortAcronymExact,
     /// 词首前缀命中。
     PrefixLiteral,
+    /// 全拼完全相等（阶段 2）。
+    ExactPinyin,
     /// 整字段完全相等。
     ExactLiteral,
 }
@@ -27,7 +33,10 @@ impl MatchTier {
         match self {
             Self::Description => 100.0,
             Self::Inner => 300.0,
+            Self::PrefixPinyin => 520.0,
+            Self::ShortAcronymExact => 550.0,
             Self::PrefixLiteral => 600.0,
+            Self::ExactPinyin => 700.0,
             Self::ExactLiteral => 800.0,
         }
     }
@@ -380,6 +389,11 @@ fn match_single(
         });
     }
 
+    // 拼音（全拼 / 首字母缩写 / 拼音前缀）—— 设计文档 §4.2 阶段 2。
+    if let Some(tier) = match_pinyin(text, query) {
+        return Some(TextMatch { tier, range: None });
+    }
+
     if allow_inner {
         if let Some(byte_index) = text.find(query) {
             let at_word_start = byte_index == 0
@@ -452,6 +466,90 @@ fn word_subsequence_range(text: &str, query: &str) -> Option<(usize, usize)> {
         }
     }
 
+    None
+}
+
+/// 拼音查询长度上限（与 ZTools `MAX_PINYIN_QUERY_LENGTH` 一致）。
+const MAX_PINYIN_QUERY_LENGTH: usize = 64;
+/// 拼音字符串缓存上限（与 ZTools `TOKEN_CACHE_LIMIT` 一致）。
+const PINYIN_CACHE_LIMIT: usize = 5000;
+
+/// 全局拼音数据（惰性初始化一次）。
+fn pinyin_data() -> &'static ib_pinyin::pinyin::PinyinData {
+    static DATA: std::sync::OnceLock<ib_pinyin::pinyin::PinyinData> = std::sync::OnceLock::new();
+    DATA.get_or_init(|| {
+        use ib_pinyin::pinyin::{PinyinData, PinyinNotation};
+        PinyinData::new(PinyinNotation::Ascii | PinyinNotation::AsciiFirstLetter)
+    })
+}
+
+/// 文本 → 拼音查询串的缓存：`(全拼, 首字母)`。
+fn cached_pinyin(text: &str) -> (String, String) {
+    static CACHE: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, (String, String)>>> =
+        std::sync::OnceLock::new();
+    let cache = CACHE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+    if let Ok(map) = cache.lock() {
+        if let Some(found) = map.get(text) {
+            return found.clone();
+        }
+    }
+    let computed = compute_pinyin(text);
+    if let Ok(mut map) = cache.lock() {
+        if map.len() >= PINYIN_CACHE_LIMIT {
+            map.clear();
+        }
+        map.insert(text.to_string(), computed.clone());
+    }
+    computed
+}
+
+/// 计算文本的全拼串与首字母串；ASCII 字母数字按原字符参与，标点忽略。
+fn compute_pinyin(text: &str) -> (String, String) {
+    use ib_pinyin::pinyin::PinyinNotation;
+    let data = pinyin_data();
+    let mut full = String::new();
+    let mut initials = String::new();
+    for ch in text.chars() {
+        if ch.is_ascii_alphanumeric() {
+            let lower = ch.to_ascii_lowercase();
+            full.push(lower);
+            initials.push(lower);
+        } else if let Some(pinyin) = data.get_pinyins(ch).next() {
+            if let Some(ascii) = pinyin.notation(PinyinNotation::Ascii) {
+                full.push_str(ascii);
+                if let Some(first) = ascii.chars().next() {
+                    initials.push(first);
+                }
+            }
+        }
+    }
+    (full, initials)
+}
+
+/// 拼音匹配：返回命中档位，不返回高亮区间（拼音命中不映射回原文区间）。
+fn match_pinyin(text: &str, query: &str) -> Option<MatchTier> {
+    if query.is_empty() || text.is_ascii() {
+        return None;
+    }
+    if query.chars().count() > MAX_PINYIN_QUERY_LENGTH
+        || !query.chars().all(|ch| ch.is_ascii_alphanumeric())
+    {
+        return None;
+    }
+    let (full, initials) = cached_pinyin(text);
+    if full.is_empty() {
+        return None;
+    }
+    let query_len = query.chars().count();
+    if full == query {
+        return Some(MatchTier::ExactPinyin);
+    }
+    if query_len >= 2 && initials == query {
+        return Some(MatchTier::ShortAcronymExact);
+    }
+    if query_len >= 2 && (full.starts_with(query) || initials.starts_with(query)) {
+        return Some(MatchTier::PrefixPinyin);
+    }
     None
 }
 
@@ -669,6 +767,28 @@ mod tests {
         };
         let action_match = score_action(&descriptor, Some(&plugin), &context("echo")).unwrap();
         assert_eq!(action_match.matched_field, MatchField::Description);
+    }
+
+    #[test]
+    fn pinyin_full_prefix_and_acronym_match_chinese_text() {
+        // 火狐浏览器 -> 全拼 huohuliulanqi，首字母 hhllq
+        let text = "火狐浏览器";
+        assert_eq!(compute_pinyin(text), ("huohuliulanqi".to_string(), "hhllq".to_string()));
+        assert_eq!(match_pinyin(text, "huohuliulanqi"), Some(MatchTier::ExactPinyin));
+        assert_eq!(match_pinyin(text, "huohu"), Some(MatchTier::PrefixPinyin));
+        assert_eq!(match_pinyin(text, "hhllq"), Some(MatchTier::ShortAcronymExact));
+        assert_eq!(match_pinyin(text, "zzz"), None);
+        // 纯 ASCII 文本走原文匹配，不做拼音。
+        assert_eq!(match_pinyin("Firefox", "fire"), None);
+    }
+
+    #[test]
+    fn pinyin_tier_scores_rank_between_literal_tiers() {
+        assert!(MatchTier::ExactPinyin.score() > MatchTier::PrefixLiteral.score());
+        assert!(MatchTier::ExactLiteral.score() > MatchTier::ExactPinyin.score());
+        assert!(MatchTier::PrefixLiteral.score() > MatchTier::ShortAcronymExact.score());
+        assert!(MatchTier::ShortAcronymExact.score() > MatchTier::PrefixPinyin.score());
+        assert!(MatchTier::PrefixPinyin.score() > MatchTier::Inner.score());
     }
 
     #[test]

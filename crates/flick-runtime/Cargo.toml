@@ -11,3 +11,4 @@ tokio-util = { workspace = true }
 async-trait = { workspace = true }
 tracing = { workspace = true }
 serde_json = { workspace = true }
+ib_pinyin = { workspace = true }

@@ -1861,6 +1861,7 @@ dependencies = [
  "async-trait",
  "flick-domain",
  "flick-plugin",
+ "ib-pinyin",
  "serde_json",
  "tokio",
  "tokio-util",
