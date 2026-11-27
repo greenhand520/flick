@@ -70,6 +70,29 @@ fn main() {
     }
 }
 
+/// 托盘事件在 daemon 侧的动作。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TrayAction {
+    /// 唤起搜索面板。
+    ShowPanel,
+    /// 请求退出 daemon。
+    Shutdown,
+    /// 占位菜单项，仅记日志。
+    Placeholder(&'static str),
+}
+
+/// 把托盘事件映射成 daemon 动作（纯函数，便于单测）。
+fn tray_action(event: flick_adapters_linux::tray::TrayEvent) -> TrayAction {
+    use flick_adapters_linux::tray::TrayEvent;
+    match event {
+        TrayEvent::Activate => TrayAction::ShowPanel,
+        TrayEvent::Quit => TrayAction::Shutdown,
+        TrayEvent::Home => TrayAction::Placeholder("主页"),
+        TrayEvent::Settings => TrayAction::Placeholder("设置"),
+        TrayEvent::About => TrayAction::Placeholder("关于"),
+    }
+}
+
 fn run_graphical(socket_path: PathBuf) -> Result<(), String> {
     use flick_adapters_linux::diagnostics::is_wayland_session;
 
@@ -197,6 +220,43 @@ fn run_graphical(socket_path: PathBuf) -> Result<(), String> {
                 });
 
                 let (intent_tx, mut intent_rx) = mpsc::unbounded_channel::<UiIntent>();
+
+                // 系统托盘：与全局快捷键共用 `intent_tx` 唤起面板。
+                if flick_adapters_linux::tray::tray_enabled() {
+                    let (tray_tx, mut tray_rx) = mpsc::unbounded_channel();
+                    match flick_adapters_linux::tray::spawn_tray(tray_tx) {
+                        Ok(()) => {
+                            let tray_lifecycle = lifecycle.clone();
+                            let tray_intents = intent_tx.clone();
+                            tokio::spawn(async move {
+                                loop {
+                                    tokio::select! {
+                                        _ = tray_lifecycle.cancelled() => break,
+                                        event = tray_rx.recv() => match event {
+                                            Some(event) => match tray_action(event) {
+                                                TrayAction::ShowPanel => {
+                                                    let _ = tray_intents.send(UiIntent::ShowSearchPanel {
+                                                        activation_token: None,
+                                                    });
+                                                }
+                                                TrayAction::Shutdown => {
+                                                    tray_lifecycle
+                                                        .request_shutdown(ShutdownReason::TrayQuit);
+                                                    break;
+                                                }
+                                                TrayAction::Placeholder(name) => {
+                                                    tracing::info!(menu = name, "托盘菜单项尚未实现");
+                                                }
+                                            },
+                                            None => break,
+                                        }
+                                    }
+                                }
+                            });
+                        }
+                        Err(error) => tracing::warn!(%error, "系统托盘未启动"),
+                    }
+                }
                 let portal = Arc::new(PortalShortcutAdapter::new_with_client(
                     Arc::new(bootstrap::ChannelIntentSink {
                         tx: intent_tx.clone(),
@@ -359,5 +419,31 @@ fn run_graphical(socket_path: PathBuf) -> Result<(), String> {
     {
         Some(error) => Err(error),
         None => Ok(()),
+    }
+}
+
+#[cfg(test)]
+mod tray_tests {
+    use super::{TrayAction, tray_action};
+    use flick_adapters_linux::tray::TrayEvent;
+
+    #[test]
+    fn activate_shows_panel() {
+        assert_eq!(tray_action(TrayEvent::Activate), TrayAction::ShowPanel);
+    }
+
+    #[test]
+    fn quit_requests_shutdown() {
+        assert_eq!(tray_action(TrayEvent::Quit), TrayAction::Shutdown);
+    }
+
+    #[test]
+    fn placeholders_are_logged_only() {
+        assert_eq!(tray_action(TrayEvent::Home), TrayAction::Placeholder("主页"));
+        assert_eq!(
+            tray_action(TrayEvent::Settings),
+            TrayAction::Placeholder("设置")
+        );
+        assert_eq!(tray_action(TrayEvent::About), TrayAction::Placeholder("关于"));
     }
 }

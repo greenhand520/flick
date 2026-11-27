@@ -9,6 +9,8 @@ pub enum ShutdownReason {
     Ipc,
     ShellExited,
     StartupFailed,
+    /// 用户从系统托盘菜单选择「退出」。
+    TrayQuit,
 }
 #[derive(Clone)]
 pub struct DaemonLifecycle {
