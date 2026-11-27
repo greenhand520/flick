@@ -37,7 +37,7 @@ pub use input::{
     SearchQuery, UiInputKind,
 };
 pub use plugin::*;
-pub use route::{MatchField, RouteItem, RouteItemKind};
+pub use route::{MatchField, RouteItem, RouteItemKey, RouteItemKind};
 pub use surface::{
     BadgeTone, ButtonTone, ListItem, SURFACE_SCHEMA_VERSION, SpacerSize, SurfaceContent,
     SurfaceEventKind, SurfaceNode,
