@@ -3,7 +3,7 @@
 //! 本模块只做纯数据合并，不接触 UI 或 Runtime：`PanelState` 在收到
 //! `HostToUi::Routes` 时调用 [`merge_batch`]，把新批次并入会话累积。
 
-use flick_domain::{RouteItem, UiInputKind};
+use flick_domain::{RouteItem, RouteItemKind, UiInputKind};
 
 /// 累积结果上限；超出时按分数保留高分项（设计文档 §9 不变量 8）。
 pub const MAX_ACCUMULATED_RESULTS: usize = 200;
@@ -47,6 +47,44 @@ fn truncate_by_score(items: &mut Vec<RouteItem>) {
     // 恢复这些幸存项的原始相对顺序。
     order.sort_unstable();
     *items = order.into_iter().map(|index| items[index].clone()).collect();
+}
+
+/// 把一批搜索阶段执行项并入累积结果（设计文档 §7.4）。
+///
+/// 与 [`merge_batch`] 的区别：
+/// 1. 新项**插到父 Action 之后**，而不是追加末尾 —— 执行项必须紧跟父项；
+/// 2. 新项**继承父项分数**，保证父项与子项在按分数重排时不会分离；
+/// 3. 找不到父项时追加末尾（父 Action 未命中关键词，只靠 `search_invocable` 产出）。
+pub fn merge_execution_batch(accumulated: &mut Vec<RouteItem>, batch: Vec<RouteItem>) {
+    for item in batch {
+        let key = item.key();
+        match accumulated.iter().position(|slot| slot.key() == key) {
+            Some(index) => {
+                // 同 key：只有更高分才替换内容，位置保持不变。
+                if item.score > accumulated[index].score {
+                    accumulated[index] = item;
+                }
+            }
+            None => {
+                // 父项 id：执行项优先用 `parent_action_id`，缺失时回退 `action_id`。
+                let parent = item
+                    .parent_action_id
+                    .clone()
+                    .unwrap_or_else(|| item.action_id.clone());
+                let parent_index = accumulated.iter().rposition(|slot| {
+                    slot.kind == RouteItemKind::Action && slot.action_id == parent
+                });
+                // 继承父项分数；父项缺席时保留原分数（通常为 0.0）。
+                let mut item = item;
+                if let Some(index) = parent_index {
+                    item.score = accumulated[index].score;
+                }
+                let insert_at = parent_index.map(|index| index + 1).unwrap_or(accumulated.len());
+                accumulated.insert(insert_at, item);
+            }
+        }
+    }
+    truncate_by_score(accumulated);
 }
 
 /// 一次搜索面板会话的累积状态。
@@ -135,6 +173,16 @@ impl SearchSession {
         self.accumulated.clone()
     }
 
+    /// 并入一批搜索阶段执行项。
+    ///
+    /// 与 [`Self::merge`] 不同，本方法**不受** manual 标志影响，始终按 key 并入：
+    /// 执行项总在 `Routes` 之后、同一代次内到达，此时累积里已有父 Action；
+    /// 若走「非手动模式直接替换」的分支，累积会被这批只有执行项的批次冲掉。
+    pub fn merge_execution(&mut self, batch: Vec<RouteItem>) -> Vec<RouteItem> {
+        merge_execution_batch(&mut self.accumulated, batch);
+        self.accumulated.clone()
+    }
+
     /// 当前累积结果。
     pub fn items(&self) -> &[RouteItem] {
         &self.accumulated
@@ -150,7 +198,7 @@ impl Default for SearchSession {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flick_domain::{ActionId, RouteItemKind};
+    use flick_domain::{ActionId, ExecutionItem, InvocationId, RouteItemKind};
 
     /// 构造一个普通 Action 候选。
     fn action(id: &'static str, title: &str, score: f64) -> RouteItem {
@@ -311,5 +359,56 @@ mod tests {
         session.clear();
         assert!(session.is_active());
         assert!(session.items().is_empty());
+    }
+
+    /// 构造一个父 Action 下的执行项。
+    fn execution(parent: &'static str, title: &str, score: f64) -> RouteItem {
+        let item = ExecutionItem {
+            item_id: format!("{parent}:{title}"),
+            parent_action_id: ActionId::from_static(parent),
+            invocation_id: InvocationId::new(),
+            title: title.into(),
+            subtitle: None,
+            icon: None,
+            badge: None,
+            output: Default::default(),
+        };
+        RouteItem::execution(item, score)
+    }
+
+    /// 执行项插到父 Action 之后；父项在末尾时追加末尾。
+    #[test]
+    fn merge_execution_batch_inserts_after_parent() {
+        let mut accumulated = vec![
+            action("a.v1.one", "A", 1.0),
+            action("b.v1.two", "B", 0.9),
+            action("c.v1.three", "C", 0.8),
+        ];
+        merge_execution_batch(
+            &mut accumulated,
+            vec![execution("b.v1.two", "B child", 0.0)],
+        );
+        let titles: Vec<&str> = accumulated.iter().map(|i| i.title.as_str()).collect();
+        assert_eq!(titles, vec!["A", "B", "B child", "C"]);
+
+        // 父项在末尾时子项追加末尾。
+        let mut tail = vec![action("a.v1.one", "A", 1.0)];
+        merge_execution_batch(&mut tail, vec![execution("a.v1.one", "A child", 0.0)]);
+        let titles: Vec<&str> = tail.iter().map(|i| i.title.as_str()).collect();
+        assert_eq!(titles, vec!["A", "A child"]);
+    }
+
+    /// 执行项继承父项分数，且同 key 重复到达时不重复插入。
+    #[test]
+    fn merge_execution_batch_inherits_parent_score_and_dedups() {
+        let mut accumulated = vec![action("a.v1.one", "A", 0.8)];
+        merge_execution_batch(&mut accumulated, vec![execution("a.v1.one", "child", 0.0)]);
+        assert_eq!(accumulated.len(), 2);
+        assert_eq!(accumulated[1].score, 0.8, "child must inherit parent score");
+
+        // 同一子项再到达一次（更高分）：原位替换，不新增行。
+        merge_execution_batch(&mut accumulated, vec![execution("a.v1.one", "child", 0.9)]);
+        assert_eq!(accumulated.len(), 2);
+        assert_eq!(accumulated[1].score, 0.9);
     }
 }
