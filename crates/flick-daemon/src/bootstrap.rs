@@ -108,7 +108,6 @@ impl IntentSink for ChannelIntentSink {
 pub struct DaemonIpcDispatcher {
     pub runtime: Arc<dyn RuntimePort>,
     /// 设置服务；`None` 表示设置系统不可用（启动时打开存储失败）。
-    #[allow(dead_code)] // 设置类 IPC 命令在后续提交启用
     pub settings: Option<Arc<SettingsService>>,
     pub coordinator: Arc<ApplicationCoordinator>,
     #[allow(dead_code)]
@@ -183,11 +182,19 @@ impl flick_ipc::server::IpcDispatcher for DaemonIpcDispatcher {
                     None => serde_json::json!({ "state": "headless_not_started" }),
                 };
                 let plugins = self.plugin_dependency_report().await;
+                let settings = match &self.settings {
+                    Some(service) => serde_json::json!({
+                        "available": true,
+                        "namespaces": service.registered_namespaces(),
+                    }),
+                    None => serde_json::json!({ "available": false, "namespaces": [] }),
+                };
                 IpcResult::Ok(serde_json::json!({
                     "session": probe_session(),
                     "portal": portal,
                     "ipc": { "socket": self.socket_path.display().to_string() },
                     "plugins": plugins,
+                    "settings": settings,
                 }))
             }
             IpcCommand::ShortcutsConfigure { preferred_trigger } => {
@@ -234,6 +241,105 @@ impl flick_ipc::server::IpcDispatcher for DaemonIpcDispatcher {
                 self.coordinator.handle_intent(UiIntent::HideSearchPanel);
                 IpcResult::Ok(serde_json::json!({ "hide": true }))
             }
+            IpcCommand::SettingsList { namespace } => {
+                let Some(settings) = &self.settings else {
+                    return settings_unavailable();
+                };
+                match settings.list(&namespace) {
+                    Ok(snapshot) => IpcResult::Ok(serde_json::json!({
+                        "namespace": snapshot.namespace.as_str(),
+                        "revision": snapshot.revision,
+                        "values": snapshot.values,
+                    })),
+                    Err(error) => settings_error(error),
+                }
+            }
+            IpcCommand::SettingsGet { key } => {
+                let Some(settings) = &self.settings else {
+                    return settings_unavailable();
+                };
+                let parsed = match SettingKey::parse(&key) {
+                    Ok(parsed) => parsed,
+                    Err(error) => {
+                        return IpcResult::Error {
+                            code: IpcErrorCode::InvalidInput,
+                            message: error.to_string(),
+                        };
+                    }
+                };
+                match settings.get(&parsed) {
+                    Ok(Some(value)) => IpcResult::Ok(serde_json::json!({
+                        "key": key,
+                        "value": value,
+                        "is_default": false,
+                    })),
+                    Ok(None) => match settings.resolved(&parsed) {
+                        Ok(value) => IpcResult::Ok(serde_json::json!({
+                            "key": key,
+                            "value": value,
+                            "is_default": true,
+                        })),
+                        Err(error) => settings_error(error),
+                    },
+                    Err(error) => settings_error(error),
+                }
+            }
+            IpcCommand::SettingsSet { key, value } => {
+                let Some(settings) = &self.settings else {
+                    return settings_unavailable();
+                };
+                let parsed = match SettingKey::parse(&key) {
+                    Ok(parsed) => parsed,
+                    Err(error) => {
+                        return IpcResult::Error {
+                            code: IpcErrorCode::InvalidInput,
+                            message: error.to_string(),
+                        };
+                    }
+                };
+                match settings.set(&parsed, value) {
+                    Ok(revision) => IpcResult::Ok(serde_json::json!({
+                        "key": key,
+                        "revision": revision,
+                    })),
+                    Err(error) => settings_error(error),
+                }
+            }
+            IpcCommand::SettingsReset { key, namespace } => {
+                let Some(settings) = &self.settings else {
+                    return settings_unavailable();
+                };
+                match (key, namespace) {
+                    (Some(key), None) => {
+                        let parsed = match SettingKey::parse(&key) {
+                            Ok(parsed) => parsed,
+                            Err(error) => {
+                                return IpcResult::Error {
+                                    code: IpcErrorCode::InvalidInput,
+                                    message: error.to_string(),
+                                };
+                            }
+                        };
+                        match settings.reset_key(&parsed) {
+                            Ok(revision) => {
+                                IpcResult::Ok(serde_json::json!({ "key": key, "revision": revision }))
+                            }
+                            Err(error) => settings_error(error),
+                        }
+                    }
+                    (None, Some(namespace)) => match settings.reset_namespace(&namespace) {
+                        Ok(revision) => IpcResult::Ok(serde_json::json!({
+                            "namespace": namespace,
+                            "revision": revision,
+                        })),
+                        Err(error) => settings_error(error),
+                    },
+                    _ => IpcResult::Error {
+                        code: IpcErrorCode::InvalidInput,
+                        message: "settings reset 需要且只接受 key 或 namespace 之一".into(),
+                    },
+                }
+            }
         }
     }
 
@@ -259,6 +365,36 @@ impl DaemonIpcDispatcher {
             }));
         }
         report
+    }
+}
+
+/// 设置系统不可用时的统一错误。
+fn settings_unavailable() -> IpcResult {
+    IpcResult::Error {
+        code: IpcErrorCode::SettingsUnavailable,
+        message: "设置系统不可用（守护进程未能打开设置存储）".into(),
+    }
+}
+
+/// 把设置层错误映射为 IPC 错误码。
+fn settings_error(error: flick_settings::SettingsError) -> IpcResult {
+    use flick_settings::SettingsError;
+    let code = match &error {
+        SettingsError::UnknownNamespace(_) | SettingsError::UnknownKey { .. } => {
+            IpcErrorCode::InvalidInput
+        }
+        SettingsError::InvalidValue { .. } | SettingsError::InvalidSchema { .. } => {
+            IpcErrorCode::InvalidInput
+        }
+        SettingsError::CorruptValue { .. }
+        | SettingsError::SchemaVersionUnsupported { .. }
+        | SettingsError::PermissionDenied { .. }
+        | SettingsError::SubscriptionClosed
+        | SettingsError::Storage(_) => IpcErrorCode::Internal,
+    };
+    IpcResult::Error {
+        code,
+        message: error.to_string(),
     }
 }
 

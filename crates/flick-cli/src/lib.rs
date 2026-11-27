@@ -127,3 +127,55 @@ pub fn format_transport_error(err_msg: &str, json_output: bool) -> (String, bool
         (format!("Error communicating with daemon: {err_msg}"), true)
     }
 }
+
+/// 把命令行字符串解析成 [`flick_domain::settings::SettingValue`]。
+///
+/// 支持三种写法：带类型标签的 JSON（`{"Enum":"light"}`）、JSON 字面量
+/// （`true` / `42` / `"text"`），其余按普通字符串处理。
+pub fn parse_setting_value(raw: &str) -> flick_domain::settings::SettingValue {
+    use flick_domain::settings::SettingValue;
+    let trimmed = raw.trim();
+    if let Ok(value) = serde_json::from_str::<SettingValue>(trimmed) {
+        return value;
+    }
+    match trimmed {
+        "true" => return SettingValue::Bool(true),
+        "false" => return SettingValue::Bool(false),
+        _ => {}
+    }
+    if let Ok(integer) = trimmed.parse::<i64>() {
+        return SettingValue::Integer(integer);
+    }
+    if let Ok(text) = serde_json::from_str::<String>(trimmed) {
+        return SettingValue::String(text);
+    }
+    SettingValue::String(raw.to_string())
+}
+
+#[cfg(test)]
+mod setting_value_tests {
+    use super::parse_setting_value;
+    use flick_domain::settings::SettingValue;
+
+    #[test]
+    fn parses_tagged_json() {
+        assert_eq!(
+            parse_setting_value(r#"{"Enum":"light"}"#),
+            SettingValue::Enum("light".to_string())
+        );
+    }
+
+    #[test]
+    fn parses_literals_and_plain_text() {
+        assert_eq!(parse_setting_value("true"), SettingValue::Bool(true));
+        assert_eq!(parse_setting_value(" 42 "), SettingValue::Integer(42));
+        assert_eq!(
+            parse_setting_value("\"quoted\""),
+            SettingValue::String("quoted".to_string())
+        );
+        assert_eq!(
+            parse_setting_value("dark"),
+            SettingValue::String("dark".to_string())
+        );
+    }
+}

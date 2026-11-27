@@ -159,6 +159,13 @@ impl IpcDispatcher for TestDispatcher {
                 IpcResult::Ok(serde_json::json!({"reconnect": "requested"}))
             }
             IpcCommand::Shutdown => IpcResult::Ok(serde_json::json!({"shutdown": true})),
+            IpcCommand::SettingsList { .. }
+            | IpcCommand::SettingsGet { .. }
+            | IpcCommand::SettingsSet { .. }
+            | IpcCommand::SettingsReset { .. } => IpcResult::Error {
+                code: IpcErrorCode::UnknownCommand,
+                message: "设置类命令由 daemon 正式调度器处理".into(),
+            },
         }
     }
 }

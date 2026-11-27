@@ -50,6 +50,43 @@ enum Command {
     Show,
     /// 隐藏搜索面板
     Hide,
+    /// 设置管理（列出/读取/写入/重置）
+    Settings {
+        #[command(subcommand)]
+        action: SettingsAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum SettingsAction {
+    /// 列出某个命名空间下的已设置值
+    List {
+        /// 命名空间：`core` 或插件 id（如 flick.builtin.apps）
+        namespace: String,
+    },
+    /// 读取单个设置项
+    Get {
+        /// 全限定键，如 `core.theme.mode`
+        key: String,
+    },
+    /// 写入单个设置项
+    Set {
+        /// 全限定键，如 `core.theme.mode`
+        key: String,
+        /// 值：JSON 字面量（true / 42 / "text" / {"Enum":"light"}），
+        /// 解析失败时按字符串处理
+        value: String,
+    },
+    /// 重置单个设置项
+    ResetKey {
+        /// 全限定键
+        key: String,
+    },
+    /// 重置整个命名空间的值（保留声明）
+    ResetNamespace {
+        /// 命名空间
+        namespace: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -94,6 +131,22 @@ async fn main() {
         Command::Shutdown => IpcCommand::Shutdown,
         Command::Show => IpcCommand::Show,
         Command::Hide => IpcCommand::Hide,
+        Command::Settings { action } => match action {
+            SettingsAction::List { namespace } => IpcCommand::SettingsList { namespace },
+            SettingsAction::Get { key } => IpcCommand::SettingsGet { key },
+            SettingsAction::Set { key, value } => IpcCommand::SettingsSet {
+                key,
+                value: parse_setting_value(&value),
+            },
+            SettingsAction::ResetKey { key } => IpcCommand::SettingsReset {
+                key: Some(key),
+                namespace: None,
+            },
+            SettingsAction::ResetNamespace { namespace } => IpcCommand::SettingsReset {
+                key: None,
+                namespace: Some(namespace),
+            },
+        },
     };
 
     let request = build_request(command);

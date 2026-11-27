@@ -6,7 +6,7 @@
 use serde::{Deserialize, Serialize};
 
 /// 当前协议版本。线格式变更时递增。
-pub const IPC_PROTOCOL_VERSION: u16 = 3;
+pub const IPC_PROTOCOL_VERSION: u16 = 4;
 
 // ─── 信封 ─────────────────────────────────────────────────────────────────────
 
@@ -51,6 +51,20 @@ pub enum IpcCommand {
     Show,
     /// 直接隐藏搜索面板。
     Hide,
+    /// 列出某个命名空间下的设置值。
+    SettingsList { namespace: String },
+    /// 读取单个设置项。
+    SettingsGet { key: String },
+    /// 写入单个设置项。
+    SettingsSet {
+        key: String,
+        value: flick_domain::settings::SettingValue,
+    },
+    /// 重置单个设置项（`key`）或整个命名空间（`namespace`）；二者必须且只能给一个。
+    SettingsReset {
+        key: Option<String>,
+        namespace: Option<String>,
+    },
 }
 
 // ─── 结果 ─────────────────────────────────────────────────────────────────────
@@ -100,6 +114,8 @@ pub enum IpcErrorCode {
     Internal,
     /// 该调用被取消。
     Cancelled,
+    /// 设置系统不可用（守护进程启动时未能打开设置存储）。
+    SettingsUnavailable,
 }
 
 impl IpcErrorCode {
@@ -114,6 +130,7 @@ impl IpcErrorCode {
             Self::DesktopUnavailable => "desktop_unavailable",
             Self::Internal => "internal",
             Self::Cancelled => "cancelled",
+            Self::SettingsUnavailable => "settings_unavailable",
         }
     }
 }

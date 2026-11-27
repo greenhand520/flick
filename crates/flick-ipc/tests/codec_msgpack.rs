@@ -107,3 +107,37 @@ fn full_surface_value_roundtrips_over_msgpack() {
     let back: serde_json::Value = decode(&frame[4..]).unwrap();
     assert_eq!(value, back);
 }
+
+#[test]
+fn settings_commands_roundtrip_over_msgpack() {
+    let cases = vec![
+        IpcCommand::SettingsList {
+            namespace: "core".into(),
+        },
+        IpcCommand::SettingsGet {
+            key: "core.theme.mode".into(),
+        },
+        IpcCommand::SettingsSet {
+            key: "core.theme.mode".into(),
+            value: flick_domain::settings::SettingValue::Enum("light".into()),
+        },
+        IpcCommand::SettingsReset {
+            key: Some("core.theme.mode".into()),
+            namespace: None,
+        },
+        IpcCommand::SettingsReset {
+            key: None,
+            namespace: Some("flick.builtin.apps".into()),
+        },
+    ];
+    for command in cases {
+        let env = IpcRequestEnvelope {
+            protocol_version: IPC_PROTOCOL_VERSION,
+            request_id: "req-settings".into(),
+            command,
+        };
+        let bytes = encode(&env).unwrap();
+        let back: IpcRequestEnvelope = decode(&bytes[4..]).unwrap();
+        assert_eq!(back.protocol_version, IPC_PROTOCOL_VERSION);
+    }
+}
