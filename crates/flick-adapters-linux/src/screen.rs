@@ -16,7 +16,6 @@
 //! 指针仍要借 XWayland：Wayland 协议本身不提供全局指针查询。任一环节失败都
 //! 返回 `None`，由调用方回退到「最大化」建窗方案。
 
-
 /// 一块显示器在逻辑坐标系中的矩形（单位：逻辑像素）。
 #[derive(Debug, Clone, PartialEq)]
 pub struct MonitorRect {
@@ -196,7 +195,7 @@ fn state_to_monitors(state: &MutterState) -> Vec<MonitorRect> {
         .1
         .iter()
         .filter_map(|spec| {
-            let connector = spec.0 .0.clone();
+            let connector = spec.0.0.clone();
             let mode = spec
                 .1
                 .iter()
@@ -272,13 +271,19 @@ mod tests {
             },
         ];
         assert_eq!(pick_monitor(&monitors, -10.0, 100.0).unwrap().name, "left");
-        assert_eq!(pick_monitor(&monitors, 2559.0, 1439.0).unwrap().name, "main");
+        assert_eq!(
+            pick_monitor(&monitors, 2559.0, 1439.0).unwrap().name,
+            "main"
+        );
         assert!(pick_monitor(&monitors, 2560.0, 0.0).is_none());
     }
 
     #[test]
     fn logical_size_divides_by_scale_and_swaps_on_rotation() {
-        assert_eq!(logical_size(2880.0, 1800.0, 1.6666666, 1), (1728.0000, 1080.0000));
+        assert_eq!(
+            logical_size(2880.0, 1800.0, 1.6666666, 1),
+            (1728.0000, 1080.0000)
+        );
         let (w, h) = logical_size(2880.0, 1800.0, 2.0, 2);
         assert!((w - 900.0).abs() < 0.001 && (h - 1440.0).abs() < 0.001);
     }

@@ -843,12 +843,19 @@ mod tests {
 
         assert!(actions.is_empty());
         assert_eq!(st.surface_session(), Some(session));
-        assert!(!st.surface_search(), "needs_search=false 应标记为不显示搜索框");
+        assert!(
+            !st.surface_search(),
+            "needs_search=false 应标记为不显示搜索框"
+        );
         assert!(st.query.is_empty(), "搜索框文本必须清空");
         assert!(st.pending_query.is_empty(), "待发查询必须清空");
         assert!(st.routes.is_empty(), "候选必须清空");
         assert_eq!(st.selection.total, 0, "选中态必须清空");
-        assert_eq!(st.generation, generation_before.next(), "应推进代次作废旧查询");
+        assert_eq!(
+            st.generation,
+            generation_before.next(),
+            "应推进代次作废旧查询"
+        );
     }
 
     #[test]
@@ -963,13 +970,11 @@ mod tests {
         st.update_at(
             PanelEvent::Routes {
                 generation: st.generation,
-                items: [
-                    "a.v1.i0", "a.v1.i1", "a.v1.i2", "a.v1.i3", "a.v1.i4",
-                ]
-                .into_iter()
-                .enumerate()
-                .map(|(i, id)| action_route(id, &format!("Item{i}"), 5.0 - i as f64))
-                .collect(),
+                items: ["a.v1.i0", "a.v1.i1", "a.v1.i2", "a.v1.i3", "a.v1.i4"]
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, id)| action_route(id, &format!("Item{i}"), 5.0 - i as f64))
+                    .collect(),
             },
             Instant::now(),
         );
@@ -1133,7 +1138,11 @@ mod tests {
         );
 
         let titles: Vec<&str> = st.routes.iter().map(|i| i.title.as_str()).collect();
-        assert_eq!(titles, vec!["Hosts"], "hidden panel must drop old accumulation");
+        assert_eq!(
+            titles,
+            vec!["Hosts"],
+            "hidden panel must drop old accumulation"
+        );
     }
 
     /// 面板隐藏后（会话已结束、代次未推进），同代次的迟到 `Routes` 批次必须被丢弃。
@@ -1275,7 +1284,10 @@ mod tests {
             )),
             "reopen with non-empty input must requery, got {actions:?}"
         );
-        assert!(st.routes.is_empty(), "reopened panel must clear previous candidates");
+        assert!(
+            st.routes.is_empty(),
+            "reopened panel must clear previous candidates"
+        );
     }
 
     /// 附件输入（非手动）只替换，不累积。

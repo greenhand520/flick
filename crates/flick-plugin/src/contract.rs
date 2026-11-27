@@ -7,11 +7,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use flick_domain::settings::ConfigSnapshot;
 use flick_domain::{
     ActionDescriptor, ActionError, ActionId, ActionOutcome, ActionRequest, ExecutionEventKind,
     PluginContext, PluginManifest, SurfaceContent, SurfaceEventKind, SurfaceSessionId,
 };
-use flick_domain::settings::ConfigSnapshot;
 
 /// 每个注册的 Action 所实现的 trait。
 ///
@@ -177,8 +177,8 @@ pub enum PluginRuntimeError {
 mod settings_provider_tests {
     use super::SettingsProvider;
     use flick_domain::settings::ConfigSnapshot;
-    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     struct FixedProvider {
         listeners: AtomicUsize,

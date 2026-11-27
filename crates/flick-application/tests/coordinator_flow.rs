@@ -204,7 +204,11 @@ async fn newer_query_generation_wins_when_results_complete_out_of_order() {
         .iter()
         .filter(|event| matches!(event, HostToUi::Routes { .. }))
         .collect();
-    assert_eq!(routes.len(), 1, "only the newer generation should emit routes");
+    assert_eq!(
+        routes.len(),
+        1,
+        "only the newer generation should emit routes"
+    );
     match routes[0] {
         HostToUi::Routes { generation, items } => {
             assert_eq!(*generation, gen2);
@@ -374,10 +378,12 @@ async fn invoke_without_current_routes_is_rejected() {
     );
     let emitted = events.lock().unwrap();
     match emitted.as_slice() {
-        [HostToUi::InvocationCompleted {
-            invocation_id,
-            outcome: ActionOutcome::Error(ActionError::UnknownAction { .. }),
-        }] => assert_eq!(*invocation_id, inv_id),
+        [
+            HostToUi::InvocationCompleted {
+                invocation_id,
+                outcome: ActionOutcome::Error(ActionError::UnknownAction { .. }),
+            },
+        ] => assert_eq!(*invocation_id, inv_id),
         other => panic!("expected rejection completion, got {other:?}"),
     }
 }
@@ -475,7 +481,11 @@ async fn invoke_with_accumulated_older_candidate_is_accepted() {
     // 被接受并实际调用运行时。
     {
         let invocs = invocations.lock().unwrap();
-        assert_eq!(invocs.len(), 1, "accumulated older candidate must be accepted");
+        assert_eq!(
+            invocs.len(),
+            1,
+            "accumulated older candidate must be accepted"
+        );
         assert_eq!(invocs[0].action_id, action_a);
     }
     // 最后事件不是 UnknownAction。
@@ -911,14 +921,20 @@ async fn newer_generation_cancels_in_flight_search() {
     let coord = Arc::new(ApplicationCoordinator::new(runtime, Arc::new(sink)));
 
     // 第一次查询：修复后应立即返回，不被 5s 的 search_invoke 阻塞。
-    tokio::time::timeout(Duration::from_millis(50), coord.handle_ui(text_query(gen1, "a")))
-        .await
-        .expect("handle_ui must not block on search_invoke (gen1)");
+    tokio::time::timeout(
+        Duration::from_millis(50),
+        coord.handle_ui(text_query(gen1, "a")),
+    )
+    .await
+    .expect("handle_ui must not block on search_invoke (gen1)");
 
     // 新代次立刻进入：同样应立即返回。
-    tokio::time::timeout(Duration::from_millis(50), coord.handle_ui(text_query(gen2, "b")))
-        .await
-        .expect("handle_ui must not block on search_invoke (gen2)");
+    tokio::time::timeout(
+        Duration::from_millis(50),
+        coord.handle_ui(text_query(gen2, "b")),
+    )
+    .await
+    .expect("handle_ui must not block on search_invoke (gen2)");
 
     // 给后台任务一点时间，确认过期代次不会补发 ExecutionResults。
     tokio::time::sleep(Duration::from_millis(100)).await;

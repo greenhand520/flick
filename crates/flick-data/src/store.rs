@@ -106,7 +106,9 @@ impl StorageManager {
 
     fn conn(&self) -> MutexGuard<'_, Connection> {
         // 互斥锁被毒化时仍取回内部数据，避免把一次 panic 扩大成永久不可用。
-        self.conn.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+        self.conn
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
     // ── 插件元数据 ────────────────────────────────────────────────
@@ -188,13 +190,21 @@ impl StorageManager {
         for plugin_id in &victims {
             let mut conn = self.conn();
             let tx = conn.transaction()?;
-            for table in ["setting_decls", "setting_values", "secret_values", "namespaces"] {
+            for table in [
+                "setting_decls",
+                "setting_values",
+                "secret_values",
+                "namespaces",
+            ] {
                 tx.execute(
                     &format!("DELETE FROM {table} WHERE namespace = ?1"),
                     params![plugin_id],
                 )?;
             }
-            tx.execute("DELETE FROM plugins WHERE plugin_id = ?1", params![plugin_id])?;
+            tx.execute(
+                "DELETE FROM plugins WHERE plugin_id = ?1",
+                params![plugin_id],
+            )?;
             tx.commit()?;
             // 目录删除是幂等的；失败不阻断清理流程。
             let dir = self.dirs.data_root().join("plugins").join(plugin_id);
@@ -235,7 +245,8 @@ impl StorageManager {
         let mut renamed_olds: Vec<String> = Vec::new();
 
         let existing: Vec<(String, String)> = {
-            let mut stmt = tx.prepare("SELECT key, state FROM setting_decls WHERE namespace = ?1")?;
+            let mut stmt =
+                tx.prepare("SELECT key, state FROM setting_decls WHERE namespace = ?1")?;
             let rows = stmt.query_map(params![namespace], |row| {
                 Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
             })?;
@@ -426,8 +437,14 @@ impl StorageManager {
     pub fn reset_namespace(&self, namespace: &str) -> Result<u64, DataError> {
         let mut conn = self.conn();
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-        tx.execute("DELETE FROM setting_values WHERE namespace = ?1", params![namespace])?;
-        tx.execute("DELETE FROM secret_values WHERE namespace = ?1", params![namespace])?;
+        tx.execute(
+            "DELETE FROM setting_values WHERE namespace = ?1",
+            params![namespace],
+        )?;
+        tx.execute(
+            "DELETE FROM secret_values WHERE namespace = ?1",
+            params![namespace],
+        )?;
         let new_revision = bump_revision(&tx, namespace)?;
         tx.commit()?;
         Ok(new_revision)
@@ -437,9 +454,8 @@ impl StorageManager {
     pub fn rotate_master_key(&self) -> Result<usize, DataError> {
         let mut conn = self.conn();
         let rows: Vec<(String, String, i64, Vec<u8>, Vec<u8>)> = {
-            let mut stmt = conn.prepare(
-                "SELECT namespace, key, revision, nonce, ciphertext FROM secret_values",
-            )?;
+            let mut stmt = conn
+                .prepare("SELECT namespace, key, revision, nonce, ciphertext FROM secret_values")?;
             let iter = stmt.query_map([], |row| {
                 Ok((
                     row.get::<_, String>(0)?,
@@ -466,9 +482,7 @@ impl StorageManager {
                 current.clone()
             } else {
                 self.keys.load_by_id(&key_id).ok_or_else(|| {
-                    DataError::SecretStoreUnavailable(format!(
-                        "缺少历史主密钥 {key_id}，无法轮换"
-                    ))
+                    DataError::SecretStoreUnavailable(format!("缺少历史主密钥 {key_id}，无法轮换"))
                 })?
             };
             let secret = EncryptedSecret {
@@ -477,8 +491,13 @@ impl StorageManager {
                 nonce,
                 ciphertext,
             };
-            let plaintext =
-                crypto::decrypt(&old_master, namespace.as_str(), key.as_str(), revision, &secret)?;
+            let plaintext = crypto::decrypt(
+                &old_master,
+                namespace.as_str(),
+                key.as_str(),
+                revision,
+                &secret,
+            )?;
             let sealed = self.seal(&namespace, &key, revision, &plaintext)?;
             tx.execute(
                 "UPDATE secret_values SET key_id = ?3, crypto_version = ?4, nonce = ?5,
@@ -570,10 +589,11 @@ fn bump_revision(tx: &rusqlite::Transaction<'_>, namespace: &str) -> Result<u64,
                                              updated_at = excluded.updated_at",
         params![namespace, now_text()],
     )?;
-    let revision: i64 =
-        tx.query_row("SELECT revision FROM namespaces WHERE namespace = ?1", params![namespace], |row| {
-            row.get(0)
-        })?;
+    let revision: i64 = tx.query_row(
+        "SELECT revision FROM namespaces WHERE namespace = ?1",
+        params![namespace],
+        |row| row.get(0),
+    )?;
     Ok(revision.max(0) as u64)
 }
 
@@ -721,8 +741,9 @@ fn encode_value(value: &SettingValue) -> Result<(String, String), DataError> {
         SettingValue::Bool(v) => v.to_string(),
         SettingValue::Integer(v) => v.to_string(),
         SettingValue::String(v) | SettingValue::Enum(v) | SettingValue::Path(v) => v.clone(),
-        SettingValue::Json(v) => serde_json::to_string(v)
-            .map_err(|err| DataError::InvalidStored(err.to_string()))?,
+        SettingValue::Json(v) => {
+            serde_json::to_string(v).map_err(|err| DataError::InvalidStored(err.to_string()))?
+        }
     };
     Ok((tag, text))
 }

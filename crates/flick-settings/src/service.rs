@@ -65,10 +65,12 @@ impl SettingsService {
         installed_version: &str,
         decl_version: &str,
     ) -> Result<RegisterOutcome, SettingsError> {
-        schema.validate().map_err(|err| SettingsError::InvalidSchema {
-            namespace: schema.namespace.as_str().to_string(),
-            reason: err.to_string(),
-        })?;
+        schema
+            .validate()
+            .map_err(|err| SettingsError::InvalidSchema {
+                namespace: schema.namespace.as_str().to_string(),
+                reason: err.to_string(),
+            })?;
         let namespace = schema.namespace.as_str().to_string();
         let fingerprint = schema.fingerprint();
 
@@ -160,23 +162,18 @@ impl SettingsService {
     /// 读取单个值（未设置时返回 `None`）。
     pub fn get(&self, key: &SettingKey) -> Result<Option<SettingValue>, SettingsError> {
         let decl = self.declaration(key)?;
-        Ok(self.storage.get_value(
-            key.namespace.as_str(),
-            &key.key,
-            &decl.kind,
-            decl.secret,
-        )?)
+        Ok(self
+            .storage
+            .get_value(key.namespace.as_str(), &key.key, &decl.kind, decl.secret)?)
     }
 
     /// 读取单个值并应用「存储值 → 声明默认 → 类型回退」的解析顺序。
     pub fn resolved(&self, key: &SettingKey) -> Result<SettingValue, SettingsError> {
         let decl = self.declaration(key)?;
-        if let Some(value) = self.storage.get_value(
-            key.namespace.as_str(),
-            &key.key,
-            &decl.kind,
-            decl.secret,
-        )? {
+        if let Some(value) =
+            self.storage
+                .get_value(key.namespace.as_str(), &key.key, &decl.kind, decl.secret)?
+        {
             return Ok(value);
         }
         Ok(decl

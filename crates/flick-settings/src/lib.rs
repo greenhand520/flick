@@ -7,6 +7,6 @@ pub mod core_schema;
 pub mod error;
 pub mod service;
 
-pub use core_schema::{CORE_SCHEMA_VERSION, core_schema};
+pub use core_schema::{core_schema, CORE_SCHEMA_VERSION};
 pub use error::SettingsError;
 pub use service::{RegisterOutcome, SettingsService};

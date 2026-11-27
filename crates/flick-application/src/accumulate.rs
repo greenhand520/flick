@@ -46,7 +46,10 @@ fn truncate_by_score(items: &mut Vec<RouteItem>) {
     order.truncate(MAX_ACCUMULATED_RESULTS);
     // 恢复这些幸存项的原始相对顺序。
     order.sort_unstable();
-    *items = order.into_iter().map(|index| items[index].clone()).collect();
+    *items = order
+        .into_iter()
+        .map(|index| items[index].clone())
+        .collect();
 }
 
 /// 把一批搜索阶段执行项并入累积结果（设计文档 §7.4）。
@@ -291,10 +294,10 @@ mod tests {
     fn execution_items_deduplicate_by_parent_and_item_id() {
         let parent = ActionId::from_static("flick.builtin.apps.search");
         let make = |title: &str| {
-            let execution = flick_domain::ExecutionItem {
+            let execution = ExecutionItem {
                 item_id: "app:firefox".into(),
                 parent_action_id: parent.clone(),
-                invocation_id: flick_domain::InvocationId::new(),
+                invocation_id: InvocationId::new(),
                 title: title.into(),
                 subtitle: None,
                 icon: None,
@@ -416,7 +419,11 @@ mod tests {
 
         // 第二批新内容分数仍是 0.0，低于继承的 0.8：内容必须更新，但不能重复。
         merge_execution_batch(&mut accumulated, vec![exec("a.v1.one", "新副标题")]);
-        assert_eq!(accumulated.len(), 2, "same execution item must not duplicate");
+        assert_eq!(
+            accumulated.len(),
+            2,
+            "same execution item must not duplicate"
+        );
         assert_eq!(accumulated[1].score, 0.8, "score stays pinned to parent");
         assert_eq!(
             accumulated[1].subtitle.as_deref(),
@@ -459,7 +466,10 @@ mod tests {
         // 否则 `truncate_by_score` 可能保留子项却砍掉父项，产生孤儿执行项。
         merge_execution_batch(&mut accumulated, vec![execution("a.v1.one", "child", 0.9)]);
         assert_eq!(accumulated.len(), 2);
-        assert_eq!(accumulated[1].score, 0.8, "child score stays pinned to parent");
+        assert_eq!(
+            accumulated[1].score, 0.8,
+            "child score stays pinned to parent"
+        );
     }
 
     /// 同一父 Action 下的多个执行项保持批次内的原始顺序（设计文档 §7.3）。

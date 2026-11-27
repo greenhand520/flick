@@ -41,7 +41,10 @@ impl UsageStore for InMemoryUsageStore {
 
     fn record_use(&self, action_id: &ActionId) {
         if let Ok(mut stats) = self.stats.lock() {
-            stats.entry(action_id.clone()).or_default().record(now_secs());
+            stats
+                .entry(action_id.clone())
+                .or_default()
+                .record(now_secs());
         }
     }
 }

@@ -31,7 +31,11 @@ fn plugin_dirs_are_created_with_0700() {
         let mode = std::fs::metadata(&data_dir).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o700, "目录权限应为 0700");
     }
-    assert!(dirs.plugin_cache_dir("flick.builtin.apps").unwrap().is_dir());
+    assert!(
+        dirs.plugin_cache_dir("flick.builtin.apps")
+            .unwrap()
+            .is_dir()
+    );
     assert!(dirs.plugin_tmp_dir("flick.builtin.apps").unwrap().is_dir());
 }
 

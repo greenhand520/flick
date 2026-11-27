@@ -26,8 +26,8 @@ pub struct DataDirectories {
 impl DataDirectories {
     /// 按平台约定发现四个逻辑根（不创建目录）。
     pub fn discover() -> Result<Self, DataError> {
-        let project = ProjectDirs::from("", "", APP_NAME)
-            .ok_or_else(|| DataError::NoProjectDirs)?;
+        let project =
+            ProjectDirs::from("", "", APP_NAME).ok_or_else(|| DataError::NoProjectDirs)?;
         let runtime = runtime_root();
         Ok(Self {
             config: project.config_dir().to_path_buf(),
@@ -85,21 +85,30 @@ impl DataDirectories {
 
     /// 插件数据目录：`<data>/plugins/<plugin_id>`，按需创建（`0700`）。
     pub fn plugin_dir(&self, plugin_id: &str) -> Result<PathBuf, DataError> {
-        let path = self.data.join("plugins").join(validate_plugin_id(plugin_id)?);
+        let path = self
+            .data
+            .join("plugins")
+            .join(validate_plugin_id(plugin_id)?);
         ensure_dir(&path)?;
         Ok(path)
     }
 
     /// 插件缓存目录：`<cache>/plugins/<plugin_id>`，按需创建（`0700`）。
     pub fn plugin_cache_dir(&self, plugin_id: &str) -> Result<PathBuf, DataError> {
-        let path = self.cache.join("plugins").join(validate_plugin_id(plugin_id)?);
+        let path = self
+            .cache
+            .join("plugins")
+            .join(validate_plugin_id(plugin_id)?);
         ensure_dir(&path)?;
         Ok(path)
     }
 
     /// 插件临时目录：`<runtime>/plugins/<plugin_id>`，按需创建（`0700`）。
     pub fn plugin_tmp_dir(&self, plugin_id: &str) -> Result<PathBuf, DataError> {
-        let path = self.runtime.join("plugins").join(validate_plugin_id(plugin_id)?);
+        let path = self
+            .runtime
+            .join("plugins")
+            .join(validate_plugin_id(plugin_id)?);
         ensure_dir(&path)?;
         Ok(path)
     }

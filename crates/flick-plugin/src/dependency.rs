@@ -30,9 +30,7 @@ pub struct DependencyResolution {
 /// - `Required` 依赖的插件不存在、或它自己不可用 → 本插件不可用；
 /// - `Optional` 依赖缺失只体现为 `available == false`，不影响可用性；
 /// - 环（A→B→A）不报错：依赖只决定可用性，不决定加载顺序。
-pub fn resolve_dependencies(
-    manifests: &BTreeMap<String, PluginManifest>,
-) -> DependencyResolution {
+pub fn resolve_dependencies(manifests: &BTreeMap<String, PluginManifest>) -> DependencyResolution {
     let mut unavailable: HashSet<String> = HashSet::new();
     // 失效传播最长链不超过插件数，多跑一轮用于确认「无变化」。
     let max_rounds = manifests.len() + 1;
@@ -97,8 +95,8 @@ fn has_broken_required(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flick_domain::{PluginDependency, PluginKind, PluginProfile};
     use crate::contract::PluginRegistrationError;
+    use flick_domain::{PluginDependency, PluginKind, PluginProfile};
 
     /// 构造一个只带依赖声明的最小 manifest。
     fn manifest(id: &str, dependencies: Vec<(&str, DependencyRequirement)>) -> PluginManifest {

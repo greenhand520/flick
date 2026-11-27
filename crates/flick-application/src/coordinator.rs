@@ -4,8 +4,8 @@
 //! `RuntimePort`，并通过 `HostEventSink` 发出 `HostToUi` 事件。
 //! 它与运行时无关：使用 `async_trait`，不依赖任何特定的异步运行时。
 
-use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
 use flick_domain::{
     ActionError, ActionId, ActionOutcome, ActionRequest, Caller, Deadline, HostToUi, InputContext,
@@ -54,10 +54,9 @@ impl RouteSnapshot {
             _ => generation,
         });
         for item in items {
-            let known = self
-                .items
-                .iter()
-                .any(|existing| existing.item_id == item.item_id && existing.action_id == item.action_id);
+            let known = self.items.iter().any(|existing| {
+                existing.item_id == item.item_id && existing.action_id == item.action_id
+            });
             if !known {
                 self.items.push(item.clone());
             }
@@ -66,7 +65,10 @@ impl RouteSnapshot {
 
     /// 候选是否属于本会话已发出的集合；未来代次一律拒绝。
     fn contains(&self, generation: QueryGeneration, item_id: &str, action_id: &ActionId) -> bool {
-        if self.latest_generation.is_some_and(|latest| generation > latest) {
+        if self
+            .latest_generation
+            .is_some_and(|latest| generation > latest)
+        {
             return false;
         }
         self.items
