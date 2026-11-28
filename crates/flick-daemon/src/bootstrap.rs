@@ -897,7 +897,11 @@ pub fn build_settings_at(
         .purge_uninstalled_older_than(UNINSTALLED_RETENTION_DAYS)
     {
         Ok(purged) if !purged.is_empty() => {
-            info!(count = purged.len(), ?purged, "Expired uninstallation data has been cleaned up.");
+            info!(
+                count = purged.len(),
+                ?purged,
+                "Expired uninstallation data has been cleaned up."
+            );
         }
         Ok(_) => {}
         Err(error) => warn!(%error, "Failed to clean up expired uninstallation data"),
@@ -1032,9 +1036,7 @@ mod init_settings_tests {
 
         // 上限变化 → 只收到 ResultLimitChanged。
         let limit_key = SettingKey::new(SettingNamespace::Core, "search.result_limit");
-        service
-            .set(&limit_key, SettingValue::Integer(5))
-            .unwrap();
+        service.set(&limit_key, SettingValue::Integer(5)).unwrap();
         match rx.recv().await {
             Some(HostToUi::ResultLimitChanged { limit }) => assert_eq!(limit, 5),
             other => panic!("Expected ResultLimitChanged, but actually {other:?}"),
@@ -1141,7 +1143,11 @@ mod init_settings_tests {
         let snapshot = adapter.snapshot("flick.demo");
         assert_eq!(snapshot.namespace, "flick.demo");
         assert_eq!(snapshot.bool("enabled"), Some(true));
-        assert_eq!(snapshot.value("api_token"), None, "secret Snapshot must not be accessed");
+        assert_eq!(
+            snapshot.value("api_token"),
+            None,
+            "secret Snapshot must not be accessed"
+        );
 
         // 写入 secret 后可通过 reader 实时取到，但快照仍然没有。
         let key = SettingKey::new(SettingNamespace::Plugin("flick.demo".into()), "api_token");
@@ -1186,7 +1192,8 @@ mod init_settings_tests {
         let runtime = runtime_with_builtins().await;
         let manifests = runtime.plugin_manifests().await;
 
-        let service = build_settings_at(manifests, dirs, keys).expect("The settings system unavailable.");
+        let service =
+            build_settings_at(manifests, dirs, keys).expect("The settings system unavailable.");
         assert!(
             service
                 .registered_namespaces()
@@ -1228,7 +1235,8 @@ mod init_settings_tests {
             }));
 
         let manifests = vec![flick_builtins::echo::EchoPlugin.manifest()];
-        let service = build_settings_at(manifests, dirs, keys).expect("The settings system unavailable.");
+        let service =
+            build_settings_at(manifests, dirs, keys).expect("The settings system unavailable.");
 
         assert!(
             service

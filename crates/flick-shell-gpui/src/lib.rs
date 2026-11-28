@@ -21,6 +21,24 @@ use gpui_kit::layer_shell::{
 use gpui_kit::*;
 use tokio::sync::mpsc;
 
+/// 在应用线程上销毁窗口（忽略句柄已失效的情况）。
+fn close_window(cx: &mut AsyncApp, handle: AnyWindowHandle) {
+    let _ = cx.update(|app| {
+        let _ = handle.update(app, |_, window, _| window.remove_window());
+    });
+}
+
+/// 向面板视图投递一条宿主事件（面板已关闭或视图类型不符时静默忽略）。
+fn dispatch_panel_event(cx: &mut AsyncApp, handle: AnyWindowHandle, ev: HostToUi) {
+    let _ = cx.update(|app| {
+        let _ = handle.update(app, |anyview, window, app2| {
+            if let Ok(view) = anyview.downcast::<AppView>() {
+                view.update(app2, |v, cx2| v.on_host(ev, window, cx2));
+            }
+        });
+    });
+}
+
 /// 空态（仅搜索行）高度，与 `theme::Metrics.input_height` 一致。
 pub(crate) const PANEL_INPUT_HEIGHT: f32 = 64.0;
 /// 面板卡片顶部距屏幕顶部的基准偏移（逻辑像素）。
@@ -145,7 +163,7 @@ fn open_panel_window(
     hide_tx: mpsc::UnboundedSender<()>,
     detach_tx: mpsc::UnboundedSender<(DetachPayload, ThemeMode)>,
     theme_tx: mpsc::UnboundedSender<ThemeMode>,
-    clipboard_watch: crate::clipboard_watch::ClipboardWatch,
+    clipboard_watch: clipboard_watch::ClipboardWatch,
     initial: ThemeMode,
     result_limit: usize,
 ) -> Result<AnyWindowHandle, String> {
@@ -216,6 +234,10 @@ fn open_panel_window(
     let result = match result {
         Ok(handle) => return Ok(handle.into()),
         Err(err) if err.downcast_ref::<LayerShellNotSupportedError>().is_some() => {
+            tracing::warn!(
+                error = %err,
+                "wlr-layer-shell is not supported by the compositor; falling back to a normal maximized transparent window"
+            );
             let fallback = WindowOptions {
                 titlebar: None,
                 is_resizable: false,
@@ -343,7 +365,7 @@ fn open_detached_window(
         .open_window(options, move |window, cx| {
             window.set_window_title(&title);
             cx.new(|cx| {
-                detached::DetachedSurfaceView::new(
+                DetachedSurfaceView::new(
                     content,
                     session_id,
                     needs_search,
@@ -406,18 +428,18 @@ pub fn run_with_config(
     let initial = config.theme;
     let result_limit = config.result_limit;
     application()
-        .with_assets(gpui_kit::assets::Assets)
+        .with_assets(assets::Assets)
         // 隐藏时会销毁唯一的窗口；用 Explicit 防止「最后一个窗口关闭 -> 进程退出」。
         .with_quit_mode(QuitMode::Explicit)
         .run(move |cx| {
             init(cx);
             // 应用级启动剪贴板轮询；窗口销毁/重建时通过克隆句柄继续复用同一观察状态。
-            let clipboard_watch = crate::clipboard_watch::ClipboardWatch::start(cx);
+            let clipboard_watch = clipboard_watch::ClipboardWatch::start(cx);
             // 让 gpui-kit 组件（Input/Label 等）使用与面板一致的暗/亮主题。
-            gpui_kit::component::Theme::change(
+            component::Theme::change(
                 match initial {
-                    ThemeMode::Dark => gpui_kit::component::ThemeMode::Dark,
-                    ThemeMode::Light => gpui_kit::component::ThemeMode::Light,
+                    ThemeMode::Dark => component::ThemeMode::Dark,
+                    ThemeMode::Light => component::ThemeMode::Light,
                 },
                 None,
                 cx,
@@ -425,7 +447,7 @@ pub fn run_with_config(
             // gpui-kit 的「窗口级」圆角来自 theme.window_radius，且它按物理像素应用
             // （≈ UI 逻辑像素的 2 倍）。窗口保持 26，搜索框卡片用一半 13
             // （见 theme::Metrics::radius_panel），两者视觉才一致；同时把 1px 窗口边框设为透明。
-            gpui_kit::component::Theme::update(cx, |theme| {
+            component::Theme::update(cx, |theme| {
                 theme.window_radius = px(26.0);
                 theme.colors.window_border.a = 0.0;
                 // 用真实安装的字体族替换 gpui-kit 默认的 `.SystemUIFont`（Linux 上不存在）。
@@ -476,9 +498,7 @@ pub fn run_with_config(
                             match event {
                                 HostToUi::Shutdown => {
                                     for (_, h) in detached.drain(..) {
-                                        let _ = cx.update(|app| {
-                                            let _ = h.update(app, |_, window, _| window.remove_window());
-                                        });
+                                        close_window(cx, h);
                                     }
                                     cx.update(|app| app.quit());
                                     break;
@@ -535,11 +555,7 @@ pub fn run_with_config(
                                 }
                                 HostToUi::HideSearchPanel => {
                                     if let Some(h) = handle.take() {
-                                        let _ = cx.update(|app| {
-                                            let _ = h.update(app, |_, window, _| {
-                                                window.remove_window();
-                                            });
-                                        });
+                                        close_window(cx, h);
                                     }
                                 }
                                 HostToUi::SurfaceUpdated { session_id, content } => {
@@ -553,7 +569,7 @@ pub fn run_with_config(
                                             let _ = cx.update(|app| {
                                                 let _ = h.update(app, |anyview, window, app2| {
                                                     if let Ok(view) = anyview
-                                                        .downcast::<detached::DetachedSurfaceView>(
+                                                        .downcast::<DetachedSurfaceView>(
                                                     ) {
                                                         view.update(app2, |v, cx2| {
                                                             v.set_content(c, window, cx2)
@@ -569,15 +585,7 @@ pub fn run_with_config(
                                                 session_id,
                                                 content,
                                             };
-                                            let _ = cx.update(|app| {
-                                                let _ = h.update(app, |anyview, window, app2| {
-                                                    if let Ok(view) = anyview.downcast::<AppView>() {
-                                                        view.update(app2, |v, cx2| {
-                                                            v.on_host(ev, window, cx2)
-                                                        });
-                                                    }
-                                                });
-                                            });
+                                            dispatch_panel_event(cx, h, ev);
                                         }
                                     }
                                 }
@@ -591,7 +599,7 @@ pub fn run_with_config(
                                             let _ = cx.update(|app| {
                                                 let _ = h.update(app, |anyview, _window, app2| {
                                                     if let Ok(view) = anyview
-                                                        .downcast::<detached::DetachedSurfaceView>(
+                                                        .downcast::<DetachedSurfaceView>(
                                                     ) {
                                                         view.update(app2, |v, cx2| {
                                                             v.set_error(m, cx2)
@@ -607,15 +615,7 @@ pub fn run_with_config(
                                                 session_id,
                                                 message,
                                             };
-                                            let _ = cx.update(|app| {
-                                                let _ = h.update(app, |anyview, window, app2| {
-                                                    if let Ok(view) = anyview.downcast::<AppView>() {
-                                                        view.update(app2, |v, cx2| {
-                                                            v.on_host(ev, window, cx2)
-                                                        });
-                                                    }
-                                                });
-                                            });
+                                            dispatch_panel_event(cx, h, ev);
                                         }
                                     }
                                 }
@@ -640,15 +640,7 @@ pub fn run_with_config(
                                 }
                                 other => {
                                     if let Some(h) = handle {
-                                        cx.update(|app| {
-                                            let _ = h.update(app, |anyview, window, app2| {
-                                                if let Ok(view) = anyview.downcast::<AppView>() {
-                                                    view.update(app2, |v, cx2| {
-                                                        v.on_host(other.clone(), window, cx2);
-                                                    });
-                                                }
-                                            });
-                                        });
+                                        dispatch_panel_event(cx, h, other.clone());
                                     }
                                 }
                             }
@@ -680,9 +672,7 @@ pub fn run_with_config(
                         maybe = close_rx.recv() => {
                             if let Some(handle) = maybe {
                                 detached.retain(|(_, h)| *h != handle);
-                                let _ = cx.update(|app| {
-                                    let _ = handle.update(app, |_, window, _| window.remove_window());
-                                });
+                                close_window(cx, handle);
                             }
                         }
                         maybe = theme_rx.recv() => {
@@ -704,7 +694,7 @@ pub fn run_with_config(
                                     let ok = cx.update(|app| {
                                         h.update(app, |anyview, _, app2| {
                                             if let Ok(view) =
-                                                anyview.downcast::<detached::DetachedSurfaceView>()
+                                                anyview.downcast::<DetachedSurfaceView>()
                                             {
                                                 view.update(app2, |v, cx2| v.set_theme(mode, cx2));
                                             }
@@ -721,11 +711,7 @@ pub fn run_with_config(
                         _ = hide_rx.recv() => {
                             // 失焦等视图自发隐藏：在窗口更新帧之外统一销毁窗口。
                             if let Some(h) = handle.take() {
-                                let _ = cx.update(|app| {
-                                    let _ = h.update(app, |_, window, _| {
-                                        window.remove_window();
-                                    });
-                                });
+                                close_window(cx, h);
                             }
                         }
                     }
