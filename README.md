@@ -1,11 +1,9 @@
 # Flick
 
-Flick 是一个面向 **Wayland** 的桌面启动器 / 快速搜索面板：按下快捷键唤起一个透明浮层，
-输入即搜索（应用、文件、内置动作与插件提供的动作），回车执行。使用 Rust + [gpui](https://github.com/zed-industries/zed)
-绘制，插件系统可扩展动作与 Surface。
+Flick 是一个面向 **Wayland** 的桌面启动器 / 快速搜索面板：按下快捷键唤起一个搜索框，输入即搜索（应用、文件、内置动作与插件提供的动作），回车执行。使用 Rust + [gpui](https://github.com/zed-industries/zed)绘制，插件系统可扩展动作与 Surface。**不支持 X11**
 
-> 当前验证目标：**GNOME 51 / Wayland / CachyOS**。KDE 与平铺式合成器尚未验证；**不支持 X11**
-> （窗口为 Wayland layer-shell，GNOME 无 layer-shell 时回退为最大化透明窗口）。
+> 当前验证环境：**CachyOS / Wayland / GNOME 51 / KDE / niri**，基本界面显示正常，但 Portal `BindShortcuts`
+> 在 niri 环境下需要在 niri 配置中手动绑定 `flick toggle`（见下文）。（窗口优先使用 Wayland layer-shell；合成器不支持时回退为最大化透明窗口）。
 
 ## 功能与仓库结构（简）
 
@@ -103,6 +101,18 @@ flick settings --help  # 设置项列出 / 读取 / 写入 / 重置
 ```bash
 flick shortcuts configure --show-search "Super+Space"
 ```
+
+### niri 下的快捷键
+
+niri 中 Portal `BindShortcuts` 通常不可用，启动日志会出现 `Portal BindShortcuts failed`；托盘与搜索面板本身正常。把按键交给 niri 处理即可：
+
+```kdl
+binds {
+    Alt+Space { spawn "flick" "toggle"; }
+}
+```
+
+改完执行 `niri msg action reload-config`（或重启 niri）。`flick toggle` 走 IPC，不依赖 Portal；也可用 `flick show` / `flick hide` 分别只显示或隐藏。
 
 环境变量：
 
